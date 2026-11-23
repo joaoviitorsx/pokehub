@@ -5,7 +5,7 @@ export const MARKET_UNAVAILABLE = 'Abra o Mercado nesta conta para analisar os a
 const MAX_CARDS = 60, MAX_STR = 120;
 
 // Código fixo executado na página do jogo: nunca recebe dado do renderer. Só LÊ o DOM do Mercado que o usuário já abriu
-// (nenhum clique, escrita, rede, cookie ou storage). Seletores vêm das notas da Smart Market e NÃO foram verificados em jogo.
+// (nenhum clique, escrita, rede, cookie ou storage). Seletores conferidos no jogo em 2026-11-23 (vitrine do RMT, v1.474).
 export const MARKET_SCAN_SCRIPT = `(() => {
   const S = (v) => String(v == null ? '' : v).replace(/\\s+/g, ' ').trim().slice(0, ${MAX_STR});
   const lista = document.querySelector('#cm-lista');
@@ -31,7 +31,7 @@ export const MARKET_SCAN_SCRIPT = `(() => {
 
 const str = (value: unknown): string => typeof value === 'string' ? value.replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, MAX_STR) : '';
 function currencyOf(hint: string): MarketCurrency | null {
-  const orb = /orb|gema|\bgem\b/i.test(hint), gold = /gold|coin|moeda|ouro/i.test(hint);
+  const orb = /orb|gema|\bgem\b/i.test(hint), gold = /gold|coin|ouro/i.test(hint);
   return orb === gold ? null : orb ? 'orb' : 'gold';
 }
 function smartOf(cls: string, body: string): MarketListing['smart'] {
@@ -55,8 +55,8 @@ export function sanitizeMarketScan(raw: unknown): MarketScan | null {
     if (!isRecord(card)) return [];
     const name = text(str(card.name), 80), price = parsePtNumber(str(card.preco).replace(/[^\d.,kmbKMB+-]/g, ''));
     if (name === null || price === null || price <= 0 || price > 1e15) return [];
-    const idText = str(card.id), lv = /\d{1,5}/.exec(str(card.sub)), pot = /P\s*(\d)/i.exec(str(card.pot)), nota = parsePtNumber(str(card.nota).replace(/[^\d.,]/g, ''));
-    const level = lv ? Number(lv[0]) : null, potencia = pot ? Number(pot[1]) : null;
+    const idText = str(card.id), lv = /\d{1,3}(?:\.\d{3})*|\d{1,6}/.exec(str(card.sub)) /* "Nv 1.793": ponto é milhar */, pot = /P\s*(\d)/i.exec(str(card.pot)), nota = parsePtNumber(str(card.nota).replace(/[^\d.,]/g, ''));
+    const level = lv ? Number(lv[0].replace(/\./g, '')) : null, potencia = pot ? Number(pot[1]) : null;
     return [{
       id: /^[\w.:-]{1,40}$/.test(idText) ? idText : null, name, level: level !== null && level >= 1 ? level : null,
       potencia: potencia !== null && potencia >= 1 && potencia <= 5 ? potencia : null, nota: nota !== null && nota >= 0 && nota <= 10 ? nota : null,

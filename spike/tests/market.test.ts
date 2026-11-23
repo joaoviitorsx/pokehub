@@ -73,6 +73,13 @@ describe('sanitizeMarketScan', () => {
   it('converte um card completo', () => {
     expect(sanitizeMarketScan({open: true, cards: [card]})).toEqual({open: true, smart: true, listings: [{id: 'f1', name: 'Charizard', level: 100, potencia: 3, nota: 7.6, shiny: false, price: 1.5e6, currency: 'orb', smart: {label: 'desconto', pct: -18, market: 1.8e6}}]});
   });
+  it('card real da vitrine (conferido no jogo em 2026-11-23)', () => {
+    const real = {id: '1855999', cls: 'cm-card poke shiny tem-fav tem-fav-n', name: 'Tyranitar', sub: 'Nv 1.793', pot: 'P1', nota: 'N 5,692', shiny: true, preco: '3.444', moeda: 'cm-preco orb Gemas', smartCls: '', smartText: ''};
+    const coins = {...real, id: '1855998', sub: 'Nv 80', nota: 'N 3,542', shiny: false, preco: '40M', moeda: 'cm-preco gold Coins'};
+    const [a, b] = sanitizeMarketScan({open: true, cards: [real, coins]})!.listings;
+    expect(a).toMatchObject({level: 1793, potencia: 1, nota: 5.692, shiny: true, price: 3444, currency: 'orb'});
+    expect(b).toMatchObject({level: 80, nota: 3.542, price: 40e6, currency: 'gold'});
+  });
   it('Smart Market: sinais e rótulos', () => {
     const one = (patch: object) => sanitizeMarketScan({open: true, cards: [{...card, ...patch}]})!.listings[0]!.smart;
     expect(one({smartCls: 'pp-vit pp-vit-caro', smartText: '+12% mercado 900'})).toEqual({label: 'acima', pct: 12, market: 900});

@@ -58,7 +58,7 @@ export function useCount(target:number) {
  useEffect(() => {
    let frame = 0;
    const start = performance.now();
-   const tick = (now:number) => { const next = Math.min(1,(now - start) / 420); setT(next); if (next < 1) frame = requestAnimationFrame(tick); };
+   const tick = (now:number) => { const next = Math.min(1,Math.max(0,(now - start) / 420)); setT(next); if (next < 1) frame = requestAnimationFrame(tick); };
    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) frame = requestAnimationFrame(tick);
    return () => cancelAnimationFrame(frame);
  },[]);
