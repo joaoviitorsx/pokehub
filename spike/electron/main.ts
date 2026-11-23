@@ -38,6 +38,8 @@ import { clearAllSessionData, createWipeQueue, findOrphans, runPendingWipes, typ
 import { guardNewContents, isAppFrameUrl, lockSession, SAFE_DIALOGS } from './runtime-guards';
 import { createAccountLock } from './account-lock';
 import { readJsonBounded } from './bounded-body';
+import { openDatabase } from './database';
+import { smokeConfig, writeSmokeResult } from './smoke';
 
 let window: BrowserWindow;
 let store: ProfileStore;
@@ -426,6 +428,8 @@ function createTray() {
     updateTray();
   } catch { tray = null; console.error('Não foi possível criar o ícone da bandeja.'); }
 }
+const smoke = smokeConfig(); // só com POKEHUB_SMOKE=1 + pasta temporária existente; ver smoke.ts
+if (smoke) app.setPath('userData',smoke.dir);
 // Build instalado não aceita depuração remota/inspetor (qualquer processo local poderia ler as sessões).
 const debugBlocked = app.isPackaged && dangerousSwitches(name => app.commandLine.hasSwitch(name)).length > 0;
 if (debugBlocked) app.quit();
@@ -653,6 +657,23 @@ if (primary) app.whenReady().then(() => {
   });
   // Início escalonado: a interface primeiro; depois a conta em foco (ou a primeira) e as demais, uma a cada 2,5 s. A auditoria das extensões roda em segundo plano.
   void window.loadFile(appIndex).catch(() => { dialog.showErrorBox('PokéHub', 'Não foi possível carregar a interface local. Verifique a instalação e tente novamente.'); app.quit(); });
+  if (smoke) {
+    const errors: string[] = []; let uiLoaded = false, finished = false;
+    window.webContents.on('did-finish-load',() => { uiLoaded = true; });
+    window.webContents.on('did-fail-load',(_event,code,description) => { errors.push(`did-fail-load ${code} ${description}`); });
+    window.webContents.on('render-process-gone',(_event,details) => { errors.push(`render-process-gone ${details.reason}`); });
+    window.webContents.on('console-message',event => { if (event.level === 'error') errors.push(`console: ${event.message.slice(0,200)}`); });
+    setTimeout(() => { void (async () => {
+      if (finished) return; finished = true;
+      let dbVersion: number | null = null;
+      try { dbVersion = Number((() => { const db = openDatabase(databasePath); try { return db.prepare('PRAGMA user_version').get()?.user_version; } finally { db.close(); } })()); } catch (error) { errors.push(`db: ${(error as Error).message}`); }
+      try { if (uiLoaded && await window.webContents.executeJavaScriptInIsolatedWorld(998,[{code:"document.getElementById('root')?.children.length ?? 0"}]) === 0) errors.push('interface não montou (#root vazio)'); } catch (error) { errors.push(`ui: ${(error as Error).message}`); }
+      if (views.size > 0) errors.push(`sessões abertas no smoke: ${views.size}`);
+      if (!uiLoaded) errors.push('interface não carregou');
+      try { writeSmokeResult(smoke.dir,{ok:errors.length === 0 && uiLoaded && dbVersion !== null,version:app.getVersion(),uiLoaded,dbVersion,errors}); } catch { console.error('Falha ao gravar o resultado do smoke.'); }
+      quitting = true; app.quit(); setTimeout(() => app.exit(0),5000).unref();
+    })(); },smoke.exitMs);
+  }
   extensionsReady = refreshExtensions().catch(() => { console.error('Não foi possível ler a configuração das extensões.'); }).then(() => { extensionsLoaded = true; });
   const openAtStartup = (id: string) => {
     try {

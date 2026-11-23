@@ -37,6 +37,7 @@ describe('workflows', () => {
     const text = readFileSync(`${dir}/release.yml`, 'utf8');
     expect(text).toMatch(/^permissions:\s*\n\s+contents:\s*read/m);
     expect(text).not.toMatch(/node-version:\s*'?22'?\s*$/m);
+    expect(text).toMatch(/node-version: '24.16.0'/);
     expect(text).not.toMatch(/bun-version:\s*'?1\.x/);
     expect(text).toContain('--publish never');
   });

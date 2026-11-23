@@ -45,6 +45,12 @@ Os testes não substituem a [verificação manual](docs/benchmarks/protocolo-eta
 
 `bun run dist:win` (instalador NSIS) e `bun run dist:linux` (AppImage) geram os instaladores em `release/`; o CI faz isso nas duas plataformas. **Os instaladores ainda não são assinados**: o Windows mostra o SmartScreen na primeira instalação ("Mais informações" → "Executar assim mesmo"). No Linux a atualização automática só funciona como AppImage. Não altere `productName` no `package.json`: mudaria a pasta de dados.
 
+Node: o CI usa **24.16.0** (igual ao desenvolvimento local; precisa existir em nodejs.org/dist). O `node:sqlite` vem embutido no Node do Electron, então não há módulo nativo para recompilar (`npmRebuild: false`).
+
+**Smoke do app empacotado** (`bun run test:packaged`, também no CI em Windows e Linux): abre `release/*-unpacked/PokeHub[.exe]` com uma pasta de dados temporária, sem perfis, e espera ele encerrar sozinho; confere em `smoke-result.json` (`ok`, `version`, `uiLoaded`, `dbVersion`, `errors`). O app só aceita isso com `POKEHUB_SMOKE=1` **e** `POKEHUB_SMOKE_DIR` apontando para uma pasta já existente DENTRO da pasta temporária do sistema (`POKEHUB_SMOKE_EXIT_MS` define o prazo; sem as duas variáveis tudo é ignorado e os dados reais são usados). Nenhuma chave de linha de comando é aceita. No Linux o sandbox do Chromium fica ligado; o CI só dá `chrome-sandbox` root:4755 ao app descompactado.
+
+O desinstalador do Windows mantém `%APPDATA%PokeHub` (seus dados); a instalação é por usuário, com escolha de pasta e atalhos na área de trabalho e no menu Iniciar.
+
 Para publicar uma versão:
 
 1. Suba `version` no `package.json` e faça o commit.

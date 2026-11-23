@@ -18,6 +18,7 @@
     "dist:win": "bun run build && electron-builder --win nsis --publish never",
     "release:win": "bun run build && electron-builder --win nsis --publish always",
     "test:electron": "node scripts/run-electron-smoke.cjs",
+    "test:packaged": "node scripts/run-packaged-smoke.cjs",
     "benchmark": "node scripts/benchmark-sessions.cjs",
     "release:linux": "bun run build && electron-builder --linux AppImage --publish always",
     "check:fuses": "node scripts/check-fuses.cjs"
@@ -50,6 +51,7 @@
   },
   "packageManager": "bun@1.4.4",
   "description": "Workspace local para sessões do PokéIdle.",
+  "author": "joaoviitorsx",
   "build": {
     "appId": "local.pokehub.desktop",
     "productName": "PokeHub",
