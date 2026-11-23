@@ -353,3 +353,29 @@ button.link:not(:disabled):hover { background: transparent; border: 0; color: va
 .findings li[data-kind=click] b, .findings li[data-kind=dispatch] b, .findings li[data-kind=send] b { color: var(--accent); }
 .tools button.update { height: 28px; margin-right: 6px; padding: 0 12px; border-radius: 999px; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: transparent; font-size: 12px; font-weight: 600; }
 .tools button.update.ready { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+/* Mercado */
+.side-tabs { margin: 0 16px 10px; }
+.side-body[hidden], .side-credit[hidden] { display: none; }
+.mkt-filters { display: grid; gap: 8px; }
+.mkt .seg { margin: 0; }
+.mkt .seg button { padding: 0 6px; font-size: 12px; }
+.mkt-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+.mkt-row label { display: flex; align-items: center; gap: 4px; }
+.mkt-row select { height: 26px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font-size: 12px; }
+.mkt-row .opt { height: 26px; padding: 0 10px; border-radius: 999px; background: transparent; color: var(--muted); font-size: 12px; }
+.mkt-row .opt[aria-pressed=true] { color: var(--text); background: var(--raised); border-color: var(--line-strong); }
+.mkt-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.mkt-card { padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--raised); display: grid; gap: 4px; }
+.mkt-top { display: flex; align-items: baseline; gap: 8px; }
+.mkt-top strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.mkt-top .pos { color: var(--muted); font-size: 12px; }
+.mkt-price small { color: var(--muted); font-weight: 400; }
+.mkt-meta { margin: 0; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.mkt-smart { padding: 0 7px; border-radius: 999px; border: 1px solid var(--line-strong); font-size: 11px; }
+.mkt-smart[data-label=desconto] { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.mkt-smart[data-label=acima] { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+.mkt-bar { position: relative; height: 14px; border-radius: 7px; background: var(--bg); overflow: hidden; }
+.mkt-bar i { position: absolute; inset: 0 auto 0 0; width: calc(var(--p) * 100%); background: color-mix(in srgb, var(--accent) 60%, transparent); }
+.mkt-bar span { position: relative; padding-left: 6px; font-size: 11px; line-height: 14px; }
+.mkt-why { margin: 2px 0 0; padding-left: 16px; font-size: 12px; color: var(--muted); display: grid; gap: 1px; }

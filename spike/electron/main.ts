@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { effectiveFocus, initialFocus, layout, SIDE_MAX, SIDE_MIN, SIDE_PANEL, sideWidth, TOP_BAR } from './layout';
 import { huntSnapshot, HUNT_UNAVAILABLE, type HuntTarget } from './hunt-snapshot';
+import { marketScan, MARKET_UNAVAILABLE } from './market-scan';
 import { isAllowedSessionNavigation, isOAuthProviderUrl } from './navigation';
 import { ProfileStore } from './profile-store';
 import { partitionFor } from './partition';
@@ -342,6 +343,10 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('hunt:snapshot', async (event,id: unknown,soLiberadas: unknown = true) => {
     if (!trusted(event)) return {ok:false,error:HUNT_UNAVAILABLE};
     return huntSnapshot(id, store.list().map(profile => profile.id), huntTarget, undefined, soLiberadas);
+  });
+  ipcMain.handle('market:scan', async (event,id: unknown) => {
+    if (!trusted(event)) return {ok:false,error:MARKET_UNAVAILABLE};
+    return marketScan(id, store.list().map(profile => profile.id), profileId => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:script => contents.executeJavaScript(script)} : null; });
   });
   ipcMain.handle('session:layout', (event,id: unknown,hide: unknown,side: unknown = false,panel: unknown = sidePanel) => invoke(event, () => {
     if (typeof hide !== 'boolean' || typeof side !== 'boolean' || (id !== null && typeof id !== 'string') || typeof panel !== 'number' || !Number.isInteger(panel) || panel < SIDE_MIN || panel > SIDE_MAX) throw new Error();
