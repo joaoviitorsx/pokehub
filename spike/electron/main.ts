@@ -42,6 +42,7 @@ import { createAccountLock } from './account-lock';
 import { readJsonBounded } from './bounded-body';
 import { openDatabase } from './database';
 import { smokeConfig, writeSmokeResult } from './smoke';
+import { remoteSmoke, type RemoteSmoke } from './smoke-remote';
 
 let window: BrowserWindow;
 let store: ProfileStore;
@@ -698,8 +699,10 @@ if (primary) app.whenReady().then(() => {
       try { dbVersion = Number((() => { const db = openDatabase(databasePath); try { return db.prepare('PRAGMA user_version').get()?.user_version; } finally { db.close(); } })()); } catch (error) { errors.push(`db: ${(error as Error).message}`); }
       try { if (uiLoaded && await window.webContents.executeJavaScriptInIsolatedWorld(998,[{code:"document.getElementById('root')?.children.length ?? 0"}]) === 0) errors.push('interface não montou (#root vazio)'); } catch (error) { errors.push(`ui: ${(error as Error).message}`); }
       if (views.size > 0) errors.push(`sessões abertas no smoke: ${views.size}`);
+      let remoteResult: RemoteSmoke | null = null;
+      try { remoteResult = await remoteSmoke(smoke.dir,join(__dirname,'../../dist-remote'),join(__dirname,'../../build/icon.png')); if (!remoteResult.ok) errors.push(`remoto: ${JSON.stringify(remoteResult.checks)}`); } catch (error) { errors.push(`remoto: ${(error as Error).message}`); }
       if (!uiLoaded) errors.push('interface não carregou');
-      try { writeSmokeResult(smoke.dir,{ok:errors.length === 0 && uiLoaded && dbVersion !== null,version:app.getVersion(),uiLoaded,dbVersion,errors}); } catch { console.error('Falha ao gravar o resultado do smoke.'); }
+      try { writeSmokeResult(smoke.dir,{ok:errors.length === 0 && uiLoaded && dbVersion !== null,version:app.getVersion(),uiLoaded,dbVersion,errors,remote:remoteResult}); } catch { console.error('Falha ao gravar o resultado do smoke.'); }
       quitting = true; app.quit(); setTimeout(() => app.exit(0),5000).unref();
     })(); },smoke.exitMs);
   }

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
  * define quando o app grava smoke-result.json e encerra sozinho.
  */
 export interface SmokeConfig { dir: string; exitMs: number }
-export interface SmokeResult { ok: boolean; version: string; uiLoaded: boolean; dbVersion: number | null; errors: string[] }
+export interface SmokeResult { ok: boolean; version: string; uiLoaded: boolean; dbVersion: number | null; errors: string[]; remote?: {ok: boolean; checks: Record<string, boolean | string>} | null }
 
 export function smokeConfig(env: Record<string, string | undefined> = process.env, temp: string = tmpdir(), real: (path: string) => string = realpathSync.native): SmokeConfig | null {
   if (env.POKEHUB_SMOKE !== '1') return null;

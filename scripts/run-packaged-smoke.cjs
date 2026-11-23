@@ -30,6 +30,7 @@ try {
   const json = JSON.parse(readFileSync(file, 'utf8'));
   console.log(JSON.stringify(json));
   if (json.ok !== true || json.uiLoaded !== true || !(json.dbVersion >= 1) || json.errors.length) throw new Error('Smoke do app empacotado reprovou.');
+  if (!json.remote || json.remote.ok !== true) throw new Error(`Smoke do acesso remoto empacotado reprovou: ${JSON.stringify(json.remote)}`);
   console.log('Smoke do app empacotado: ok.');
   code = 0;
 } catch (error) { console.error(error.message); }
