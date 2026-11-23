@@ -154,11 +154,11 @@ export function createAlertEngine(deps: AlertEngineDeps) {
     for (const device of deps.store.listDevices()) for (const sub of deps.store.pushOf(device.id)) jobs.push(sendOne(push, sub.id, sub, body, 'normal'));
     return (await Promise.all(jobs)).filter(Boolean).length;
   }
-  /** Assina o push do aparelho; false = endpoint fora da allowlist ou chaves inválidas. */
-  function subscribe(deviceId: string, sub: {endpoint: unknown; p256dh: unknown; auth: unknown}): boolean {
+  /** Assina o push do aparelho; false = endpoint fora da allowlist ou chaves inválidas; 'conflito' = o endpoint já é de outro aparelho. */
+  function subscribe(deviceId: string, sub: {endpoint: unknown; p256dh: unknown; auth: unknown}): boolean | 'conflito' {
     const url = validateEndpoint(sub.endpoint);
     if (!url || !validKeys(sub.p256dh, sub.auth)) return false;
-    deps.store.addPush(deviceId, {endpoint: url.href, p256dh: sub.p256dh as string, auth: sub.auth as string}, randomUUID(), iso());
+    if (deps.store.addPush(deviceId, {endpoint: url.href, p256dh: sub.p256dh as string, auth: sub.auth as string}, randomUUID(), iso()) === 'conflito') return 'conflito';
     update(); return true;
   }
   function unsubscribeDevice(deviceId: string, endpoint: unknown): boolean {

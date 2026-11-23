@@ -29,7 +29,7 @@ export interface RemoteApi {
 export interface AlertsApi {
   listCaptures(deviceId: string, q: {profileId?: string; onlyAlerts?: boolean; limit?: number}): RemoteCapture[]; history(limit: number): RemoteAlert[];
   getPrefs(deviceId: string): AlertPrefs; setPrefs(deviceId: string, prefs: AlertPrefs): AlertPrefs; publicKey(): string | null;
-  subscribe(deviceId: string, sub: {endpoint: unknown; p256dh: unknown; auth: unknown}): boolean; unsubscribe(deviceId: string, endpoint: unknown): boolean;
+  subscribe(deviceId: string, sub: {endpoint: unknown; p256dh: unknown; auth: unknown}): boolean | 'conflito'; unsubscribe(deviceId: string, endpoint: unknown): boolean;
   sendTest(deviceId: string): Promise<number | null>;
 }
 /** O que o PC mostra no pedido: `ua` é o que o servidor leu do User-Agent; `nickname` é o que o celular disse de si (não confiável). */
@@ -271,7 +271,9 @@ export function createRemoteServer(deps: ServerDeps) {
     if (path === '/api/alerts/prefs') { const prefs = parsePrefs(body); return prefs ? json(res, 200, a.setPrefs(device.id, prefs)) : fail(res, 400, MSG.json); }
     if (path === '/api/push/unsubscribe') { if (typeof body.endpoint !== 'string') return fail(res, 400, MSG.json); a.unsubscribe(device.id, body.endpoint); return json(res, 200, {ok: true}); }
     const keys = typeof body.keys === 'object' && body.keys !== null && !Array.isArray(body.keys) ? body.keys as Record<string, unknown> : null;
-    if (typeof body.endpoint !== 'string' || !keys || !a.subscribe(device.id, {endpoint: body.endpoint, p256dh: keys.p256dh, auth: keys.auth})) return fail(res, 400, MSG.json);
+    const subscribed = typeof body.endpoint === 'string' && keys ? a.subscribe(device.id, {endpoint: body.endpoint, p256dh: keys.p256dh, auth: keys.auth}) : false;
+    if (subscribed === 'conflito') { audit(device.id, 'push_conflito', device.name); return fail(res, 409, 'Esta assinatura já pertence a outro aparelho.'); }
+    if (!subscribed) return fail(res, 400, MSG.json);
     audit(device.id, 'push_assinado', device.name);
     return json(res, 200, {ok: true});
   }

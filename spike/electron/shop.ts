@@ -122,7 +122,7 @@ export function buildBuyScript(cat: unknown, name: unknown, qty: unknown, unitPr
   const CAT = ${JSON.stringify(cat)}, NAME = ${JSON.stringify(name)}, QTY = ${JSON.stringify(q)}, PRICE = ${JSON.stringify(p)}, TOTAL = ${JSON.stringify(q * p)};
   const fail = (code, error, extra) => Object.assign({ok: false, code: code, error: error}, extra || {});
   const again = () => { const l = cardsOf().filter((c) => cardData(c).name === NAME); return l.length === 1 ? l[0] : null; };
-  let opened = false;
+  let opened = false, clicked = false;
   try {
     const o = await openMarket(); if (o.err) return fail('other', o.err);
     opened = o.opened;
@@ -149,7 +149,7 @@ export function buildBuyScript(cat: unknown, name: unknown, qty: unknown, unitPr
     if (cardData(card).cur !== 'coin') return fail('currency', 'moeda não é ouro', {before: before});
     if (num(cardData(card).price) !== PRICE) return fail('price', 'O preço mudou; compra cancelada.', {before: before});
     if (btn.disabled) return fail('other', 'Botão de compra desabilitado.', {before: before});
-    btn.click();
+    clicked = true; btn.click();
     let after = before;
     for (let t = 0; t < 24; t++) {
       await sleep(250);
@@ -159,7 +159,7 @@ export function buildBuyScript(cat: unknown, name: unknown, qty: unknown, unitPr
     const goldAfter = num(readGold());
     if (after <= before) return fail('unconfirmed', 'O jogo não confirmou a compra (estoque não aumentou). Confira no jogo.', {before: before});
     return {ok: true, before: before, after: after, spent: goldAfter !== null ? goldBefore - goldAfter : null};
-  } catch (e) { return fail('other', 'Falha ao comprar no Market.'); }
+  } catch (e) { return fail(clicked ? 'unconfirmed' : 'other', 'Falha ao comprar no Market.'); }
   finally { if (opened) await closeModal(); }
 })()`;
 }
@@ -233,8 +233,9 @@ export function createShop(deps: ShopDeps) {
       const t = usable(id);
       if (!t) return {ok: false, error: SHOP_UNAVAILABLE, code: 'other'};
       const result = sanitizeBuyResult(await timed(t.run(buildBuyScript(order.cat, order.name, order.qty, order.unitPrice)), buyMs));
-      if (result.ok) { // mantém a leitura em dia (a próxima linha da mesma conta parte do estoque novo)
-        last.set(id, {gold: read.gold === null ? null : Math.max(0, read.gold - (result.data.spent ?? order.total)), items: read.items.map(i => i.cat === order.cat && i.name === order.name ? {...i, have: result.data.after} : i)});
+      if (result.ok) { // gasto AUTORIZADO = preço × quantidade comprada (o delta de ouro do jogo ocioso inclui ganhos); a leitura segue em dia
+        const bought = Math.min(order.qty, result.data.bought); result.data.bought = bought; result.data.spent = order.unitPrice * bought;
+        last.set(id, {gold: read.gold === null ? null : Math.max(0, read.gold - result.data.spent), items: read.items.map(i => i.cat === order.cat && i.name === order.name ? {...i, have: result.data.after} : i)});
       }
       return result;
     } catch { return {ok: false, error: 'Não foi possível concluir a compra. Confira no jogo.', code: 'unconfirmed'}; }
@@ -283,7 +284,7 @@ export function createShop(deps: ShopDeps) {
           let halted = false;
           for (const [line, order] of lines.entries()) {
             const base = {kind: 'line' as const, profileId: id, line, name: order.name, qty: order.qty};
-            const skip = (why: string) => { deps.emit({...base, status: 'skipped'}); results.push({profileId: id, order, ok: false, error: why}); };
+            const skip = (why: string) => { deps.emit({...base, status: 'skipped'}); results.push({profileId: id, order, ok: false, code: 'skipped', error: why}); };
             if (halted) { skip('Interrompido após um erro nesta conta.'); continue; }
             if (stopRequested) { skip('Interrompido pelo usuário.'); continue; }
             if (!first) await sleep(pauseMs);
@@ -291,8 +292,8 @@ export function createShop(deps: ShopDeps) {
             if (stopRequested) { skip('Interrompido pelo usuário.'); continue; }
             deps.emit({...base, status: 'buying'});
             const r = await doBuy(id, order);
-            if (r.ok) { deps.emit({...base, status: 'ok', bought: r.data.bought, spent: r.data.spent}); results.push({profileId: id, order, ok: true, bought: r.data.bought, spent: r.data.spent}); }
-            else { deps.emit({...base, status: 'error', error: r.error}); results.push({profileId: id, order, ok: false, error: r.error}); if (!SOFT.includes(r.code)) halted = true; }
+            if (r.ok) { deps.emit({...base, status: 'ok', bought: r.data.bought, spent: r.data.spent}); results.push({profileId: id, order, ok: true, code: 'ok', bought: r.data.bought, spent: r.data.spent}); }
+            else { deps.emit({...base, status: 'error', error: r.error}); results.push({profileId: id, order, ok: false, code: r.code, error: r.error}); if (!SOFT.includes(r.code)) halted = true; }
           }
         }
       } finally { running = false; for (const r of releases) r(); deps.emit({kind: 'done', stopped: stopRequested}); }

@@ -27,6 +27,7 @@ const CAT: Record<string, ShopCat> = {'Poke Ball': 'Pokebolas', 'Great Ball': 'P
 let accts: {id: string; label: string; color: string; state: string; suspended: boolean}[] = [];
 let gold: Record<string, number> = {}, have: Record<string, Record<string, number>> = {}, price: Record<string, number> = {};
 let reads: string[] = [], runs: {id: string; lines: {name: string; qty: number; unitPrice: number; total: number}[]}[][] = [], calls: string[] = [], notices: {title: string; body: string}[] = [];
+let runOverride: ((order: {name: string; qty: number; unitPrice: number; total: number}) => Record<string, unknown> | null) | null = null;
 let hike: {name: string; to: number; after: number; id?: string} | null = null, runGate: Promise<void> | null = null, failRead = false, lite = false, failRun = false;
 const readCount: Record<string, number> = {};
 const stock = (id: string) => ({gold: gold[id] ?? 0, items: Object.keys(price).map(name => ({cat: CAT[name]!, name, have: have[id]?.[name] ?? 0, price: price[name]!}))});
@@ -44,6 +45,7 @@ const shop: ShopPort = {
     const results = [];
     for (const entry of plan) for (const [line, order] of entry.lines.entries()) {
       on({kind: 'line', profileId: entry.id, line, name: order.name, qty: order.qty, status: 'buying'});
+      const forced = runOverride?.(order); if (forced) { results.push({profileId: entry.id, order, ...forced} as never); continue; }
       gold[entry.id] = (gold[entry.id] ?? 0) - order.total; have[entry.id] = {...have[entry.id], [order.name]: (have[entry.id]?.[order.name] ?? 0) + order.qty};
       on({kind: 'line', profileId: entry.id, line, name: order.name, qty: order.qty, status: 'ok', bought: order.qty, spent: order.total});
       results.push({profileId: entry.id, order, ok: true, bought: order.qty, spent: order.total});
@@ -67,7 +69,7 @@ async function setup(o: {pin?: boolean} = {}) {
   dbPath = join(dir, 'p.sqlite'); clock = new Date(2026, 10, 23, 10, 0, 0).getTime(); native = []; nativeAnswer = true;
   accts = [{id: 'acc-1', label: 'Principal', color: '#d4a65f', state: 'ready', suspended: false}, {id: 'acc-2', label: 'Farm', color: '#5fa8d4', state: 'ready', suspended: false}, {id: 'acc-3', label: 'Dorme', color: '#aaaaaa', state: 'suspended', suspended: true}];
   gold = {'acc-1': 10_000_000, 'acc-2': 10_000_000, 'acc-3': 5}; have = {'acc-1': {'Poke Ball': 10, Revive: 0}, 'acc-2': {}}; price = {'Poke Ball': 100, 'Great Ball': 1000, Revive: 500, 'Small Potion': 50, 'Master Ball': 9_999_999};
-  reads = []; runs = []; calls = []; notices = []; hike = null; runGate = null; failRead = false; lite = false; failRun = false; for (const key of Object.keys(readCount)) delete readCount[key];
+  reads = []; runs = []; calls = []; notices = []; hike = null; runGate = null; failRead = false; lite = false; failRun = false; runOverride = null; for (const key of Object.keys(readCount)) delete readCount[key];
   curDir = dir; hub = build();
   await hub.setEnabled(true); port = hub.status().port;
   if (o.pin !== false) await hub.setPin(PIN);
@@ -382,9 +384,9 @@ describe('R4: PIN no servidor, bloqueio escalonado e elevação', () => {
     const big = await manual(cookie, [{cat: 'Pokebolas', name: 'Great Ball', qty: 101}]); const pb = json<ShopPlanReply>(big); expect(pb.plan.total).toBe(101_000); expect(pb.plan.needsPin).toBe(true);
     const no = await confirm(cookie, pb); expect(no.status).toBe(403); expect(json(no)).toMatchObject({code: 'pin_necessario', force: true}); expect(runs).toEqual([]);
     expect((await confirm(cookie, pb, {pin: PIN})).status).toBe(200);
-    const small = await manual(cookie, [{cat: 'Pokebolas', name: 'Great Ball', qty: 40}]); const ps = json<ShopPlanReply>(small); expect(ps.plan.needsPin).toBe(false); // 40.000 de 99.000 restantes é menos que 50%
-    await call('/api/elevate', {cookie, body: {pin: PIN}}); expect((await confirm(cookie, ps)).status).toBe(200);
-    const edge = json<ShopPlanReply>(await manual(cookie, [{cat: 'Pokebolas', name: 'Great Ball', qty: 30}])); expect(edge.plan.needsPin).toBe(true); // restam 59.000; 30.000*2 > 59.000
+    await call('/api/elevate', {cookie, body: {pin: PIN}}); // nova elevação: o gasto da elevação recomeça do zero
+    const small = await manual(cookie, [{cat: 'Pokebolas', name: 'Great Ball', qty: 40}]); const ps = json<ShopPlanReply>(small); expect(ps.plan.needsPin).toBe(false); // 40.000 de 200.000 (teto diário) é menos que 50%
+    expect((await confirm(cookie, ps)).status).toBe(200);
   });
 });
 
@@ -474,5 +476,42 @@ describe('R4: teto diário no PC', () => {
     const day = localDay(clock), next = localDay(clock + 24 * 3_600_000); expect(day).not.toBe(next);
     expect(hub.store.reserveSpend(day, 'acc-1', 150_000, 200_000, 'America/Sao_Paulo')).toBe(true); expect(hub.store.reserveSpend(day, 'acc-1', 60_000, 200_000, 'America/Sao_Paulo')).toBe(false); expect(hub.store.spentToday(next, 'acc-1')).toBe(0);
     hub.store.releaseSpend(day, 'acc-1', 999_999); expect(hub.store.spentToday(day, 'acc-1')).toBe(0); expect(rows('SELECT tz FROM remote_spend')[0]).toEqual({tz: 'America/Sao_Paulo'});
+  });
+});
+
+describe('R4: contagem do teto (autorizada) e elevação', () => {
+  beforeEach(() => setup()); afterEach(teardown);
+  it('linha ok com spent 0 (delta de ouro do jogo ocioso): o dia soma quantidade × preço', async () => {
+    const {cookie} = makeDevice(); const p = await planned(cookie, 10); runOverride = () => ({ok: true, code: 'ok', bought: 10, spent: 0});
+    const r = await confirm(cookie, p, {pin: PIN}); expect(r.status, r.body).toBe(200); expect(json<ShopConfirmReply>(r).spent).toBe(1000); expect(spentToday()).toBe(1000);
+    expect(rows('SELECT total, result FROM remote_purchases')).toEqual([{total: 1000, result: 'ok'}]);
+  });
+  it('comprou menos que o pedido: conta só o medido (limitado à quantidade)', async () => {
+    const {cookie} = makeDevice(); const p = await planned(cookie, 10); runOverride = () => ({ok: true, code: 'ok', bought: 4, spent: 99_999});
+    expect(json<ShopConfirmReply>(await confirm(cookie, p, {pin: PIN})).spent).toBe(400); expect(spentToday()).toBe(400);
+  });
+  it('não confirmada: a reserva FICA e o histórico diz "não confirmada (reservado)"', async () => {
+    const {cookie} = makeDevice(); const p = await planned(cookie, 10); runOverride = () => ({ok: false, code: 'unconfirmed', error: 'O jogo não confirmou a compra.'});
+    const r = await confirm(cookie, p, {pin: PIN}); expect(r.status).toBe(409); expect(spentToday()).toBe(1000);
+    expect(rows('SELECT total, result FROM remote_purchases')).toEqual([{total: 1000, result: 'não confirmada (reservado)'}]);
+  });
+  it('preço mudou antes do clique: a reserva é devolvida', async () => {
+    const {cookie} = makeDevice(); const p = await planned(cookie, 10); runOverride = () => ({ok: false, code: 'price', error: 'O preço mudou; compra cancelada.'});
+    expect((await confirm(cookie, p, {pin: PIN})).status).toBe(409); expect(spentToday()).toBe(0);
+    expect(rows('SELECT result FROM remote_purchases')[0]!.result).toMatch(/^erro:/);
+  });
+  it('B-8: compras fatiadas na mesma elevação passam de 50% do teto diário e pedem o PIN', async () => {
+    const {cookie} = makeDevice(); await call('/api/elevate', {cookie, body: {pin: PIN}});
+    const slice = async () => json<ShopPlanReply>(await manual(cookie, [{cat: 'Pokebolas', name: 'Great Ball', qty: 40}])); // 40.000 de 200.000
+    const a = await slice(); expect(a.plan.needsPin).toBe(false); expect((await confirm(cookie, a)).status).toBe(200);
+    const b = await slice(); expect(b.plan.needsPin).toBe(false); expect((await confirm(cookie, b)).status).toBe(200); // 80.000 acumulados
+    const c = await slice(); expect(c.plan.needsPin).toBe(true); // 80.000 + 40.000 > 100.000
+    const no = await confirm(cookie, c); expect(no.status).toBe(403); expect(json(no)).toMatchObject({code: 'pin_necessario', force: true});
+    expect((await confirm(cookie, c, {pin: PIN})).status).toBe(200);
+    await call('/api/elevate', {cookie, body: {pin: PIN}}); expect(json<ShopPlanReply>(await manual(cookie, [{cat: 'Pokebolas', name: 'Great Ball', qty: 40}])).plan.needsPin).toBe(false); // nova elevação zera o acumulado
+  });
+  it('auditoria: leitura e plano da Loja viram linhas', async () => {
+    const {cookie} = makeDevice(); await call('/api/shop/read', {cookie, body: {profileIds: ['acc-1']}}); await planned(cookie, 1);
+    expect(auditActions()).toEqual(expect.arrayContaining(['loja_leitura', 'loja_plano']));
   });
 });

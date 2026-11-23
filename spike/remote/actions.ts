@@ -5,7 +5,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { MAX_QTY, fitPlan, isCatalogItem, isShopCat, parseKits, planRestock, type Kit, type ShopItem, type ShopLineResult, type ShopOrder, type ShopPlanEntry, type ShopProgress, type ShopRead } from '../domain/shop';
 import type { ActionsState, RemoteAccountResult, RemoteLineResult, RemotePlan, RemotePlanAccount, RemotePlanLine, RemotePurchase, RemoteShopAccount, RemoteSpend, ShopConfirmReply, ShopEvent, ShopPlanReply } from '../contracts/remote';
-import { RateLimiter, type PinGuard } from './guards';
+import { RateLimiter, localDay, type PinGuard } from './guards';
 import type { ConfirmRow, DeviceRow, RemoteStore } from './store';
 
 export type ShopResult<T> = {ok: true; data: T} | {ok: false; error: string};
@@ -26,8 +26,7 @@ export interface ActionReply { status: number; body: Record<string, unknown>; he
 
 export const ELEVATION_MS = 10 * 60_000, PLAN_TTL_MS = 60_000, ACT_PER_MIN = 5, SHOP_PER_MIN = 10, MAX_PLAN_LINES = 12, MAX_PLAN_ACCOUNTS = 4, IDEM_RE = /^[\w-]{8,64}$/;
 export const DEFAULT_CAP_GOLD = 200_000;
-/** Dia no fuso LOCAL do PC (AAAA-MM-DD). */
-export const localDay = (ms: number): string => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+export { localDay };
 const localTz = (): string => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'; } catch { return 'local'; } };
 const gold = (n: number) => new Intl.NumberFormat('pt-BR').format(n);
 const clip = (text: string, max: number) => text.length > max ? `${text.slice(0, max - 1)}…` : text;
@@ -52,6 +51,7 @@ export function createActions(deps: ActionsDeps) {
   const now = deps.now, dayOf = deps.dayOf ?? localDay, tz = deps.tz ?? localTz(), store = deps.store;
   const actLimit = new RateLimiter(ACT_PER_MIN, 60_000, now), shopLimit = new RateLimiter(SHOP_PER_MIN, 60_000, now), pinLimit = new RateLimiter(10, 60_000, now);
   const elevations = new Map<string, number>(); // aparelho → até quando (só na memória do servidor; nunca no celular)
+  const elevSpent = new Map<string, Map<string, number>>(); // aparelho → conta → ouro (comprado ou reservado) DURANTE a elevação atual: fatiar compras não escapa do PIN
   const confirms = new Map<string, ConfirmRow>(); // espelho em memória das confirmações ativas (o banco é a fonte de verdade do "usada")
   const inflight = new Map<string, Promise<ActionReply>>(); // aparelho|chave de repetição → execução em andamento
   const label = (id: string) => deps.accounts().find(a => a.id === id)?.label ?? 'Conta';
@@ -64,7 +64,10 @@ export function createActions(deps: ActionsDeps) {
     if (left <= 0 || !canAct(id) || store.getActionsDisabled() || store.getPinHash() === null) { elevations.delete(id); return 0; }
     return left;
   }
-  const clearElevations = (id?: string) => { if (id) elevations.delete(id); else elevations.clear(); };
+  const clearElevations = (id?: string) => { if (id) { elevations.delete(id); elevSpent.delete(id); } else { elevations.clear(); elevSpent.clear(); } };
+  /** PIN exigido quando a compra passa de 50% do teto DIÁRIO ou, somada ao já gasto nesta elevação, passa de 50% (impede fatiar). */
+  const needsPinFor = (deviceId: string, profileId: string, total: number, cap: number) => total * 2 > cap || ((elevSpent.get(deviceId)?.get(profileId) ?? 0) + total) * 2 > cap;
+  const addElevSpent = (deviceId: string, profileId: string, amount: number) => { if (amount <= 0 || elevatedMs(deviceId) <= 0) return; const m = elevSpent.get(deviceId) ?? new Map<string, number>(); m.set(profileId, (m.get(profileId) ?? 0) + amount); elevSpent.set(deviceId, m); };
   const lockedMs = (id: string) => Math.max(0, (store.pinState(id)?.lockedUntil ?? 0) - now());
   function state(device: Pick<DeviceRow, 'id'>): ActionsState {
     return {canAct: canAct(device.id), pinSet: store.getPinHash() !== null, actionsDisabled: store.getActionsDisabled(), lockedMs: lockedMs(device.id), elevatedMs: elevatedMs(device.id), dailyCapGold: store.getDailyCapGold(), lite: deps.account.lite()};
@@ -97,9 +100,9 @@ export function createActions(deps: ActionsDeps) {
   async function elevate(device: DeviceRow, body: Record<string, unknown>): Promise<ActionReply> {
     const blocked = gate(device); if (blocked) return blocked;
     if (!pinLimit.hit(device.id)) return err(429, 'limite', MSG.rate, {}, {'Retry-After': '60'});
-    elevations.delete(device.id); // pede o PIN sempre: elevar de novo só com o PIN certo
+    elevations.delete(device.id); elevSpent.delete(device.id); // pede o PIN sempre: elevar de novo só com o PIN certo (e o gasto da elevação recomeça do zero)
     const refused = await pinGate(device, body.pin); if (refused) return refused;
-    elevations.set(device.id, now() + ELEVATION_MS);
+    elevations.set(device.id, now() + ELEVATION_MS); elevSpent.set(device.id, new Map());
     audit(device.id, 'elevacao_pin', `${device.name}: PIN lembrado por 10 min`);
     return {status: 200, body: {ok: true, elevatedMs: ELEVATION_MS}};
   }
@@ -118,6 +121,7 @@ export function createActions(deps: ActionsDeps) {
     const ids = parseIds(body.profileIds); if (!ids) return err(400, 'invalido', MSG.bad);
     if (!shopLimit.hit(device.id)) return err(429, 'limite', MSG.rate, {}, {'Retry-After': '30'});
     const accounts: RemoteShopAccount[] = (await readAll(ids)).map(({id, result}) => result.ok ? {profileId: id, label: label(id), gold: result.data.gold, items: catalogItems(result.data)} : {profileId: id, label: label(id), gold: null, items: [], error: result.error});
+    audit(device.id, 'loja_leitura', `${device.name}: ${ids.map(label).join(', ')}`);
     return {status: 200, body: {accounts}};
   }
   const parseManual = (raw: unknown): {cat: ShopOrder['cat']; name: string; qty: number}[] | null => {
@@ -166,10 +170,11 @@ export function createActions(deps: ActionsDeps) {
       if (total === 0) error = orders.length === 0 ? (kit ? 'Já está completo para este kit.' : 'Nenhum item à venda.') : 'Ouro insuficiente.';
       else if (total > capRemaining) error = `Passa do teto diário do celular (restam ${gold(capRemaining)} de ouro).`;
       const executable = error === undefined;
-      if (executable) { exec.push({...base, lines: fitting.map(o => ({cat: o.cat, name: o.name, qty: o.qty, unitPrice: o.unitPrice, total: o.total}))}); if (total * 2 > capRemaining) needsPin = true; }
+      if (executable) { exec.push({...base, lines: fitting.map(o => ({cat: o.cat, name: o.name, qty: o.qty, unitPrice: o.unitPrice, total: o.total}))}); if (needsPinFor(device.id, id, total, cap)) needsPin = true; }
       planAccounts.push({...base, goldBefore: g, goldAfter: g === null ? null : g - (executable ? total : 0), lines, total: executable ? total : 0, capRemaining, capAfter: capRemaining - (executable ? total : 0), executable, ...(error ? {error} : {})});
     }
     const plan: RemotePlan = {accounts: planAccounts, total: exec.reduce((s, a) => s + a.lines.reduce((t, l) => t + l.total, 0), 0), needsPin, dailyCapGold: cap, mode, ...(kit ? {kitName: kit.name} : {})};
+    audit(device.id, 'loja_plano', `${device.name}: ${mode === 'kit' ? `kit ${kit!.name}` : 'manual'}, ${exec.length ? `total ${gold(plan.total)} de ouro` : 'nada a comprar'}`);
     if (!exec.length) return err(422, 'nada_a_comprar', MSG.nothing, {plan});
     const confirmId = randomBytes(16).toString('hex'), planHash = planHashOf(exec), at = now();
     const row: ConfirmRow = {id: confirmId, deviceId: device.id, planHash, planJson: JSON.stringify({accounts: exec, needsPin} satisfies ExecPlan), createdAt: at, expiresAt: at + PLAN_TTL_MS, used: false, idemKey: null, resultJson: null};
@@ -205,9 +210,9 @@ export function createActions(deps: ActionsDeps) {
     let exec: ExecPlan;
     try { exec = JSON.parse(stored.planJson) as ExecPlan; } catch { return err(409, 'plano_invalido', MSG.hash); }
     if (!sameHex(body.planHash, stored.planHash) || planHashOf(exec.accounts) !== stored.planHash) { store.markConfirmUsed(confirmId, null); stored.used = true; audit(device.id, 'compra_hash_diferente', device.name); return err(409, 'plano_alterado', MSG.hash); }
-    // PIN: sempre que a compra passa de 50% do teto restante de alguma conta (mesmo com elevação); senão, elevação dispensa
-    const day0 = dayOf(now()), cap0 = store.getDailyCapGold();
-    const big = exec.accounts.some(a => a.lines.reduce((s, l) => s + l.total, 0) * 2 > remainingCap(day0, a.profileId, cap0));
+    // PIN: sempre que a compra passa de 50% do teto DIÁRIO, ou o total da elevação atual + esta compra passa de 50% (mesmo com elevação); senão, elevação dispensa
+    const cap0 = store.getDailyCapGold();
+    const big = exec.accounts.some(a => needsPinFor(device.id, a.profileId, a.lines.reduce((s, l) => s + l.total, 0), cap0));
     const refused = await pinGate(device, body.pin, big); if (refused) return refused;
     if (!actLimit.hit(device.id)) return err(429, 'limite', MSG.rate, {}, {'Retry-After': '60'}); // 5 ações/min por aparelho (depois do PIN: erros de PIN têm o próprio bloqueio)
     // seção síncrona (sem await até reservar o teto): reconfere, marca como USADA e só então age
@@ -261,13 +266,17 @@ export function createActions(deps: ActionsDeps) {
         if (!run.ok) for (const a of runnable) abort(a, run.error, 'compra_abortada');
         else for (const a of runnable) {
           const mine = run.data.filter(r => r.profileId === a.profileId), lines: RemoteLineResult[] = [];
-          let spent = 0, okCount = 0;
+          let spent = 0, okCount = 0, held = 0;
           for (const r of mine) {
-            const s = r.ok ? (typeof r.spent === 'number' && r.spent >= 0 ? r.spent : r.order.total) : 0;
-            if (r.ok) { okCount++; spent += s; lines.push({name: r.order.name, qty: r.order.qty, status: 'ok', bought: r.bought ?? r.order.qty, spent: s}); } else lines.push({name: r.order.name, qty: r.order.qty, status: r.error?.startsWith('Interrompido') ? 'pulada' : 'erro', error: r.error});
-            purchases.push({deviceId: device.id, deviceName: device.name, profileId: a.profileId, confirmId: c.id, planHash: c.planHash, item: r.order.name, qty: r.order.qty, unitPrice: r.order.unitPrice, total: s, result: r.ok ? 'ok' : `erro: ${r.error ?? 'falhou'}`});
+            // gasto AUTORIZADO: preço × quantidade comprada (nunca o delta de ouro, que mistura os ganhos do jogo ocioso)
+            const bought = r.ok ? Math.min(r.order.qty, Math.max(0, r.bought ?? r.order.qty)) : 0, s = r.ok ? r.order.unitPrice * bought : 0;
+            const unsure = !r.ok && (r.code === 'unconfirmed' || r.code === 'timeout'); // o clique pode ter ocorrido: a reserva FICA (conservador)
+            if (unsure) held += r.order.total;
+            if (r.ok) { okCount++; spent += s; lines.push({name: r.order.name, qty: r.order.qty, status: 'ok', bought, spent: s}); } else lines.push({name: r.order.name, qty: r.order.qty, status: r.error?.startsWith('Interrompido') ? 'pulada' : 'erro', error: r.error});
+            purchases.push({deviceId: device.id, deviceName: device.name, profileId: a.profileId, confirmId: c.id, planHash: c.planHash, item: r.order.name, qty: r.order.qty, unitPrice: r.order.unitPrice, total: unsure ? r.order.total : s, result: r.ok ? 'ok' : unsure ? 'não confirmada (reservado)' : `erro: ${r.error ?? 'falhou'}`});
           }
-          store.releaseSpend(day, a.profileId, (reserved.get(a.profileId) ?? 0) - spent); reserved.delete(a.profileId); // devolve o que não foi gasto
+          store.releaseSpend(day, a.profileId, Math.max(0, (reserved.get(a.profileId) ?? 0) - spent - held)); reserved.delete(a.profileId); // devolve só o que com certeza não saiu
+          addElevSpent(device.id, a.profileId, spent + held);
           results.set(a.profileId, {profileId: a.profileId, label: a.label, status: okCount === 0 ? 'abortada' : okCount === lines.length ? 'ok' : 'parcial', spent, lines, ...(okCount === 0 ? {error: lines.find(l => l.error)?.error ?? 'Nada foi comprado.'} : {})});
         }
       }

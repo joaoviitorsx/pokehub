@@ -95,7 +95,10 @@ export function saveKits(kits: readonly Kit[], storage: Pick<Storage, 'setItem'>
 
 // ---- Execução (processo principal -> renderer) ----
 export interface ShopPlanEntry { id: string; lines: ShopOrder[] }
-export interface ShopLineResult { profileId: string; order: ShopOrder; ok: boolean; bought?: number; spent?: number | null; error?: string }
+/** Desfecho da linha: `unconfirmed` = o clique pode ter acontecido (o ouro pode ter saído); os demais erros são de antes do clique. */
+export type ShopLineCode = 'ok' | 'price' | 'gold' | 'absent' | 'unconfirmed' | 'timeout' | 'currency' | 'other' | 'skipped';
+/** `spent` é AUTORIZADO: preço unitário × quantidade comprada (nunca a diferença de saldo, que o jogo ocioso mistura com ganhos). */
+export interface ShopLineResult { profileId: string; order: ShopOrder; ok: boolean; code?: ShopLineCode; bought?: number; spent?: number | null; error?: string }
 export type ShopProgress =
   | {kind: 'line'; profileId: string; line: number; name: string; qty: number; status: 'buying' | 'ok' | 'error' | 'skipped'; bought?: number; spent?: number | null; error?: string}
   | {kind: 'done'; stopped: boolean};
