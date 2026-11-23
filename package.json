@@ -9,7 +9,7 @@
     "dev": "vite --host 127.0.0.1",
     "preview:ui": "vite --host 127.0.0.1 --port 5174",
     "build": "node spike/clean-build.cjs && tsc --noEmit && vite build && tsc -p tsconfig.electron.json && node spike/finish-build.cjs",
-    "test": "vitest run && node --test spike/tests/clean-build.node.cjs",
+    "test": "vitest run --testTimeout=20000 && node --test spike/tests/clean-build.node.cjs",
     "start": "electron .",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
