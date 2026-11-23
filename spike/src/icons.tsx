@@ -25,7 +25,7 @@ export const icons = {
  minus:'M5 8h6',
  expand:'M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9',
  collapse:'M13.5 6.5h-4v-4M9.5 6.5L14 2M2.5 9.5h4v4M6.5 9.5L2 14',
- gear:'M8 5.2a2.8 2.8 0 1 0 0 5.6a2.8 2.8 0 1 0 0-5.6M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1',
+ gear:'M12.59 6.27L14.44 6.56L14.44 9.44L12.59 9.73L12.46 10.02L13.57 11.54L11.54 13.57L10.02 12.46L9.73 12.59L9.44 14.44L6.56 14.44L6.27 12.59L5.98 12.46L4.46 13.57L2.43 11.54L3.54 10.02L3.41 9.73L1.56 9.44L1.56 6.56L3.41 6.27L3.54 5.98L2.43 4.46L4.46 2.43L5.98 3.54L6.27 3.41L6.56 1.56L9.44 1.56L9.73 3.41L10.02 3.54L11.54 2.43L13.57 4.46L12.46 5.98ZM8 5.9a2.1 2.1 0 1 0 0 4.2a2.1 2.1 0 1 0 0-4.2', // engrenagem (8 dentes) — abre o Gerenciar
 };
 export const Icon = ({d}:{d:string}) => <svg className="ic" viewBox="0 0 16 16" aria-hidden="true"><path d={d}/></svg>;
 // Grade 2×2 animada por CSS (.vi): em "focus" o 1º quadrado cresce até o quadro inteiro e os outros somem.
