@@ -432,6 +432,7 @@ function setLiteMode(lite: boolean): boolean {
 function showWindow() {
   if (!window || window.isDestroyed()) return;
   ghost?.reveal(); // se a janela estava "fantasma" (alguém assistindo), volta a ser a janela de verdade
+  try { updater?.checkIfStale(); } catch { /* atualizador indisponível */ } // reabriu pela bandeja: confere atualização se a última verificação é antiga
   if (window.isMinimized()) window.restore();
   window.show(); window.focus();
 }
