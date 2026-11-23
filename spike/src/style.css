@@ -485,6 +485,12 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 .mkt-bar span { position: relative; padding-left: 7px; font-size: 10px; font-weight: 700; line-height: 16px; color: var(--pi-ouro-esc); mix-blend-mode: normal; text-shadow: 0 1px 0 #fff8; }
 .mkt-why { margin: 2px 0 0; padding-left: 16px; font-size: 12px; color: var(--pi-vao-dim); display: grid; gap: 1px; }
 
+.mkt-session { display: grid; gap: 8px; }
+.mkt-count { margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; }
+.mkt-count .opt { height: 24px; padding: 0 10px; font-size: 11px; }
+.mkt-run { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; font-weight: 600; color: var(--pi-ouro); }
+.mkt-warn { margin: 0; font-size: 12px; font-weight: 600; color: var(--pi-vermelho-txt); }
+
 /* ---------- Acessibilidade e movimento ---------- */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }

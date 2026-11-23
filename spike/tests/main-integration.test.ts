@@ -122,6 +122,15 @@ describe('processo principal', () => {
   const huntFail = {ok:false,error:'Dados do /hunt indisponíveis nesta conta'};
   for (const id of ['nao-existe',null,42,{id:saved.id},saved.id]) expect(await invoke('hunt:snapshot',id)).toEqual(huntFail);
   expect(await handlers.get('hunt:snapshot')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame},saved.id)).toEqual(huntFail);
+  // leitura assistida do Mercado: canais novos exigem origem confiável e perfil conhecido; nada roda em sessão que ainda carrega
+  const marketFail = {ok:false,error:'Abra o Mercado nesta conta para analisar os anúncios.'}, foreign = {sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame};
+  expect(handlers.has('market:readAll') && handlers.has('market:stop')).toBe(true);
+  expect(await handlers.get('market:readAll')?.(foreign,saved.id)).toEqual(marketFail);
+  expect(await handlers.get('market:stop')?.(foreign,saved.id)).toEqual(marketFail);
+  for (const id of ['nao-existe',null,42,{id:saved.id}]) expect(await invoke('market:readAll',id)).toEqual(marketFail);
+  expect(await invoke('market:readAll',saved.id)).toEqual(marketFail); // sessão ainda carregando
+  expect(await invoke('market:stop',saved.id)).toEqual({ok:true,data:false});
+  expect(await invoke('market:stop',42)).toEqual({ok:true,data:false});
   expect(invoke('session:layout',null,false,'sim').ok).toBe(false);
   expect(invoke('session:layout',null,false,true).ok).toBe(true);
   for (const panel of [279,521,300.5,'340',null,NaN]) expect(invoke('session:layout',null,false,true,panel).ok).toBe(false);

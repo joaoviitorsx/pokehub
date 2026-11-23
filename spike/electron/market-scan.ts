@@ -2,7 +2,7 @@ import { parsePtNumber, type MarketCurrency, type MarketListing, type MarketScan
 import { atGame, isRecord, text, timed } from './hunt-snapshot';
 
 export const MARKET_UNAVAILABLE = 'Abra o Mercado nesta conta para analisar os anúncios.';
-const MAX_CARDS = 60, MAX_STR = 120;
+const MAX_CARDS = 60, MAX_STR = 120, MAX_QUERY = 60;
 
 // Código fixo executado na página do jogo: nunca recebe dado do renderer. Só LÊ o DOM do Mercado que o usuário já abriu
 // (nenhum clique, escrita, rede, cookie ou storage). Seletores conferidos no jogo em 2026-11-23 (vitrine do RMT, v1.474).
@@ -10,14 +10,15 @@ export const MARKET_SCAN_SCRIPT = `(() => {
   const S = (v) => String(v == null ? '' : v).replace(/\\s+/g, ' ').trim().slice(0, ${MAX_STR});
   const lista = document.querySelector('#cm-lista');
   const open = !!lista && lista.getClientRects().length > 0;
-  if (!open) return {open:false, cards:[]};
+  if (!open) return {open:false, cards:[], pag:'', query:''};
+  const pagSpan = document.querySelector('#cm-paginas span'), busca = document.querySelector('input#cm-busca');
   const all = Array.from(lista.querySelectorAll(':scope > .cm-card'));
   const poke = all.filter((c) => c.classList.contains('poke'));
   const cards = (poke.length ? poke : all.filter((c) => c.querySelector('.cm-nome-txt'))).slice(0, ${MAX_CARDS});
   const txt = (c, sel) => { const e = c.querySelector(sel); return e ? S(e.textContent) : ''; };
   const cn = (x) => (typeof x.className === 'string' ? x.className : '');
   const meta = (e) => e ? S([cn(e), e.getAttribute('alt'), e.getAttribute('title')].join(' ') + ' ' + Array.from(e.querySelectorAll('*')).slice(0, 8).map((x) => cn(x) + ' ' + (x.getAttribute('alt') || '') + ' ' + (x.getAttribute('title') || '')).join(' ')) : '';
-  return {open:true, cards: cards.map((c) => {
+  return {open:true, pag: pagSpan ? S(pagSpan.textContent) : '', query: busca ? S(busca.value) : '', cards: cards.map((c) => {
     const fav = c.querySelector('button.cm-fav'), preco = c.querySelector('.cm-rodape > .cm-preco') || c.querySelector('.cm-preco'), vit = c.querySelector('.pp-vit');
     return {
       id: fav ? S(fav.getAttribute('data-fav')) : '', cls: S(cn(c)),
@@ -46,10 +47,17 @@ function smartOf(cls: string, body: string): MarketListing['smart'] {
   const mk = /mercado\s*:?\s*(\d[\d.,]*\s*[kmb]?)/i.exec(body);
   return {label, pct, market: mk ? parsePtNumber(mk[1]!) : null};
 }
+/** "3 de 658" → {page: 3, pages: 658}; qualquer outra coisa (ou página fora do total) → nulos. */
+function pagesOf(raw: unknown): {page: number | null; pages: number | null} {
+  const m = /^\s*(\d{1,3}(?:\.\d{3})*|\d{1,6})\s+de\s+(\d{1,3}(?:\.\d{3})*|\d{1,6})\s*$/i.exec(str(raw));
+  const page = m ? Number(m[1]!.replace(/\./g, '')) : 0, pages = m ? Number(m[2]!.replace(/\./g, '')) : 0;
+  return page >= 1 && pages >= page && pages <= 1e6 ? {page, pages} : {page: null, pages: null};
+}
 /** Converte o retorno bruto da página (remota, não confiável) em anúncios válidos; linhas malformadas são descartadas. */
 export function sanitizeMarketScan(raw: unknown): MarketScan | null {
   if (!isRecord(raw) || typeof raw.open !== 'boolean') return null;
-  if (!raw.open) return {open: false, listings: [], smart: false};
+  const query = str(raw.query).replace(/\s+/g, ' ').trim().slice(0, MAX_QUERY), nav = pagesOf(raw.pag);
+  if (!raw.open) return {open: false, listings: [], smart: false, page: null, pages: null, query: ''};
   if (!Array.isArray(raw.cards)) return null;
   const listings = raw.cards.slice(0, MAX_CARDS).flatMap((card): MarketListing[] => {
     if (!isRecord(card)) return [];
@@ -63,7 +71,7 @@ export function sanitizeMarketScan(raw: unknown): MarketScan | null {
       shiny: card.shiny === true, price, currency: currencyOf(`${str(card.moeda)} ${str(card.preco)}`), smart: smartOf(str(card.smartCls), str(card.smartText)),
     }];
   });
-  return {open: true, listings, smart: listings.some(l => l.smart !== null)};
+  return {open: true, listings, smart: listings.some(l => l.smart !== null), ...nav, query};
 }
 
 export interface MarketTarget { url: string; run(script: string): Promise<unknown> }

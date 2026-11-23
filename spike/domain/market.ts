@@ -6,7 +6,8 @@ export interface MarketListing {
   price: number; currency: MarketCurrency | null;
   smart: {label: SmartLabel; pct: number | null; market: number | null} | null;
 }
-export interface MarketScan { open: boolean; listings: MarketListing[]; smart: boolean }
+/** `page`/`pages` vêm do rodapé "X de N" da vitrine; `query` é o texto da busca (vazio = sem busca). */
+export interface MarketScan { open: boolean; listings: MarketListing[]; smart: boolean; page: number | null; pages: number | null; query: string }
 export type MarketFocus = 'equilibrado' | 'qualidade' | 'desconto';
 export interface DealOptions { currency?: MarketCurrency | null; minNota?: number; minPotencia?: number; minLevel?: number; shinyOnly?: boolean; focus: MarketFocus }
 export interface Deal { listing: MarketListing; score: number; reasons: string[] }

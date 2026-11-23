@@ -10,7 +10,16 @@ contextBridge.exposeInMainWorld('pokehub', {
   layout: (id: string | null,hide: boolean,side: boolean,panel?: number,account?: string | null) => ipcRenderer.invoke('session:layout',id,hide,side,panel,account ?? null),
   drag: (active: boolean) => ipcRenderer.invoke('session:drag',active),
   huntSnapshot: (id: string,soLiberadas?: boolean) => ipcRenderer.invoke('hunt:snapshot',id,soLiberadas),
-  market: {scan: (id: string) => ipcRenderer.invoke('market:scan',id)},
+  market: {
+    scan: (id: string) => ipcRenderer.invoke('market:scan',id),
+    readAll: (id: string) => ipcRenderer.invoke('market:readAll',id),
+    stop: (id: string) => ipcRenderer.invoke('market:stop',id),
+    onProgress: (callback: (progress: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, progress: unknown) => callback(progress);
+      ipcRenderer.on('market:progress',listener);
+      return () => ipcRenderer.removeListener('market:progress',listener);
+    },
+  },
   onToggleSide: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on('workspace:toggle-side', listener);

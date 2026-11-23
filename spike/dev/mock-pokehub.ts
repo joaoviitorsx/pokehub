@@ -38,7 +38,18 @@ const listings: MarketListing[] = Array.from({length: 15}, (_, i) => {
   const gold = i % 3 !== 2, label = (['desconto', 'no preço', 'acima'] as const)[i % 3]!;
   return {id: `L${i + 1}`, name: names[i % names.length]!, level: 20 + i * 4, potencia: 60 + (i * 7) % 40, nota: 3.2 + ((i * 13) % 17) / 10, shiny: i % 6 === 0, price: gold ? 250000 + i * 180000 : 40 + i * 12, currency: gold ? 'gold' : 'orb', smart: {label, pct: label === 'desconto' ? -(8 + i) : label === 'acima' ? 12 + i : 1, market: gold ? 300000 + i * 190000 : 50 + i * 12}};
 });
-const scan: MarketScan = {open: true, listings, smart: true};
+// Vitrine simulada: 3 páginas de 5 anúncios; `?query=` define a busca (vazio = sem busca) e `?pages=` o total (>30 testa a recusa).
+const queryParam = params.get('query') ?? 'Charizard', totalPages = Math.max(1, Number(params.get('pages')) || 3);
+let marketPage = 1, reading = false, stopRead = false;
+const scanPage = (): MarketScan => ({open: true, smart: true, page: marketPage, pages: totalPages, query: queryParam, listings: listings.slice(((marketPage - 1) % 3) * 5, ((marketPage - 1) % 3) * 5 + 5).map(l => ({...l, id: `P${marketPage}-${l.id}`}))});
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+async function readAllMock(id: string) {
+  reading = true; stopRead = false; let collected = 0;
+  const step = (done: boolean, error?: string) => emit('market-progress', {profileId: id, page: marketPage, pages: totalPages, collected, done, ...(error ? {error} : {}), ...(done ? {} : {scan: scanPage()})});
+  collected += 5; step(false);
+  while (!stopRead && marketPage < totalPages) { await wait(900); if (stopRead) break; marketPage++; collected += 5; step(false); }
+  reading = false; step(true);
+}
 const diagnostics = () => ({sampledAt: new Date().toISOString(), memoryKb: 1_450_000 + Math.round(Math.random() * 90000), cpuPercent: 4 + Math.random() * 6, cpuIntervalMs: 2000, processCount: 11});
 
 type LayoutCall = {id: string | null; hide: boolean; side: boolean; panel: number; account: string | null};
@@ -62,7 +73,17 @@ window.pokehub = {
   layout: (id, hide, side, panel = 340, account = null) => { Object.assign(layoutState, {id, hide, side, panel, account}); layoutListeners.forEach(l => l()); return ok(undefined); },
   drag: () => ok(undefined),
   huntSnapshot: (_id, soLiberadas) => ok(huntSnapshot(soLiberadas)),
-  market: {scan: () => ok(scan)},
+  market: {
+    scan: () => ok(scanPage()),
+    readAll: id => {
+      if (!queryParam) return ok(undefined).then(() => ({ok: false as const, error: 'Busque uma espécie no Mercado antes (ex.: Venusaur) — o Mercado inteiro tem centenas de páginas.'}));
+      if (totalPages > 30) return ok(undefined).then(() => ({ok: false as const, error: `Esta busca tem ${totalPages} páginas; o limite é 30.`}));
+      if (reading) return ok(undefined).then(() => ({ok: false as const, error: 'Já existe uma leitura de páginas em andamento nesta conta.'}));
+      marketPage = 1; void readAllMock(id); return ok(undefined);
+    },
+    stop: () => { const was = reading; stopRead = true; return ok(was); },
+    onProgress: cb => on<Parameters<typeof cb>[0]>('market-progress', cb),
+  },
   onToggleSide: cb => on<void>('toggle-side', cb),
   onToggleExpand: cb => on<string | null>('toggle-expand', cb),
   reload: () => ok(undefined), restart: () => ok(undefined), clearSession: () => ok(undefined),

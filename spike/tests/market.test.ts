@@ -71,7 +71,7 @@ describe('rankDeals', () => {
 const card = {id: 'f1', cls: 'cm-card poke', name: 'Charizard', sub: 'Nv 100', pot: 'P3', nota: '7,600', shiny: false, preco: '1,5 M', moeda: 'cm-preco orb', smartCls: 'pp-vit pp-vit-pechincha', smartText: '−18% mercado 1,8 M · faixa 1,6M–2M'};
 describe('sanitizeMarketScan', () => {
   it('converte um card completo', () => {
-    expect(sanitizeMarketScan({open: true, cards: [card]})).toEqual({open: true, smart: true, listings: [{id: 'f1', name: 'Charizard', level: 100, potencia: 3, nota: 7.6, shiny: false, price: 1.5e6, currency: 'orb', smart: {label: 'desconto', pct: -18, market: 1.8e6}}]});
+    expect(sanitizeMarketScan({open: true, cards: [card]})).toEqual({open: true, smart: true, page: null, pages: null, query: '', listings: [{id: 'f1', name: 'Charizard', level: 100, potencia: 3, nota: 7.6, shiny: false, price: 1.5e6, currency: 'orb', smart: {label: 'desconto', pct: -18, market: 1.8e6}}]});
   });
   it('card real da vitrine (conferido no jogo em 2026-11-23)', () => {
     const real = {id: '1855999', cls: 'cm-card poke shiny tem-fav tem-fav-n', name: 'Tyranitar', sub: 'Nv 1.793', pot: 'P1', nota: 'N 5,692', shiny: true, preco: '3.444', moeda: 'cm-preco orb Gemas', smartCls: '', smartText: ''};
@@ -105,8 +105,17 @@ describe('sanitizeMarketScan', () => {
     expect(r!.listings[0]!.name.length).toBeLessThanOrEqual(80);
     expect(JSON.stringify(r)).not.toContain('segredo');
   });
+  it('paginação "X de N" e busca', () => {
+    const nav = (raw: object) => { const r = sanitizeMarketScan({open: true, cards: [card], ...raw})!; return [r.page, r.pages, r.query]; };
+    expect(nav({pag: '1 de 658', query: '  Venusaur '})).toEqual([1, 658, 'Venusaur']);
+    expect(nav({pag: '3 de 1.204'})).toEqual([3, 1204, '']);
+    expect(nav({query: 'x'.repeat(200)})[2]).toHaveLength(60);
+    for (const pag of ['', 'abc', '5 de 3', '0 de 3', '1 / 3', 7, null, '1 de 99999999']) expect(nav({pag}).slice(0, 2)).toEqual([null, null]);
+    expect(nav({query: 5})[2]).toBe('');
+    expect(sanitizeMarketScan({open: false, cards: [], pag: '1 de 5', query: 'x'})).toMatchObject({page: null, pages: null, query: ''});
+  });
   it('mercado fechado e formas inválidas', () => {
-    expect(sanitizeMarketScan({open: false, cards: []})).toEqual({open: false, listings: [], smart: false});
+    expect(sanitizeMarketScan({open: false, cards: []})).toEqual({open: false, listings: [], smart: false, page: null, pages: null, query: ''});
     for (const v of [null, 'x', 3, [], {}, {open: 'sim'}, {open: true, cards: 'x'}]) expect(sanitizeMarketScan(v)).toBeNull();
   });
 });
@@ -117,6 +126,8 @@ describe('marketScan (guardas)', () => {
   it('script é constante, só lê e não toca em segredos', () => {
     expect(MARKET_SCAN_SCRIPT).not.toMatch(/\.click\(|dispatchEvent|fetch\(|XMLHttpRequest|cookie|localStorage|sessionStorage|\.value\s*=|innerHTML\s*=|WebSocket/);
     expect(MARKET_SCAN_SCRIPT).toContain('#cm-lista');
+    expect(MARKET_SCAN_SCRIPT).toContain('#cm-paginas span');
+    expect(MARKET_SCAN_SCRIPT).toContain('input#cm-busca');
   });
   it('recusa perfil desconhecido, tipo errado, sem sessão e página de outro site', async () => {
     expect(await marketScan('x', ['a'], () => good)).toEqual(fail);

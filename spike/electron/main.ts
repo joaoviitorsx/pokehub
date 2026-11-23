@@ -5,6 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { effectiveFocus, initialFocus, layout, SIDE_MAX, SIDE_MIN, SIDE_PANEL, sideWidth, TOP_BAR } from './layout';
 import { huntSnapshot, HUNT_UNAVAILABLE, type HuntTarget } from './hunt-snapshot';
 import { marketScan, MARKET_UNAVAILABLE } from './market-scan';
+import { createMarketReader } from './market-read';
 import { isAllowedSessionNavigation, isOAuthProviderUrl } from './navigation';
 import { ProfileStore } from './profile-store';
 import { partitionFor } from './partition';
@@ -367,6 +368,10 @@ if (primary) app.whenReady().then(() => {
     if (!trusted(event)) return {ok:false,error:MARKET_UNAVAILABLE};
     return marketScan(id, store.list().map(profile => profile.id), profileId => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:script => contents.executeJavaScript(script)} : null; });
   });
+  const marketTarget = (profileId: string) => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:(script: string) => contents.executeJavaScript(script)} : null; };
+  const marketReader = createMarketReader({known:() => store.list().map(profile => profile.id), target:marketTarget, emit:progress => { if (!window.isDestroyed()) window.webContents.send('market:progress',progress); }});
+  ipcMain.handle('market:readAll', async (event,id: unknown) => trusted(event) ? marketReader.readAll(id) : {ok:false,error:MARKET_UNAVAILABLE});
+  ipcMain.handle('market:stop', (event,id: unknown) => trusted(event) ? {ok:true,data:marketReader.stop(id)} : {ok:false,error:MARKET_UNAVAILABLE});
   ipcMain.handle('session:layout', (event,id: unknown,hide: unknown,side: unknown = false,panel: unknown = sidePanel,account: unknown = null) => invoke(event, () => {
     if (typeof hide !== 'boolean' || typeof side !== 'boolean' || (id !== null && typeof id !== 'string') || (account !== null && typeof account !== 'string') || typeof panel !== 'number' || !Number.isInteger(panel) || panel < SIDE_MIN || panel > SIDE_MAX) throw new Error();
     sidePanel = panel; sideAccount = account;

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { rankDeals, type MarketCurrency, type MarketFocus, type MarketListing, type MarketScan } from '../domain/market';
+import { accumulate, accumulated, sessionKey, sessionStats, type MarketAccumulator, type MarketProgress } from '../domain/market-session';
 import { huntFetchable } from './hunt-queue';
 
-export const MARKET_REFRESH_MS = 5000;
+export const MARKET_REFRESH_MS = 5000, MARKET_MAX_PAGES = 30;
 const READ_TIMEOUT_MS = 12_000;
 const unavailable = 'Abra o Mercado nesta conta para analisar os anúncios.';
 type Entry = {data: MarketScan} | {error: string};
@@ -15,6 +16,8 @@ const dec = (value: number) => value.toLocaleString('pt-BR', {minimumFractionDig
 const coin = (currency: MarketListing['currency']) => currency === 'orb' ? 'Gemas' : currency === 'gold' ? 'Coins' : '';
 const smartText = (smart: NonNullable<MarketListing['smart']>) => smart.pct === null ? smart.label : `${smart.pct > 0 ? '+' : '−'}${Math.abs(smart.pct).toLocaleString('pt-BR', {maximumFractionDigits: 1})}%`;
 
+const without = <T,>(record: Record<string, T>, key: string): Record<string, T> => Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
+
 export function MarketPanel({id, state}: {id: string | undefined; state: string}) {
   const [entries, setEntries] = useState<Record<string, Entry>>({});
   const [stamp, setStamp] = useState(0);
@@ -23,27 +26,57 @@ export function MarketPanel({id, state}: {id: string | undefined; state: string}
   const [minNota, setMinNota] = useState(0);
   const [minPotencia, setMinPotencia] = useState(0);
   const [shinyOnly, setShinyOnly] = useState(false);
+  const [now, setNow] = useState(0); // relógio do acúmulo: só avança quando chega leitura nova (Date.now() não pode ser chamado no render)
+  const [accs, setAccs] = useState<Record<string, MarketAccumulator>>({});
+  const [runs, setRuns] = useState<Record<string, MarketProgress | {starting: true}>>({});
+  const [startError, setStartError] = useState<Record<string, string>>({});
+  const running = useRef(new Set<string>());
   const live = huntFetchable(state);
+  const add = useCallback((profileId: string, scan: MarketScan) => { if (!scan.open) return; const at = Date.now(); setNow(at); setAccs(old => ({...old, [profileId]: accumulate(old[profileId] ?? null, sessionKey(profileId, scan.query), scan, at)})); }, []);
+  // Progresso da leitura assistida (processo principal): cada página lida entra no acúmulo; ao sair da aba a leitura é interrompida.
+  useEffect(() => {
+    const off = window.pokehub.market.onProgress(progress => {
+      if (progress.scan) add(progress.profileId, progress.scan);
+      if (progress.done) running.current.delete(progress.profileId); else running.current.add(progress.profileId);
+      setRuns(old => ({...old, [progress.profileId]: progress}));
+    });
+    const active = running.current;
+    return () => { off(); for (const profileId of active) void window.pokehub.market.stop(profileId); };
+  }, [add]);
   // Só lê enquanto a aba está montada (visível) e a janela não está oculta; uma leitura por vez.
   useEffect(() => {
     if (!id || !live) return;
     let alive = true, timer = 0;
     const cycle = async () => {
-      if (!document.hidden) {
+      if (!document.hidden && !running.current.has(id)) { // durante a leitura de páginas o próprio laço lê; sem leituras concorrentes
         let timeout: ReturnType<typeof setTimeout> | undefined;
         const result = await Promise.race([window.pokehub.market.scan(id), new Promise<never>((_resolve, reject) => { timeout = setTimeout(reject, READ_TIMEOUT_MS); })])
           .catch(() => ({ok: false as const, error: unavailable})).finally(() => clearTimeout(timeout));
         if (!alive) return;
         setEntries(old => ({...old, [id]: result.ok ? {data: result.data} : {error: result.error}}));
+        if (result.ok) add(id, result.data);
       }
       if (alive) timer = window.setTimeout(() => void cycle(), MARKET_REFRESH_MS);
     };
     void cycle();
     return () => { alive = false; clearTimeout(timer); };
-  }, [id, live, stamp]);
+  }, [id, live, stamp, add]);
   const entry = id && live ? entries[id] : undefined;
   const data = entry && 'data' in entry ? entry.data : null;
-  const deals = useMemo(() => data ? rankDeals(data.listings, {focus, currency: currency === 'todas' ? null : currency, minNota, minPotencia, shinyOnly}) : [], [data, focus, currency, minNota, minPotencia, shinyOnly]);
+  const acc = id ? accs[id] ?? null : null, run = id ? runs[id] : undefined, progress = run && 'page' in run ? run : null, reading = Boolean(run && (!progress || !progress.done));
+  const {pool, stats} = useMemo(() => { return {pool: accumulated(acc, now), stats: sessionStats(acc, now, data?.pages ?? null)}; }, [acc, now, data?.pages]);
+  const deals = useMemo(() => data ? rankDeals(pool, {focus, currency: currency === 'todas' ? null : currency, minNota, minPotencia, shinyOnly}) : [], [data, pool, focus, currency, minNota, minPotencia, shinyOnly]);
+  const readAll = async () => {
+    if (!id) return;
+    setStartError(old => ({...old, [id]: ''})); setRuns(old => ({...old, [id]: {starting: true}})); running.current.add(id);
+    const result = await window.pokehub.market.readAll(id).catch(() => ({ok: false as const, error: unavailable}));
+    if (!result.ok) { running.current.delete(id); setRuns(old => without(old, id)); setStartError(old => ({...old, [id]: result.error})); }
+  };
+  const stop = () => { if (id) void window.pokehub.market.stop(id); };
+  const clear = () => { if (!id || !data) return; setAccs(old => without(old, id)); setRuns(old => without(old, id)); setStamp(value => value + 1); };
+  const query = data?.query ?? '', tooMany = data?.pages != null && data.pages > MARKET_MAX_PAGES;
+  const hint = !query ? 'Busque uma espécie no Mercado antes (ex.: Venusaur) — o Mercado inteiro tem centenas de páginas.' : tooMany ? `Esta busca tem ${data!.pages} páginas; o limite é ${MARKET_MAX_PAGES}. Refine a busca para ler tudo.` : '';
+  const finished = progress?.done ? progress : null;
   const message = (title: string, body: string) => <div className="side-msg" role="status"><strong>{title}</strong><p>{body}</p></div>;
   return <div className="side-body mkt" aria-busy={live && !entry}>
     {!live ? message('Sessão indisponível', 'Aguarde a sessão desta conta terminar de abrir (ou entre no jogo) para analisar o Mercado.')
@@ -60,15 +93,24 @@ export function MarketPanel({id, state}: {id: string | undefined; state: string}
             <button className="opt" aria-pressed={shinyOnly} onClick={() => setShinyOnly(value => !value)}>Só shiny</button>
           </div>
         </div>
-        {data!.listings.length === 0 ? message('Nenhum anúncio na tela', 'O Mercado está aberto, mas não encontrei cards de Pokémon. Se a vitrine já tem anúncios, o layout do jogo pode ter mudado.')
-          : deals.length === 0 ? message('Nada com estes filtros', 'Afrouxe os filtros para ver os anúncios da tela.')
+        <div className="mkt-session">
+          <p className="mkt-count" role="status">{pool.length ? `Analisando ${full.format(pool.length)} anúncios de ${stats.pagesSeen || 1} ${(stats.pagesSeen || 1) === 1 ? 'página vista' : 'páginas vistas'}${stats.pages ? ` (de ${full.format(stats.pages)})` : ''}` : 'Nenhum anúncio acumulado ainda'}{pool.length > 0 && <button className="opt" onClick={clear} disabled={reading}>Limpar</button>}</p>
+          {reading ? <div className="mkt-run"><span role="status">{progress ? `Lendo página ${progress.page ?? '?'} de ${progress.pages ?? '?'}…` : 'Preparando a leitura…'}</span><button onClick={stop}>Parar</button></div>
+            : <button className="mkt-readall" onClick={() => void readAll()} disabled={Boolean(hint)} title={hint || undefined}>Ler todas as páginas desta busca</button>}
+          {!reading && hint && <p className="side-foot">{hint}</p>}
+          {!reading && id && startError[id] && <p className="mkt-warn" role="alert">{startError[id]}</p>}
+          {finished && <p className="side-foot" role="status">{finished.error ?? `Leitura concluída: ${full.format(finished.collected)} anúncios lidos.`}</p>}
+          <p className="side-foot">O PokéHub só aperta “próxima página” no ritmo de uma pessoa. Não compra, não anuncia, não abre anúncios.</p>
+        </div>
+        {pool.length === 0 ? message('Nenhum anúncio na tela', 'O Mercado está aberto, mas não encontrei cards de Pokémon. Se a vitrine já tem anúncios, o layout do jogo pode ter mudado.')
+          : deals.length === 0 ? message('Nada com estes filtros', 'Afrouxe os filtros para ver os anúncios analisados.')
           : <ol className="mkt-list">{deals.map(({listing: l, score, reasons}, index) => <li key={`${l.id ?? l.name}-${index}`} className="mkt-card" style={{'--p': score / 100} as CSSProperties}>
             <div className="mkt-top"><span className="pos">{index + 1}</span><strong title={l.name}>{l.shiny && <span className="mkt-shiny">Shiny</span>}{l.name}</strong><b className="mkt-price">{price(l.price)}{coin(l.currency) && <small> {coin(l.currency)}</small>}</b></div>
             <p className="mkt-meta">{[l.level !== null && `Nv ${full.format(l.level)}`, l.potencia !== null && `P${l.potencia}`, l.nota !== null && `Nota ${dec(l.nota)}`].filter(Boolean).join(' · ') || 'Sem detalhes na tela'}{l.smart && <span className="mkt-smart" data-label={l.smart.label} title={l.smart.market !== null ? `Mercado: ${price(l.smart.market)}` : 'Selo da Smart Market'}>{smartText(l.smart)}</span>}</p>
             <div className="mkt-bar" role="img" aria-label={`Pontuação ${Math.round(score)} de 100`}><i/><span>{Math.round(score)}</span></div>
             <ul className="mkt-why">{reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
           </li>)}</ol>}
-        {!data!.smart && data!.listings.length > 0 && <p className="side-foot">Instale/ative a Smart Market em Gerenciar → Extensões para comparar com o preço de mercado.</p>}
+        {!data!.smart && pool.length > 0 && <p className="side-foot">Instale/ative a Smart Market em Gerenciar → Extensões para comparar com o preço de mercado.</p>}
         <p className="side-foot">A pontuação é uma estimativa a partir do que está na tela, não uma garantia. Atualiza a cada 5 s. Somente leitura: o PokéHub não compra nem clica por você.</p>
       </>}
   </div>;
