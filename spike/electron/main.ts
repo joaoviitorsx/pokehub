@@ -19,6 +19,7 @@ import { canReadHunt, classifyLoadFailure, classifyLoadRejection, isMainFrameLoa
 import { audioMuted, mergeDisableFeatures, startupPlan, windowChrome } from './performance';
 import { isExpandShortcut, isSideShortcut, shortcutFocus, shortcutIndex } from './workspace-shortcuts';
 import { acquireSingleInstance } from './single-instance';
+import { dangerousSwitches, restrictUserData } from './hardening';
 import { debounced, runningCount, TRAY_HINT, trayAction, trayIconSize, trayMenuItems, trayTooltip, type TrayEvent } from './tray';
 import { resetSession, restartSession, openSessionSafely, mountSessionView } from './session-recovery';
 import { approvedHostsOf, catalogIdOf, createAuditCache, CATALOG, checkExtension, findInstalled, HUNT_ID, hostsCovered, resolveExtensionPath } from './extension-check';
@@ -386,8 +387,12 @@ function createTray() {
     updateTray();
   } catch { tray = null; console.error('Não foi possível criar o ícone da bandeja.'); }
 }
-const primary = acquireSingleInstance(app, showWindow);
+// Build instalado não aceita depuração remota/inspetor (qualquer processo local poderia ler as sessões).
+const debugBlocked = app.isPackaged && dangerousSwitches(name => app.commandLine.hasSwitch(name)).length > 0;
+if (debugBlocked) app.quit();
+const primary = !debugBlocked && acquireSingleInstance(app, showWindow);
 if (primary) app.whenReady().then(() => {
+  restrictUserData(app.getPath('userData'));
   const databasePath = join(app.getPath('userData'),'pokehub.sqlite');
   store = new ProfileStore(databasePath);
   preferences = new PreferencesStore(databasePath);
