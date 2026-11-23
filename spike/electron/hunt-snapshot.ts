@@ -13,13 +13,15 @@ const CACHE_MS = 180_000; // os bônus de XP expiram sem mudar a assinatura
 const page = (full: boolean, soLiberadas = true) => `(async () => {
   const P = globalThis.__pokeidleHunt;
   if (!P || typeof P.on !== 'function' || typeof P.carregarJogo !== 'function' || !P.engine || typeof P.engine.analisar !== 'function') return {estado:'sem-extensao'};
+  const s = (v, n) => String(v == null ? '' : v).slice(0, n || 80);
+  const n = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
   const ultimo = (tipo) => { let v = null; const sair = P.on(tipo, (d) => { v = d; }); if (typeof sair === 'function') sair(); return v; };
   const welcome = ultimo('welcome'), eu = ultimo('estado');
   if (!welcome || !eu) return {estado:'sem-jogo'};
   const pk = Array.isArray(eu.pokemons) ? eu.pokemons.find((p) => p && p.id === eu.activeId) : null;
   if (!pk) return {estado:'sem-pokemon'};
   const tipo = eu.diaSazonal && /^[A-Z]{3,12}$/.test(eu.diaSazonal.tipo) ? eu.diaSazonal.tipo : null;
-  const assinatura = [pk.id, pk.level, JSON.stringify(pk.stats), tipo, eu.level].join('|');
+  const assinatura = s([pk.id, pk.level, JSON.stringify(pk.stats), tipo, eu.level].join('|'), 2000);
   if (!${full}) return {estado:'ok', assinatura};
   const jogo = await P.carregarJogo();
   const chave = P.geo && P.geo.chaveDoPokemon ? P.geo.chaveDoPokemon(pk) : null;
@@ -36,10 +38,10 @@ const page = (full: boolean, soLiberadas = true) => `(async () => {
   const escolhidas = [...new Set([...vivas.slice(0, 20), ...top('ouroH'), ...top('shinyH')])];
   return {
     estado: 'ok', assinatura,
-    pokemon: {nome: r.pokemon.nome, nivel: r.pokemon.level, look: r.especie ? r.especie.looktype : null},
-    bonus: r.bonusXp ? {pokemon: r.bonusXp.pokemon, treinador: r.bonusXp.treinador, itens: (r.bonusXp.itens ?? []).slice(0, 8).map((i) => ({nome: i.nome, mult: i.mult}))} : null,
-    hunts: escolhidas.map((l) => ({nome: l.nome, regiao: l.regiao, nivel: l.nivel, xpPorHora: l.xpPokemonH, abatesPorHora: l.kph, mataEm: l.ttk, ouroPorHora: l.ouroH, shinyPorHora: l.shinyChance ? l.shinyH : null, estimado: l.ritmo !== 'jogo' || !!(l.aoe && l.aoe.estimado), umHit: !!l.umHit, mortesPorHora: l.mortesH, piorGolpe: l.hitPct, liberada: l.liberada !== false, look: look(l.pokeId)})),
-    soLiberadas: ${soLiberadas}, liberadas: r.linhas.filter((l) => l.liberada !== false).length, total: r.total, versaoJogo: jogo.versao ?? null,
+    pokemon: {nome: s(r.pokemon.nome), nivel: n(r.pokemon.level), look: r.especie ? n(r.especie.looktype) : null},
+    bonus: r.bonusXp ? {pokemon: n(r.bonusXp.pokemon), treinador: n(r.bonusXp.treinador), itens: (r.bonusXp.itens ?? []).slice(0, 8).map((i) => ({nome: s(i.nome, 40), mult: n(i.mult)}))} : null,
+    hunts: escolhidas.slice(0, ${MAX_ROWS}).map((l) => ({nome: s(l.nome), regiao: s(l.regiao, 24), nivel: n(l.nivel), xpPorHora: n(l.xpPokemonH), abatesPorHora: n(l.kph), mataEm: n(l.ttk), ouroPorHora: n(l.ouroH), shinyPorHora: l.shinyChance ? n(l.shinyH) : null, estimado: l.ritmo !== 'jogo' || !!(l.aoe && l.aoe.estimado), umHit: !!l.umHit, mortesPorHora: n(l.mortesH), piorGolpe: n(l.hitPct), liberada: l.liberada !== false, look: n(look(l.pokeId))})),
+    soLiberadas: ${soLiberadas}, liberadas: r.linhas.filter((l) => l.liberada !== false).length, total: n(r.total), versaoJogo: jogo.versao == null ? null : s(jogo.versao, 24),
   };
 })()`;
 export const HUNT_PROBE_SCRIPT = page(false);

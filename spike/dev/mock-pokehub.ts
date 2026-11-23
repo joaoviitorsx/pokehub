@@ -122,6 +122,7 @@ window.pokehub = {
   create: (input: ProfileInput) => { const p: Profile = {...input, id: uid(profiles.length + 10), createdAt: now, updatedAt: now}; profiles = [...profiles, p]; states[p.id] = 'loading'; return ok(p); },
   update: (id, input) => { const p = {...profiles.find(x => x.id === id)!, ...input}; profiles = profiles.map(x => x.id === id ? p : x); return ok(p); },
   remove: id => { profiles = profiles.filter(p => p.id !== id); return ok(undefined); },
+  orphans: () => ok({count: params.get('orphans') === '1' ? 2 : 0}), wipeOrphans: () => ok({queued: 2}), // ?orphans=1 mostra o aviso de dados órfãos
   layout: (id, hide, side, panel = 340, account = null) => { Object.assign(layoutState, {id, hide, side, panel, account}); layoutListeners.forEach(l => l()); return ok(undefined); },
   drag: () => ok(undefined),
   huntSnapshot: (_id, soLiberadas) => ok(huntSnapshot(soLiberadas)),
@@ -138,7 +139,6 @@ window.pokehub = {
   },
   shop: {
     read: id => { const r = shop.read(id); return r; },
-    buy: (id, order) => shop.buy(id, order),
     run: plan => shop.run(plan),
     stop: () => ok(shop.stop()),
     onProgress: cb => on<Parameters<typeof cb>[0]>('shop-progress', cb),

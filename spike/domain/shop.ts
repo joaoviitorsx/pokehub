@@ -7,7 +7,7 @@ export const MAX_QTY = 9999, MAX_ORDER_UNCONFIRMED = 50_000, MAX_UNIT_PRICE = 10
 export const SHOP_NAME = /^[\p{L}\d +.'-]{2,32}$/u;
 /** Itens vistos no jogo (v1.474); o editor de kits os oferece mesmo sem leitura. Qualquer outro nome só entra se vier de uma leitura. */
 export const SHOP_CATALOG: Record<ShopCat, readonly string[]> = {
-  Pokebolas: ['Poke Ball', 'Great Ball', 'Ultra Ball'],
+  Pokebolas: ['Poke Ball', 'Great Ball', 'Super Ball', 'Ultra Ball'], // conferido no jogo v1.474 (Market → Pokébolas)
   Poções: ['Small Potion', 'Great Potion', 'Ultra Potion', 'Hyper Potion', 'Ultimate Potion', 'Golden Potion'],
   Revives: ['Revive', 'Max Revive'],
 };
@@ -19,6 +19,8 @@ export interface KitLine { cat: ShopCat; name: string; target: number }
 export interface Kit { id: string; name: string; lines: KitLine[] }
 export interface ShopLine { order: ShopOrder; fits: boolean }
 
+/** Só estes itens (categoria + nome exato) podem ser comprados; o resto da leitura é exibido como "não suportado". */
+export const isCatalogItem = (cat: ShopCat, name: string) => SHOP_CATALOG[cat].includes(name);
 export const isShopCat = (value: unknown): value is ShopCat => typeof value === 'string' && (SHOP_CATS as readonly string[]).includes(value);
 export const isShopName = (value: unknown): value is string => typeof value === 'string' && SHOP_NAME.test(value);
 const whole = (value: unknown, min: number, max: number): value is number => typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
@@ -40,7 +42,7 @@ export function planRestock(items: readonly ShopItem[], lines: readonly KitLine[
   const plan: ShopOrder[] = [];
   for (const line of lines) {
     const item = items.find(i => i.cat === line.cat && i.name === line.name);
-    if (!item || !whole(item.price, 1, MAX_UNIT_PRICE) || !whole(line.target, 1, 1e9)) continue;
+    if (!item || !isCatalogItem(item.cat, item.name) || !whole(item.price, 1, MAX_UNIT_PRICE) || !whole(line.target, 1, 1e9)) continue;
     const qty = Math.min(MAX_QTY, Math.max(0, line.target - item.have));
     if (qty > 0) plan.push({cat: item.cat, name: item.name, qty, unitPrice: item.price, total: orderTotal(qty, item.price)});
   }

@@ -10,7 +10,7 @@ const directory=mkdtempSync(join(tmpdir(),'pokehub-invalid-start-'));
 const path=join(directory,'pokehub.sqlite');
 const app=Object.assign(new EventEmitter(),{requestSingleInstanceLock:()=>true,commandLine:{getSwitchValue:()=>'',appendSwitch:vi.fn()},setAppUserModelId:vi.fn(),whenReady:()=>Promise.resolve(),getPath:()=>directory,quit:vi.fn()});
 const showErrorBox=vi.fn(); const createWindow=vi.fn(); const createView=vi.fn();
-vi.doMock('electron',()=>({app,BrowserWindow:createWindow,WebContentsView:createView,ipcMain:{handle(){}},dialog:{showErrorBox}}));
+vi.doMock('electron',()=>({session:{defaultSession:{on(){},setPermissionRequestHandler(){},setPermissionCheckHandler(){}}},app,BrowserWindow:createWindow,WebContentsView:createView,ipcMain:{handle(){}},dialog:{showErrorBox}}));
 afterAll(()=>{vi.doUnmock('electron');rmSync(directory,{recursive:true,force:true});});
 
 it('não abre nenhuma view se o banco contiver mais de quatro perfis', async () => {

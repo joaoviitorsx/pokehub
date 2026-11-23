@@ -1,6 +1,7 @@
 import type { MarketScan } from '../domain/market';
 import { listingKey, type MarketProgress } from '../domain/market-session';
 import { atGame, timed } from './hunt-snapshot';
+import { ACCOUNT_BUSY, createAccountLock, type AccountLock } from './account-lock';
 import { MARKET_SCAN_SCRIPT, MARKET_UNAVAILABLE, sanitizeMarketScan, type MarketTarget } from './market-scan';
 
 /*
@@ -36,12 +37,13 @@ export interface ReaderDeps {
   emit(progress: MarketProgress): void;
   sleep?(ms: number): Promise<void>;
   scanTimeoutMs?: number;
+  lock?: AccountLock; // trava por conta compartilhada com a Loja
 }
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const sameQuery = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 export function createMarketReader(deps: ReaderDeps) {
-  const sleep = deps.sleep ?? wait, timeout = deps.scanTimeoutMs ?? 8000;
+  const sleep = deps.sleep ?? wait, timeout = deps.scanTimeoutMs ?? 8000, lock = deps.lock ?? createAccountLock();
   const runs = new Map<string, {stopped: boolean; finished: Promise<void>}>();
   const usable = (id: string): MarketTarget | null => { try { const t = deps.target(id); return t && atGame(t.url) ? t : null; } catch { return null; } };
   const scan = async (t: MarketTarget) => sanitizeMarketScan(await timed(t.run(MARKET_SCAN_SCRIPT), timeout));
@@ -89,6 +91,8 @@ export function createMarketReader(deps: ReaderDeps) {
     async readAll(id: unknown): Promise<StartResult> {
       if (typeof id !== 'string' || !deps.known().includes(id)) return {ok: false, error: MARKET_UNAVAILABLE};
       if (runs.has(id)) return {ok: false, error: BUSY};
+      const release = lock.acquire(id);
+      if (!release) return {ok: false, error: ACCOUNT_BUSY};
       const state = {stopped: false, finished: Promise.resolve()};
       runs.set(id, state); // reserva já, antes de qualquer await: duas chamadas seguidas não rodam juntas
       let first: MarketScan | null = null, error: string | null = null;
@@ -99,8 +103,8 @@ export function createMarketReader(deps: ReaderDeps) {
         else if (!first.query) error = NEEDS_QUERY;
         else if (first.pages !== null && first.pages > MARKET_MAX_PAGES) error = `Esta busca tem ${first.pages} páginas; o limite é ${MARKET_MAX_PAGES}. Refine a busca (nome completo da espécie, por exemplo) para reduzir as páginas e tente de novo.`;
       } catch { error = MARKET_UNAVAILABLE; }
-      if (error !== null || !first) { runs.delete(id); return {ok: false, error: error ?? MARKET_UNAVAILABLE}; }
-      state.finished = loop(id, state, first).finally(() => { if (runs.get(id) === state) runs.delete(id); });
+      if (error !== null || !first) { runs.delete(id); release(); return {ok: false, error: error ?? MARKET_UNAVAILABLE}; }
+      state.finished = loop(id, state, first).finally(() => { if (runs.get(id) === state) runs.delete(id); release(); });
       return {ok: true, data: undefined};
     },
     /** Pede para parar; devolve true se havia uma leitura em andamento. */

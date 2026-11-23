@@ -16,7 +16,7 @@ import type { HuntSnapshot } from '../contracts/hunt';
 import type { MarketScan } from '../domain/market';
 import type { Capture } from '../domain/captures';
 import type { MarketProgress } from '../domain/market-session';
-import type { ShopLineResult, ShopOrder, ShopPlanEntry, ShopProgress, ShopRead } from '../domain/shop';
+import type { ShopLineResult, ShopPlanEntry, ShopProgress, ShopRead } from '../domain/shop';
 import { PairModal, RemoteSection } from './remote-section';
 import { columns, COL_HEAD, MAX_PROFILES, sideWidth, TOP_BAR } from '../electron/layout';
 
@@ -26,11 +26,11 @@ type WinState = {maximized:boolean; focused:boolean};
 declare global { interface Window { pokehub: {
  win:{state():Promise<Result<WinState>>; minimize():Promise<Result<void>>; toggleMaximize():Promise<Result<void>>; close():Promise<Result<void>>; onState(callback:(state:WinState)=>void):()=>void};
  getTray():Promise<Result<TrayPrefs>>; setTray(value:Partial<TrayPrefs>):Promise<Result<TrayPrefs>>; onPerformance(callback:(value:PerformancePrefs)=>void):()=>void; getPerformance():Promise<Result<PerformancePrefs>>; setPerformance(value:Partial<PerformancePrefs>):Promise<Result<PerformancePrefs>>; suspend(id:string):Promise<Result<void>>; resume(id:string):Promise<Result<void>>; processes():Promise<Result<ProcessesSample>>;
- list(): Promise<Result<Profile[]>>; initialFocus():Promise<Result<string|null>>; getPreferences():Promise<Result<StartupMode>>; setStartupMode(mode:StartupMode):Promise<Result<StartupMode>>; create(input:ProfileInput): Promise<Result<Profile>>; update(id:string,input:ProfileInput): Promise<Result<Profile>>; remove(id:string): Promise<Result<void>>;
- layout(id:string|null,hide:boolean,side:boolean,panel?:number,account?:string|null): Promise<Result<void>>; onToggleExpand(callback:(id:string|null)=>void):()=>void; drag(active:boolean): Promise<Result<void>>; huntSnapshot(id:string,soLiberadas?:boolean):Promise<Result<HuntSnapshot>>; onToggleSide(callback:()=>void):()=>void; reload(id:string): Promise<Result<void>>; restart(id:string): Promise<Result<void>>; clearSession(id:string): Promise<Result<void>>; states(): Promise<Result<Record<string,string>>>; diagnostics():Promise<Result<DiagnosticsSample>>; onStatus(callback:(status:Status)=>void):()=>void; onFocus(callback:(id:string|null)=>void):()=>void; autoFocus():Promise<Result<string|null>>; onAutoFocus(callback:(id:string|null)=>void):()=>void;
+ list(): Promise<Result<Profile[]>>; initialFocus():Promise<Result<string|null>>; getPreferences():Promise<Result<StartupMode>>; setStartupMode(mode:StartupMode):Promise<Result<StartupMode>>; create(input:ProfileInput): Promise<Result<Profile>>; update(id:string,input:ProfileInput): Promise<Result<Profile>>; remove(id:string,wipe?:boolean): Promise<Result<void>>; orphans(): Promise<Result<{count:number}>>; wipeOrphans(): Promise<Result<{queued:number}>>;
+ layout(id:string|null,hide:boolean,side:boolean,panel?:number,account?:string|null): Promise<Result<void>>; onToggleExpand(callback:(id:string|null)=>void):()=>void; drag(active:boolean): Promise<Result<void>>; huntSnapshot(id:string,soLiberadas?:boolean):Promise<Result<HuntSnapshot>>; onToggleSide(callback:()=>void):()=>void; reload(id:string): Promise<Result<void>>; restart(id:string): Promise<Result<void>>; clearSession(id:string,full?:boolean): Promise<Result<void>>; states(): Promise<Result<Record<string,string>>>; diagnostics():Promise<Result<DiagnosticsSample>>; onStatus(callback:(status:Status)=>void):()=>void; onFocus(callback:(id:string|null)=>void):()=>void; autoFocus():Promise<Result<string|null>>; onAutoFocus(callback:(id:string|null)=>void):()=>void;
  market: {scan(id:string):Promise<Result<MarketScan>>; readAll(id:string):Promise<Result<void>>; stop(id:string):Promise<Result<boolean>>; onProgress(callback:(progress:MarketProgress)=>void):()=>void};
  captures: {list(query?:{profileId?:string;onlyAlerts?:boolean;limit?:number;notaMin?:number|null}):Promise<Result<Capture[]>>; clear():Promise<Result<void>>; watch(open:boolean,notify?:boolean,notaMin?:number|null):Promise<Result<void>>; onNew(callback:(captures:Capture[])=>void):()=>void};
- shop: {read(id:string):Promise<Result<ShopRead>>; buy(id:string,order:ShopOrder):Promise<Result<{before:number;after:number;bought:number;spent:number|null}>>; run(plan:ShopPlanEntry[]):Promise<Result<ShopLineResult[]>>; stop():Promise<Result<boolean>>; onProgress(callback:(progress:ShopProgress)=>void):()=>void};
+ shop: {read(id:string):Promise<Result<ShopRead>>; run(plan:ShopPlanEntry[]):Promise<Result<ShopLineResult[]>>; stop():Promise<Result<boolean>>; onProgress(callback:(progress:ShopProgress)=>void):()=>void};
  network: {get():Promise<Result<NetworkInfo>>; setMode(mode:NetworkMode):Promise<Result<NetworkInfo>>; allow(host:string):Promise<Result<NetworkInfo>>; disallow(host:string):Promise<Result<NetworkInfo>>};
  extensions: {list():Promise<Result<ExtensionInfo[]>>; detect():Promise<Result<ExtensionInfo[]>>; add():Promise<Result<ExtensionInfo[]>>; toggle(id:string,enabled:boolean):Promise<Result<ExtensionInfo[]>>; remove(id:string):Promise<Result<ExtensionInfo[]>>; approve(id:string,hosts:string[]):Promise<Result<ExtensionInfo[]>>; openStore(id:string):Promise<Result<void>>};
  updates: {get():Promise<Result<UpdateInfo>>; check():Promise<Result<UpdateInfo>>; download():Promise<Result<UpdateInfo>>; install():Promise<Result<void>>; setAuto(enabled:boolean):Promise<Result<UpdateInfo>>; onStatus(callback:(status:UpdateStatus)=>void):()=>void};
@@ -100,6 +100,8 @@ function App() {
  const [initialForm,setInitialForm] = useState<ProfileInput>(blank);
  const [message,setMessage] = useState('');
  const [busy,setBusy] = useState(false);
+ const [ask,setAsk] = useState<{kind:'remove'|'removeData'|'clear'; profile:Profile; wipe:boolean} | null>(null); // confirmação de remoção/limpeza (com a opção de apagar o login em disco)
+ const [orphans,setOrphans] = useState(0); // pastas de sessão sem perfil
  const [loaded,setLoaded] = useState(false);
  const [loadError,setLoadError] = useState(false);
  const [diagnostics,setDiagnostics] = useState<DiagnosticsSample | null>(null);
@@ -132,6 +134,7 @@ function App() {
  const [perf,setPerf] = useState<PerformancePrefs>({lite:false,muteUnfocused:false});
  const [tray,setTray] = useState<TrayPrefs>({onClose:true,onMinimize:true,hintShown:false});
  const [procs,setProcs] = useState<ProcessesSample | null>(null);
+ useEffect(() => { if (editor === 'manage' && section === 'accounts') void window.pokehub.orphans().then(result => { if (result.ok) setOrphans(result.data.count); }).catch(() => undefined); },[editor,section,profiles]);
  const [memLimitGb,setMemLimitGb] = useState(() => { try { const value = Number(localStorage.getItem('pokehub.memLimitGb')); return value > 0 ? value : 2; } catch { return 2; } });
  useEffect(() => { try { localStorage.setItem('pokehub.memLimitGb',String(memLimitGb)); } catch { /* preferência só não persiste */ } },[memLimitGb]);
  useEffect(() => { if (perf.lite) document.documentElement.dataset.lite = ''; else delete document.documentElement.dataset.lite; },[perf.lite]); // Modo leve: sem animações (CSS)
@@ -197,20 +200,32 @@ function App() {
      if (!result.ok) {setMessage(result.error);return;} await refresh();closeEditor();
    } catch {setMessage('Falha de comunicação com o aplicativo.');} finally {setBusy(false);}
  }
- async function remove(profile: Profile) {
-   if (!window.confirm(`Remover o perfil “${profile.label}”? Os dados de login locais não serão apagados.`)) return;
-   setBusy(true);try {const result = await window.pokehub.remove(profile.id);if (!result.ok) {setMessage(result.error);return;} if (focus === profile.id) setFocus(null);closeEditor();await refresh();} catch {setMessage('Falha de comunicação com o aplicativo.');} finally {setBusy(false);}
+ function remove(profile: Profile) { setAsk({kind:'remove',profile,wipe:true}); }
+ async function removeNow(profile: Profile, wipe: boolean) {
+   setBusy(true);try {const result = await window.pokehub.remove(profile.id,wipe);if (!result.ok) {setMessage(result.error);return;} if (focus === profile.id) setFocus(null);closeEditor();await refresh();} catch {setMessage('Falha de comunicação com o aplicativo.');} finally {setBusy(false);}
  }
- async function removeWithData(profile: Profile) {
-   if (!window.confirm(`Apagar o perfil “${profile.label}” e os dados locais de sua sessão? A ação é irreversível e exigirá novo login.`)) return;
+ function removeWithData(profile: Profile) { setAsk({kind:'removeData',profile,wipe:true}); }
+ async function removeWithDataNow(profile: Profile) {
    setBusy(true); setMessage('');
    try {
-     const result = await removeProfileAndData({clear: async () => (await window.pokehub.clearSession(profile.id)).ok, remove: async () => (await window.pokehub.remove(profile.id)).ok});
+     const result = await removeProfileAndData({clear: async () => (await window.pokehub.clearSession(profile.id)).ok, remove: async () => (await window.pokehub.remove(profile.id,true)).ok});
      if (result === 'clear-failed') {setMessage('Não foi possível confirmar a limpeza. O perfil foi mantido; os dados podem ter sido parcialmente apagados.');return;}
      if (result === 'remove-failed') {setMessage('Os dados foram limpos, mas não foi possível confirmar a remoção do perfil. Atualize a lista e verifique.');await refresh();return;}
      if (focus === profile.id) setFocus(null); closeEditor(); await refresh();
    } catch {setMessage('Não foi possível concluir a operação. Atualize a lista e verifique o perfil.');}
    finally {setBusy(false);}
+ }
+ async function wipeOrphans() {
+   setBusy(true);
+   try {const result = await window.pokehub.wipeOrphans(); if (result.ok) {setOrphans(0); setMessage(result.data.queued > 0 ? `${result.data.queued} pasta(s) de sessão antiga serão apagadas no próximo início.` : 'Nada a apagar.');} else setMessage(result.error);}
+   catch {setMessage('Não foi possível agendar o apagamento.');}
+   finally {setBusy(false);}
+ }
+ async function confirmAsk() {
+   const current = ask; if (!current) return; setAsk(null);
+   if (current.kind === 'remove') await removeNow(current.profile,current.wipe);
+   else if (current.kind === 'removeData') await removeWithDataNow(current.profile);
+   else await clearSessionNow(current.profile,current.wipe);
  }
  async function sampleDiagnostics() {
    setBusy(true); setMessage('');
@@ -317,10 +332,10 @@ function App() {
   : updState?.state === 'downloading' ? <button className="update" disabled aria-label={`Baixando a atualização, ${updState.percent ?? 0}%`} title={`Baixando a atualização, ${updState.percent ?? 0}%`}><Icon d={icons.download}/><span className="u-long">Baixando {updState.percent ?? 0}%</span><span className="u-short">{updState.percent ?? 0}%</span></button>
   : updState?.state === 'ready' ? <button className="update ready" aria-label="Reiniciar e atualizar" title="Reinicia o PokéHub e instala a atualização" onClick={() => void installUpdate()}><Icon d={icons.restart}/><span className="u-long">Reiniciar e atualizar</span><span className="u-short">Reiniciar</span></button> : null;
  const updText = !upd ? '' : {idle:'Ainda não verificado.',checking:'Verificando…',available:`Versão ${upd.status.version ?? ''} disponível.`,none:'Você já usa a versão mais recente.',downloading:`Baixando… ${upd.status.percent ?? 0}%`,ready:'Atualização baixada. Reinicie para instalar.',error:'A última verificação falhou.',disabled:'A atualização automática só funciona no aplicativo instalado.'}[upd.status.state];
- async function clearSession(profile: Profile) {
-   if (!window.confirm(`Apagar os dados locais da sessão de “${profile.label}”? Você precisará entrar novamente. Esta ação não pode ser desfeita.`)) return;
+ function clearSession(profile: Profile) { setAsk({kind:'clear',profile,wipe:false}); }
+ async function clearSessionNow(profile: Profile, full: boolean) {
    setBusy(true); setMessage('');
-   try {const result = await window.pokehub.clearSession(profile.id); setMessage(result.ok ? 'Dados locais da sessão apagados. Entre novamente no jogo.' : result.error);}
+   try {const result = await window.pokehub.clearSession(profile.id,full); setMessage(result.ok ? (full ? 'Dados locais da sessão apagados; o restante no disco será apagado no próximo início. Entre novamente no jogo.' : 'Dados locais da sessão apagados. Entre novamente no jogo.') : result.error);}
    catch {setMessage('A limpeza pode ter sido parcial. Verifique a sessão e tente novamente.');}
    finally {setBusy(false);}
  }
@@ -357,6 +372,12 @@ function App() {
  const barAlert = message !== '' && editor === null && (loadError || profiles.length > 0);
  const smallWindow = 'Janela pequena: exibindo uma sessão por vez. Amplie para ver a grade.';
  return <>
+ {ask && <div className="ask-dialog" role="alertdialog" aria-modal="true" aria-label="Confirmação"><div className="shop-dlg-body">
+  <h2>{ask.kind === 'clear' ? 'Limpar dados da sessão' : ask.kind === 'remove' ? 'Remover perfil' : 'Apagar perfil e dados'}</h2>
+  <p>{ask.kind === 'clear' ? `Apagar os dados locais da sessão de “${ask.profile.label}”? Você precisará entrar novamente. Esta ação não pode ser desfeita.` : ask.kind === 'remove' ? `Remover o perfil “${ask.profile.label}”?` : `Apagar o perfil “${ask.profile.label}” e os dados locais de sua sessão? A ação é irreversível e exigirá novo login. As pastas de login em disco são apagadas no próximo início do PokéHub.`}</p>
+  {ask.kind !== 'removeData' && <label className="ask-opt"><input type="checkbox" checked={ask.wipe} onChange={event => setAsk({...ask,wipe:event.target.checked})}/>{ask.kind === 'remove' ? 'Também apagar os dados de login deste perfil no disco' : 'Apagar também tudo no disco no próximo início (limpeza completa)'}</label>}
+  <div className="shop-dlg-btns"><button autoFocus onClick={() => setAsk(null)}>Cancelar</button><button className="danger" onClick={() => void confirmAsk()}>Confirmar</button></div>
+ </div></div>}
  <header className="bar" onDoubleClick={event => { const t = event.target as HTMLElement; if (t === event.currentTarget || t.closest('.brand') || t.tagName === 'NAV') void window.pokehub.win.toggleMaximize().catch(() => undefined); }}><div className="brand"><Logo/><strong>PokéHub</strong></div>
  {barAlert ? <div className="bar-alert" role="alert"><span title={message}>{message}</span><button className="icon" aria-label="Dispensar aviso" title="Dispensar aviso" onClick={() => setMessage('')}><Icon d={icons.close}/></button></div> :
  <nav aria-label="Sessões"><div className="seg" role="group" aria-label="Visualização"><button disabled={!loaded || loadError || busy} aria-keyshortcuts="Control+0" title={autoFocus ? smallWindow : 'Grade (Ctrl+0)'} aria-pressed={!active} onClick={() => go(null)}><ViewIcon mode="grid"/><span>Grade</span></button><button disabled={!loaded || loadError || busy || profiles.length === 0} title="Focar uma sessão" aria-pressed={Boolean(active)} onClick={() => go(active?.id ?? profiles[0]?.id ?? null)}><ViewIcon mode="focus"/><span>Foco</span></button></div>{autoFocus && <span className="sr" role="status">{smallWindow}</span>}{profiles.map((p,index) => {const state=states[p.id] ?? '';const label=labels[state] ?? 'Iniciando';const short=shortLabels[state] ?? 'Iniciando';return <button key={p.id} className="tab" style={{'--c':p.colorToken} as CSSProperties} disabled={!loaded || loadError || busy} aria-keyshortcuts={`Control+${index+1}`} aria-label={`${p.label} · ${label}`} title={`Focar ${p.label} (Ctrl+${index+1}) · ${label}`} aria-pressed={active?.id===p.id} onClick={() => go(p.id)}><El color={p.colorToken}/><span className="name">{p.label}</span><span className="st" data-state={state}><b/><span className="sr">{label}</span>{short && <small aria-hidden="true">{short}</small>}</span></button>;})}<i className="ind" ref={indicator} aria-hidden="true"/></nav>}
@@ -366,6 +387,7 @@ function App() {
   <div className="manage-body"><h1>Gerenciar · {sections.find(item => item.id === section)?.label}</h1>
   {section === 'accounts' && <section aria-label="Contas">
    <p>Seus perfis do jogo. Cada um usa uma sessão local separada.</p>
+   {orphans > 0 && <p className="note" role="status">Dados órfãos encontrados: {orphans}. <button disabled={busy} onClick={() => void wipeOrphans()}>Apagar no próximo início</button></p>}
    {profiles.length === 0 ? <p className="ext-state" data-on="false">Nenhum perfil ainda.</p> : <ul className="acc-list">{profiles.map(p => {const state=states[p.id] ?? '';return <li key={p.id} className="acc-row" style={{'--c':p.colorToken} as CSSProperties}>
     <div className="acc-main"><El color={p.colorToken}/><strong>{p.label}</strong><span className="pill" data-state={state}>{labels[state] ?? 'Iniciando'}</span></div>
     <small>{p.characterName ? `${p.characterName} · ` : ''}{p.emailLabel}</small>

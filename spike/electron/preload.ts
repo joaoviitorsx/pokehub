@@ -46,7 +46,9 @@ contextBridge.exposeInMainWorld('pokehub', {
   initialFocus: () => ipcRenderer.invoke('workspace:initial-focus'),
   create: (input: unknown) => ipcRenderer.invoke('profiles:create',input),
   update: (id: string,input: unknown) => ipcRenderer.invoke('profiles:update',id,input),
-  remove: (id: string) => ipcRenderer.invoke('profiles:remove',id),
+  remove: (id: string,wipe?: boolean) => ipcRenderer.invoke('profiles:remove',id,wipe),
+  orphans: () => ipcRenderer.invoke('profiles:orphans'),
+  wipeOrphans: () => ipcRenderer.invoke('profiles:wipeOrphans'),
   layout: (id: string | null,hide: boolean,side: boolean,panel?: number,account?: string | null) => ipcRenderer.invoke('session:layout',id,hide,side,panel,account ?? null),
   drag: (active: boolean) => ipcRenderer.invoke('session:drag',active),
   huntSnapshot: (id: string,soLiberadas?: boolean) => ipcRenderer.invoke('hunt:snapshot',id,soLiberadas),
@@ -62,7 +64,6 @@ contextBridge.exposeInMainWorld('pokehub', {
   },
   shop: {
     read: (id: string) => ipcRenderer.invoke('shop:read',id),
-    buy: (id: string,order: unknown) => ipcRenderer.invoke('shop:buy',id,order),
     run: (plan: unknown) => ipcRenderer.invoke('shop:run',plan),
     stop: () => ipcRenderer.invoke('shop:stop'),
     onProgress: (callback: (progress: unknown) => void) => {
@@ -93,7 +94,7 @@ contextBridge.exposeInMainWorld('pokehub', {
   },
   reload: (id: string) => ipcRenderer.invoke('session:reload',id),
   restart: (id: string) => ipcRenderer.invoke('session:restart',id),
-  clearSession: (id: string) => ipcRenderer.invoke('session:clear',id),
+  clearSession: (id: string,full?: boolean) => ipcRenderer.invoke('session:clear',id,full),
   states: () => ipcRenderer.invoke('session:states'),
   diagnostics: () => ipcRenderer.invoke('diagnostics:sample'),
   autoFocus: () => ipcRenderer.invoke('workspace:auto-focus'),

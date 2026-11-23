@@ -1,5 +1,6 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, Tray, Menu, Notification, nativeImage, powerSaveBlocker, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, Tray, Menu, Notification, nativeImage, powerSaveBlocker, session, type IpcMainInvokeEvent } from 'electron';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { effectiveFocus, initialFocus, layout, SIDE_MAX, SIDE_MIN, SIDE_PANEL, sideWidth, TOP_BAR } from './layout';
@@ -33,6 +34,10 @@ import { ProfileLimitError, type ProfileInput } from '../domain/profiles';
 import { createRemoteHub, type RemoteHub } from '../remote/hub';
 import { createRemoteApi } from '../remote/api';
 import { registerRemoteIpc } from '../remote/ipc';
+import { clearAllSessionData, createWipeQueue, findOrphans, runPendingWipes, type WipeQueue } from './partition-wipe';
+import { guardNewContents, isAppFrameUrl, lockSession, SAFE_DIALOGS } from './runtime-guards';
+import { createAccountLock } from './account-lock';
+import { readJsonBounded } from './bounded-body';
 
 let window: BrowserWindow;
 let store: ProfileStore;
@@ -225,10 +230,13 @@ async function explainBlockedPopup() {
 // sem login do jogo) e sem cookies. Só números de looktype já validados entram na URL.
 const sprites = async (looks: number[]) => {
   const response = await net.fetch(`https://pokeidle.io/tracker/api/sprites?lt=${looks.join(',')}`,{credentials:'omit',redirect:'error',signal:AbortSignal.timeout(4000)});
-  if (!response.ok || Number(response.headers.get('content-length') ?? 0) > 64_000) throw new Error();
-  return response.json() as Promise<unknown>;
+  if (!response.ok) throw new Error();
+  return readJsonBounded(response); // corpo lido em fluxo, no máximo 64 KB (mesmo sem content-length)
 };
-const trusted = (event: IpcMainInvokeEvent) => Boolean(window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame && event.senderFrame === window.webContents.mainFrame);
+const appIndex = join(__dirname,'../../dist/index.html'), appUrl = pathToFileURL(appIndex).href; // a única página que pode chamar o IPC
+const trusted = (event: IpcMainInvokeEvent) => Boolean(window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame && event.senderFrame === window.webContents.mainFrame && isAppFrameUrl(event.senderFrame.url,appUrl));
+const accountLock = createAccountLock(); // uma ação por conta: leitura do Market e Loja não se sobrepõem
+let wipeQueue: WipeQueue; // apagamento de partições no próximo início (ver partition-wipe.ts)
 function report(id: string, state: string) {
   const changed = statusChanged(states.get(id),state);
   states.set(id,state);
@@ -290,7 +298,7 @@ function registerShortcuts(contents: Electron.WebContents, profileId: string | n
   });
 }
 function addView(id: string) {
-  const view = new WebContentsView({webPreferences:{partition:partitionFor(id), sandbox:true, contextIsolation:true, nodeIntegration:false, spellcheck:false, devTools:!app.isPackaged}});
+  const view = new WebContentsView({webPreferences:{partition:partitionFor(id), sandbox:true, contextIsolation:true, nodeIntegration:false, spellcheck:false, devTools:!app.isPackaged, ...SAFE_DIALOGS}});
   huntDocuments.set(view.webContents, {});
   let attached = false;
   let atProvider = false;
@@ -310,8 +318,7 @@ function addView(id: string) {
     configure: () => {
       registerShortcuts(view.webContents,id);
       view.webContents.setWindowOpenHandler(() => { void explainBlockedPopup(); return {action:'deny'}; });
-      view.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-      view.webContents.session.setPermissionCheckHandler(() => false);
+      lockSession(view.webContents.session); // sem downloads e sem permissões
       installNetworkPolicy(view.webContents.session,id);
       view.webContents.on('will-navigate', (event, url) => { if (!isAllowedSessionNavigation(url)) event.preventDefault(); });
       view.webContents.on('will-redirect', (event, url) => { if (!isAllowedSessionNavigation(url)) event.preventDefault(); });
@@ -425,6 +432,10 @@ if (debugBlocked) app.quit();
 const primary = !debugBlocked && acquireSingleInstance(app, showWindow);
 if (primary) app.whenReady().then(() => {
   restrictUserData(app.getPath('userData'));
+  wipeQueue = createWipeQueue(join(app.getPath('userData'),'pending-wipes.json'));
+  try { runPendingWipes(app.getPath('userData'),wipeQueue); } catch { console.error('Falha ao apagar dados de sessões removidas.'); } // ANTES de qualquer sessão existir
+  guardNewContents(app);
+  lockSession(session.defaultSession);
   const databasePath = join(app.getPath('userData'),'pokehub.sqlite');
   store = new ProfileStore(databasePath);
   preferences = new PreferencesStore(databasePath);
@@ -490,7 +501,7 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('workspace:initial-focus', event => invoke(event, () => focused));
   ipcMain.handle('profiles:create', (event,input: ProfileInput) => invoke(event, () => { const profile = store.create(input); openView(profile.id); arrange(); refreshTray.call(); return profile; }));
   ipcMain.handle('profiles:update', (event,id: unknown,input: ProfileInput) => invoke(event, () => { if (typeof id !== 'string') throw new Error(); const profile = store.update(id,input); refreshTray.call(); return profile; }));
-  ipcMain.handle('profiles:remove', async (event,id: unknown) => {
+  ipcMain.handle('profiles:remove', async (event,id: unknown,wipe: unknown) => {
     if (!trusted(event) || typeof id !== 'string' || resetting.has(id)) return {ok:false,error:'Não foi possível remover o perfil.'};
     resetting.add(id);
     try {
@@ -498,6 +509,7 @@ if (primary) app.whenReady().then(() => {
       await closeViewAwaited(id);
       try { store.remove(id); } catch (error) { if (!window.isDestroyed()) openView(id); throw error; }
       suspended.delete(id);
+      if (wipe !== false) wipeQueue.add(id); // apaga o login em disco no próximo início (a pasta fica em uso até lá)
       if (focused === id) focused = null;
       refreshTray.call();
       if (!window.isDestroyed()) arrange();
@@ -505,6 +517,8 @@ if (primary) app.whenReady().then(() => {
     } catch { return {ok:false,error:'Não foi possível remover o perfil. Verifique o estado e tente novamente.'}; }
     finally { resetting.delete(id); }
   });
+  ipcMain.handle('profiles:orphans', event => invoke(event, () => ({count:findOrphans(app.getPath('userData'),store.list().map(profile => profile.id),wipeQueue).length})));
+  ipcMain.handle('profiles:wipeOrphans', event => invoke(event, () => ({queued:findOrphans(app.getPath('userData'),store.list().map(profile => profile.id),wipeQueue).filter(id => wipeQueue.add(id)).length})));
   const huntTarget = (profileId: string): HuntTarget | null => {
       const contents = readable(profileId);
       if (!contents) return null;
@@ -516,21 +530,21 @@ if (primary) app.whenReady().then(() => {
     if (!trusted(event)) return {ok:false,error:HUNT_UNAVAILABLE};
     return huntFor(id,soLiberadas);
   });
-  const scanFor = (id: unknown) => marketScan(id, store.list().map(profile => profile.id), profileId => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:script => contents.executeJavaScript(script)} : null; });
+  const scanFor = (id: unknown) => marketScan(id, store.list().map(profile => profile.id), marketTarget);
   ipcMain.handle('market:scan', async (event,id: unknown) => {
     if (!trusted(event)) return {ok:false,error:MARKET_UNAVAILABLE};
     const result = await scanFor(id);
     if (result.ok && typeof id === 'string') remoteApi.feed(id,result.data);
     return result;
   });
-  const marketTarget = (profileId: string) => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:(script: string) => contents.executeJavaScript(script)} : null; };
-  const marketReader = createMarketReader({known:() => store.list().map(profile => profile.id), target:marketTarget, emit:progress => { if (progress.scan) remoteApi.feed(progress.profileId,progress.scan); if (!window.isDestroyed()) window.webContents.send('market:progress',progress); }});
+  // Market, Loja e Capturas só leem/clicam no DOM: rodam no mundo isolado (999), sem acesso aos globais da página.
+  const marketTarget = (profileId: string) => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:(script: string) => contents.executeJavaScriptInIsolatedWorld(999,[{code:script}])} : null; };
+  const marketReader = createMarketReader({known:() => store.list().map(profile => profile.id), target:marketTarget, lock:accountLock, emit:progress => { if (progress.scan) remoteApi.feed(progress.profileId,progress.scan); if (!window.isDestroyed()) window.webContents.send('market:progress',progress); }});
   ipcMain.handle('market:readAll', async (event,id: unknown) => trusted(event) ? marketReader.readAll(id) : {ok:false,error:MARKET_UNAVAILABLE});
   ipcMain.handle('market:stop', (event,id: unknown) => trusted(event) ? {ok:true,data:marketReader.stop(id)} : {ok:false,error:MARKET_UNAVAILABLE});
   // Loja rápida (Market do jogo): leitura/compra só a pedido da janela do PokéHub, depois da confirmação do usuário (ver spike/electron/shop.ts).
-  const shop = createShop({known:() => store.list().map(profile => profile.id), target:marketTarget, emit:progress => { if (!window.isDestroyed()) window.webContents.send('shop:progress',progress); }});
+  const shop = createShop({known:() => store.list().map(profile => profile.id), target:marketTarget, lock:accountLock, emit:progress => { if (!window.isDestroyed()) window.webContents.send('shop:progress',progress); }});
   ipcMain.handle('shop:read', async (event,id: unknown) => trusted(event) ? shop.read(id) : {ok:false,error:SHOP_UNAVAILABLE});
-  ipcMain.handle('shop:buy', async (event,id: unknown,order: unknown) => trusted(event) ? shop.buy(id,order) : {ok:false,error:SHOP_UNAVAILABLE});
   ipcMain.handle('shop:run', async (event,plan: unknown) => trusted(event) ? shop.run(plan) : {ok:false,error:SHOP_UNAVAILABLE});
   ipcMain.handle('shop:stop', event => trusted(event) ? {ok:true,data:shop.stop()} : {ok:false,error:SHOP_UNAVAILABLE});
   // Capturas (leitura do painel "CAPTURAS" do jogo): só enquanto o painel do desktop está aberto ou há assinante (ver spike/electron/captures.ts).
@@ -592,7 +606,7 @@ if (primary) app.whenReady().then(() => {
     if (!openView(id)) { suspended.add(id); throw new Error(); }
     report(id,'loading'); arrange(); refreshTray.call();
   }));
-  ipcMain.handle('session:clear', async (event,id: unknown) => {
+  ipcMain.handle('session:clear', async (event,id: unknown,full: unknown) => {
     if (!trusted(event) || typeof id !== 'string' || resetting.has(id)) return {ok:false,error:'Não foi possível limpar a sessão.'};
     const view = views.get(id);
     if (!view) return {ok:false,error:'Sessão não encontrada.'};
@@ -601,7 +615,7 @@ if (primary) app.whenReady().then(() => {
       const browserSession = view.webContents.session;
       await resetSession({
         close: () => closeViewAwaited(id),
-        clear: async () => { await browserSession.clearStorageData(); await browserSession.clearCache(); },
+        clear: async () => { await clearAllSessionData(browserSession); if (full === true) wipeQueue.add(id); },
         open: () => { if (!window.isDestroyed()) { if (!openView(id)) throw new Error(); arrange(); } },
       });
       return {ok:true,data:undefined};
@@ -638,7 +652,7 @@ if (primary) app.whenReady().then(() => {
     views.clear(); void remote?.close(); remote = null; preferences.close(); store.close();
   });
   // Início escalonado: a interface primeiro; depois a conta em foco (ou a primeira) e as demais, uma a cada 2,5 s. A auditoria das extensões roda em segundo plano.
-  void window.loadFile(join(__dirname,'../../dist/index.html')).catch(() => { dialog.showErrorBox('PokéHub', 'Não foi possível carregar a interface local. Verifique a instalação e tente novamente.'); app.quit(); });
+  void window.loadFile(appIndex).catch(() => { dialog.showErrorBox('PokéHub', 'Não foi possível carregar a interface local. Verifique a instalação e tente novamente.'); app.quit(); });
   extensionsReady = refreshExtensions().catch(() => { console.error('Não foi possível ler a configuração das extensões.'); }).then(() => { extensionsLoaded = true; });
   const openAtStartup = (id: string) => {
     try {

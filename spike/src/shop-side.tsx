@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Profile } from '../domain/profiles';
-import { MAX_QTY, SHOP_CATALOG, SHOP_CATS, fitPlan, loadKits, orderTotal, planRestock, planTotal, saveKits, isShopCat, MAX_KITS, MAX_KIT_LINES, type Kit, type ShopCat, type ShopItem, type ShopLine, type ShopLineResult, type ShopOrder, type ShopProgress, type ShopRead } from '../domain/shop';
+import { MAX_QTY, SHOP_CATALOG, isCatalogItem, SHOP_CATS, fitPlan, loadKits, orderTotal, planRestock, planTotal, saveKits, isShopCat, MAX_KITS, MAX_KIT_LINES, type Kit, type ShopCat, type ShopItem, type ShopLine, type ShopLineResult, type ShopOrder, type ShopProgress, type ShopRead } from '../domain/shop';
 import { huntFetchable } from './hunt-queue';
 import { Ball, Icon, icons } from './icons';
 
@@ -16,10 +16,9 @@ const splitKey = (key: string): [ShopCat, string] | null => { const i = key.inde
 const newId = () => `k${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const clampQty = (value: number) => Math.min(MAX_QTY, Math.max(1, Math.floor(Number.isFinite(value) ? value : 1)));
 
-/** Itens oferecidos nos seletores: o catálogo conhecido mais o que as leituras mostraram (o jogo pode ter itens novos). */
-function catalogOf(reads: Record<string, Read>): Record<ShopCat, string[]> {
+/** Itens oferecidos nos seletores: só o catálogo fixo (itens novos do jogo aparecem na tabela como "não suportado", mas não são comprados). */
+function catalogOf(): Record<ShopCat, string[]> {
   const out = {Pokebolas: [...SHOP_CATALOG.Pokebolas], Poções: [...SHOP_CATALOG.Poções], Revives: [...SHOP_CATALOG.Revives]} as Record<ShopCat, string[]>;
-  for (const r of Object.values(reads)) if ('data' in r) for (const i of r.data.items) if (!out[i.cat].includes(i.name)) out[i.cat].push(i.name);
   return out;
 }
 function ItemSelect({value, onChange, catalog, label}: {value: string; onChange: (key: string) => void; catalog: Record<ShopCat, string[]>; label: string}) {
@@ -43,7 +42,7 @@ export function ShopPanel({profiles, states, id, active}: {profiles: Profile[]; 
   const running = Boolean(run && !run.done);
   const liveIds = useMemo(() => profiles.filter(p => sel.includes(p.id) && huntFetchable(states[p.id])).map(p => p.id), [profiles, sel, states]);
   const label = (pid: string) => profiles.find(p => p.id === pid)?.label ?? 'Conta';
-  const catalog = useMemo(() => catalogOf(reads), [reads]);
+  const catalog = useMemo(() => catalogOf(), []);
 
   useEffect(() => window.pokehub.shop.onProgress(p => setRun(old => old && (p.kind === 'line' ? {...old, st: {...old.st, [`${p.profileId}|${p.line}`]: p}} : {...old, done: true, stopped: p.stopped}))), []);
 
@@ -85,6 +84,7 @@ export function ShopPanel({profiles, states, id, active}: {profiles: Profile[]; 
     const [cat, name] = parts, q = clampQty(qty);
     void prepare(`${q}× ${name}`, read => {
       const it = read.items.find(i => i.cat === cat && i.name === name);
+      if (it && !isCatalogItem(cat, name)) return {orders: [], note: 'item não suportado'};
       return it ? {orders: [{cat, name, qty: q, unitPrice: it.price, total: orderTotal(q, it.price)}]} : {orders: [], note: 'item não aparece no Market'};
     });
   };
@@ -139,7 +139,7 @@ export function ShopPanel({profiles, states, id, active}: {profiles: Profile[]; 
       {liveIds.map(pid => { const r = reads[pid]; return r && <section key={pid} className="shop-acc" aria-label={label(pid)}>
         <h3><span title={label(pid)}>{label(pid)}</span>{'data' in r && r.data.gold !== null && <b className="shop-gold" title="Ouro (Coins)">{full.format(r.data.gold)}<small>ouro</small></b>}</h3>
         {'error' in r ? <p className="shop-warn" role="alert">{r.error}</p> : <table className="shop-table"><thead><tr><th>Item</th><th>Tem</th><th>Preço</th></tr></thead><tbody>
-          {SHOP_CATS.flatMap(cat => r.data.items.filter(i => i.cat === cat).map((i, n) => <tr key={keyOf(cat, i.name)} data-first={n === 0 || undefined}><td title={cat}>{i.name}</td><td>{full.format(i.have)}</td><td>{full.format(i.price)}</td></tr>))}
+          {SHOP_CATS.flatMap(cat => r.data.items.filter(i => i.cat === cat).map((i, n) => <tr key={keyOf(cat, i.name)} data-first={n === 0 || undefined}><td title={cat}>{i.name}{!isCatalogItem(cat, i.name) && <em> · não suportado</em>}</td><td>{full.format(i.have)}</td><td>{full.format(i.price)}</td></tr>))}
         </tbody></table>}
       </section>; })}
 
@@ -176,7 +176,7 @@ export function ShopPanel({profiles, states, id, active}: {profiles: Profile[]; 
         {run.done && run.results && (() => { const ok = run.results.filter(r => r.ok), spent = ok.reduce((sum, r) => sum + (r.spent ?? r.order.total), 0); return <p className="shop-sum" role="status">{ok.length} de {run.results.length} compras feitas · {full.format(spent)} de ouro gasto.</p>; })()}
         {running ? <button onClick={stop}>Parar</button> : <button onClick={() => setRun(null)}>Fechar resumo</button>}
       </section>}
-      <p className="side-foot shop-foot">O PokéHub só compra quando você confirma. Usa apenas ouro (Coins) do Market do jogo — nunca gemas nem dinheiro real.</p>
+      <p className="side-foot shop-foot">O PokéHub só compra quando você confirma. Só compra itens do catálogo e só quando o preço é em ouro (Coins) do Market: cards em gemas são ignorados. Nunca usa dinheiro real.</p>
     </div>
     {confirm && active && <div className="shop-dialog" role="dialog" aria-modal="true" aria-labelledby="shop-dlg-title">
       <div className="shop-dlg-body">
