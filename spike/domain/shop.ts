@@ -7,7 +7,7 @@ export const MAX_QTY = 9999, MAX_ORDER_UNCONFIRMED = 50_000, MAX_UNIT_PRICE = 10
 export const SHOP_NAME = /^[\p{L}\d +.'-]{2,32}$/u;
 /** Itens vistos no jogo (v1.474); o editor de kits os oferece mesmo sem leitura. Qualquer outro nome só entra se vier de uma leitura. */
 export const SHOP_CATALOG: Record<ShopCat, readonly string[]> = {
-  Pokebolas: ['Poke Ball', 'Great Ball', 'Ultra Ball'],
+  Pokebolas: ['Poke Ball', 'Great Ball', 'Super Ball', 'Ultra Ball'] // conferido no jogo v1.474 (Market → Pokébolas),
   Poções: ['Small Potion', 'Great Potion', 'Ultra Potion', 'Hyper Potion', 'Ultimate Potion', 'Golden Potion'],
   Revives: ['Revive', 'Max Revive'],
 };
