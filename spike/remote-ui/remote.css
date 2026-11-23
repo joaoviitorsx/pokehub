@@ -91,3 +91,6 @@ main.pair { min-height: 100dvh; align-content: center; padding-top: calc(var(--s
 .tabs button[aria-current=page] { --step: var(--pi-mad-linha); }
 .tabs .px { display: block; filter: drop-shadow(0 2px 0 var(--pi-mad-linha)); }
 @media (prefers-reduced-motion: reduce) { * { animation-duration: 0s !important; transition-duration: 0s !important; } }
+.fp .mono { margin: 6px 0; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; letter-spacing: .04em; word-spacing: .3em; text-align: center; overflow-wrap: anywhere; }
+.sas { margin: 8px 0 0; text-align: center; }
+.sas strong { font-size: 28px; letter-spacing: .1em; }

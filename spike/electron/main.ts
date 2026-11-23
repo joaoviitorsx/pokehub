@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, Tray, Menu, Notification, nativeImage, powerSaveBlocker, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, Tray, Menu, Notification, nativeImage, powerSaveBlocker, safeStorage, type IpcMainInvokeEvent } from 'electron';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -585,7 +585,7 @@ if (primary) app.whenReady().then(() => {
   const trayEvent = (event: TrayEvent) => trayAction({event, platform:process.platform, prefs:trayPrefs, quitting, hasTray:tray !== null});
   window.on('close', event => { if (trayEvent('close') === 'hide') { event.preventDefault(); hideToTray(); } });
   window.on('minimize', () => { if (trayEvent('minimize') === 'hide') hideToTray(); });
-  remote = createRemoteHub({dbPath:databasePath, dir:join(app.getPath('userData'),'remote'), uiDir:join(__dirname,'../../dist'), iconPath:join(__dirname,'../../build/icon.png'), api:remoteApi.api, running:() => runningCount(store.list(),states), blocker:powerSaveBlocker, onChange:() => refreshTray.call(), onPairRequest:showWindow});
+  remote = createRemoteHub({dbPath:databasePath, dir:join(app.getPath('userData'),'remote'), uiDir:join(__dirname,'../../dist-remote'), iconPath:join(__dirname,'../../build/icon.png'), api:remoteApi.api, running:() => runningCount(store.list(),states), blocker:powerSaveBlocker, onChange:() => refreshTray.call(), onPairRequest:showWindow, secretBox:(() => { try { return safeStorage.isEncryptionAvailable() ? {encrypt:(text:string) => safeStorage.encryptString(text), decrypt:(data:Buffer) => safeStorage.decryptString(data)} : undefined; } catch { return undefined; } })(), nativeConfirm:async o => (await dialog.showMessageBox(window,{type:'warning', title:o.title, message:o.message, detail:o.detail, buttons:['Recusar',o.confirmLabel], defaultId:0, cancelId:0, noLink:true})).response === 1});
   registerRemoteIpc(ipcMain,trusted,remote);
   void remote.boot().catch(() => console.error('Falha ao iniciar o acesso remoto.'));
   createTray();

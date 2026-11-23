@@ -76,49 +76,79 @@ O usuário quer gerenciar no celular tudo o que o jogo permite, como no PC.
 - **R4:** ações (Loja com kits, recarregar, suspender, Modo leve) com PIN e teto diário.
 - **R5:** tela ao vivo e Controlar. Isso destrava "todo tipo de gerenciamento".
 - **R6:** auditoria de segurança.
-## Implementado (R1) — 2026-11-23
+## Implementado (R1, endurecido em 2026-11-23)
 
-**Como usar:** Gerenciar → **Acesso remoto** → ligar a chave. O hub mostra o endereço `https://<ip-do-pc>:47321` e o QR. **Parear novo aparelho** abre um modal com o endereço, o QR e o código de 8 caracteres (Crockford, 2 min, uso único) com contagem regressiva e **Gerar outro**. Quando o celular envia o código, o **mesmo modal** passa a perguntar **"Permitir este aparelho? <nome> · <IP>"** (Permitir/Recusar, sem diálogo nativo; as views do jogo ficam escondidas enquanto o modal está aberto). Também dá para ligar/desligar pela bandeja ("Acesso remoto: ligado/desligado").
+**Como usar:** Gerenciar → **Acesso remoto** → ligar a chave. O hub mostra o endereço `https://<ip-do-pc>:47321` e o QR. **Parear novo aparelho** abre um modal. Fluxo atual:
+1. **Primeiro aparelho (certificado primeiro):** o modal mostra a **impressão digital SHA-256 da CA** em blocos de 4 (`AB12 CD34 ...`) e três QRs: o do **endereço** (`https://IP:porta/#fp=<sha256>`), o do certificado Android e o do perfil iPhone. O **código só aparece** depois que você marca **"Conferi a impressão digital no celular"**.
+2. No celular: leia o QR do endereço. A página mostra a impressão digital esperada (vinda do QR, o fragmento `#...` nunca vai ao servidor); compare, bloco a bloco, com a do PC e, depois de instalar o certificado, com o SHA-256 nos detalhes dele no celular. **Se algo for diferente, pare** (pode haver outra pessoa na rede).
+3. Digite o código de 8 caracteres (Crockford, 2 min, uso único). O PC responde na hora com um **número de conferência de 2 dígitos** (SAS); o celular o mostra e o modal do PC diz **"O celular deve estar mostrando 47"**. O celular consulta o resultado por *long-poll* (`GET /api/pair/wait`, até 25 s por consulta e 60 s no total).
+4. O PC mostra o nome lido pelo servidor (User-Agent) **separado** do apelido que o celular informou (não confiável), o IP, e o botão **Permitir** só habilita 1,5 s depois do pedido e depois de qualquer troca de foco da janela. Permitir/liberar abre também uma **confirmação nativa do sistema** (padrão: Recusar), fora da página.
+5. Se o **mesmo código certo** chegar de novo com o pedido aberto, o modal marca **contestado** e recomenda Recusar e gerar outro código. Se o celular desistir (parar de consultar), o pedido é cancelado e **nada é guardado**.
+
+Também dá para ligar/desligar pela bandeja ("Acesso remoto: ligado/desligado").
 
 **O que existe**
-- Servidor HTTPS (`spike/remote/`) só quando ligado (preferência `remote_enabled`, padrão 0). Escuta apenas nos IPv4 privados da máquina (10/8, 172.16/12, 192.168/16) + 127.0.0.1, porta `remote_port` (47321).
-- CA local própria + certificado do servidor, gerados na primeira ativação (`certs.ts`, só com o `crypto` do Node: ECDSA P-256 e X.509 montado em DER; **nenhuma dependência nova**). Chaves em `<userData>/remote/`.
-- Pareamento, PIN (scrypt, bloqueio de 15 min após 5 erros, por aparelho), lista de aparelhos com **Revogar** e **auditoria** (últimos 100) em Gerenciar.
-- API somente leitura, toda autenticada: `GET /api/me`, `/api/state`, `/api/hunt/:id` (mesmo `huntSnapshot` da lateral), `/api/market/:id` (acúmulo do Mercado do PC; se vazio, lê a página aberta), `/api/diag` (CPU/RAM por conta), `/api/events` (SSE: o estado das contas chega na hora). `POST /api/pin/check` e `/api/logout`.
-- App do celular (`spike/remote-ui/`, entrada Vite `remote.html`, mesma linguagem visual do desktop via `spike/shared/dna.css`): barra inferior com 5 abas em pixel art — Contas (cartões + Saúde do PC), Conta (Onde caçar; Jogo/Capturas/Equipe "em breve"), Loja (em breve), Mercado, Alertas (em breve). "Atualizado há X" e aviso de offline via SSE. PWA: manifesto + ícone + service worker que só se registra (Web Push entra na R3). Links diretos: `#conta`, `#mercado`, `#saude`.
-- `powerSaveBlocker('prevent-app-suspension')` enquanto o acesso remoto está ligado **e** há ≥1 conta aberta; solta ao desligar, suspender tudo ou sair.
-- Banco v11 (não destrutivo): colunas `remote_enabled`, `remote_port`, `remote_pin_hash`, `remote_daily_cap_gold` (200000, para a R4) e tabelas `remote_devices`, `remote_audit`, `remote_spend` (R4).
+- Servidor HTTPS (`spike/remote/`) só quando ligado (preferência `remote_enabled`, padrão 0). Escuta **apenas na rede doméstica fixada** (ver abaixo), porta `remote_port` (47321). `127.0.0.1` só em testes (`portOverride`).
+- CA local própria + certificado do servidor, gerados na primeira ativação (`certs.ts`, só com o `crypto` do Node: ECDSA P-256 e X.509 em DER; **nenhuma dependência nova**). Chaves em `<userData>/remote/`, **cifradas em repouso com o `safeStorage` do Electron** quando disponível.
+- Pareamento, PIN (scrypt assíncrono, bloqueios persistentes e escalonados), lista de aparelhos com **Revogar**, alternância **"Pode agir"** (com confirmação nativa) e **auditoria** (últimos 100) em Gerenciar.
+- API somente leitura, toda autenticada: `GET /api/me`, `/api/state`, `/api/hunt/:id`, `/api/market/:id` (exigem o cabeçalho `X-PH: 1`; 10/min por aparelho; chamadas iguais simultâneas dividem uma execução), `/api/diag`, `/api/events` (SSE) e `POST /api/logout`. O antigo `POST /api/pin/check` **foi removido** (só voltará com elevação de PIN no servidor, ver "Requisitos obrigatórios").
+- App do celular (`spike/remote-ui/`, entrada Vite `remote.html`) **compilado para uma pasta separada** (`dist-remote`, com `sw.js` e manifesto); o desktop (`dist`) não leva nada do celular e o servidor só serve arquivos de `dist-remote`. Barra inferior com 5 abas em pixel art (Contas, Conta, Loja e Alertas em breve, Mercado). Links diretos: `#conta`, `#mercado`, `#saude`.
+- `powerSaveBlocker('prevent-app-suspension')` só enquanto o servidor está **de fato escutando** e há ≥1 conta aberta.
+- Banco v12 (não destrutivo): v11 (`remote_enabled`, `remote_port`, `remote_pin_hash`, `remote_daily_cap_gold`, tabelas `remote_devices`, `remote_audit`, `remote_spend`) + v12 (rotação do token, pino da rede, ações desligadas e `remote_pin_state` com os contadores do PIN).
 
-### Instalar o certificado no celular (só na primeira vez)
-O modal de pareamento mostra dois QRs (só o certificado **público** da CA; só enquanto o código está válido). Sem a CA o celular mostra um aviso de segurança, não instala o app na tela inicial e não recebe push.
-- **Android:** leia o QR "Android" (baixa `pokehub-ca.crt`) e instale em **Configurações → Segurança → Instalar certificado CA** (em alguns aparelhos: Segurança e privacidade → Mais segurança → Criptografia e credenciais → Instalar um certificado → Certificado de CA). Aceite o aviso do sistema.
+### Rede doméstica fixada
+- **Windows:** o hub pergunta ao `Get-NetConnectionProfile` (PowerShell com argumentos fixos, sem shell, limite de 3 s, JSON lido com defesa) e só escuta em interfaces de categoria **Privada** e **adaptador físico** (`Get-NetAdapter -Physical`); VPN/virtuais (TAP, OpenVPN, WireGuard, NordLynx, ProtonVPN, AnyConnect, "Local Area Connection*", vEthernet, WSL, Docker, Hyper-V, ZeroTier, Tailscale, Hamachi) ficam de fora por nome mesmo se marcados Privados. Se o PowerShell falhar, **nada é aberto** (nunca "libera tudo"). Fora do Windows usa a impressão digital da sub-rede.
+- Ao ligar, grava o **pino da rede** (hash do nome do perfil + sub-redes). Se a rede mudar, o servidor **para**, `enabled` continua ligado e `running=false` com a mensagem **"Rede nova detectada: liberar aqui?"**; **nunca religa sozinho em outra rede** (volta sozinho se você voltar à rede fixada; liberar a nova pede confirmação nativa). Tudo é auditado (`rede_nova`, `rede_liberada`, `rede_fixada`).
+- Cada conexão e cada requisição exigem que o IP de origem esteja **na mesma sub-rede** do endereço local do soquete (máscara de `os.networkInterfaces()`).
+
+### Instalar o certificado no celular
+Só o certificado **público** da CA é baixável, **só enquanto o pareamento está aberto**; o arquivo se chama `pokehub-ca-<6 primeiros hex da impressão digital>.crt` e o perfil do iPhone traz a impressão digital na descrição. Sem a CA, o celular não registra o service worker (o pareamento exige o cabeçalho `X-PH-SW: 1` que ele acrescenta), não instala o app e não recebe push.
+- **Android:** leia o QR "Android" e instale em **Configurações → Segurança → Instalar certificado CA** (em alguns aparelhos: Segurança e privacidade → Mais segurança → Criptografia e credenciais → Instalar um certificado → Certificado de CA).
 - **iPhone/iPad:** leia o QR "iPhone" no Safari → permita baixar o perfil → **Ajustes → Perfil baixado → Instalar**. Depois **Ajustes → Geral → Sobre → Confiança de certificados** e ligue **PokeHub CA**.
-- Antes de instalar, o navegador avisa que o site "não é seguro": nessa etapa, continue só para baixar o certificado. Depois de instalado e confiado, o aviso some.
-- A CA é restrita (*name constraints*) a IPs privados e `localhost`: mesmo que a chave vazasse, ela não serve para forjar sites da internet. Para remover: apague o perfil/certificado no celular e a pasta `remote` em userData (a CA é refeita ao religar).
-- O certificado do servidor dura 397 dias (o limite do iOS é 398) e é renovado sozinho quando faltam 30 dias ou quando o IP do PC muda (a rede é conferida a cada 30 s e o servidor reabre nos IPs novos). A CA dura 10 anos.
+- **Antes de instalar, confira a impressão digital.** O navegador vai avisar que o certificado do site não é confiável: nessa etapa **não prossiga sem comparar** a impressão digital da página com a do PC. Só se forem idênticas baixe o certificado. Se divergir, feche e não digite o código.
+- A CA tem restrição de nomes (*name constraints*): só as sub-redes /24 fixadas, `127.0.0.1` e `localhost`, com IPv6 excluído. Isso **reduz o risco** se a chave vazar (não serve para sites da internet nem para outras redes), mas **não o elimina**: quem tiver a chave pode se passar pelo PC na sua rede de casa. **Se a sub-rede mudar, a CA é refeita** e o certificado precisa ser reinstalado no celular (o PC avisa).
+- O certificado do servidor dura 397 dias (limite do iOS: 398) e é renovado quando faltam 30 dias ou quando o IP muda dentro da mesma rede. A CA dura 10 anos. Para remover: apague o perfil/certificado no celular e a pasta `remote` em userData.
 
 ### Firewall do Windows
-Na primeira vez o Windows pergunta se o PokéHub pode receber conexões: marque **Redes privadas** (não marque públicas). Se o celular não abrir o endereço, confira em Configurações → Rede e Internet → Wi-Fi → propriedades se a rede está como **Privada**. Quem usa Wi-Fi marcado como Público (cafés, hotéis) não deve ligar o acesso remoto. (Ainda não há desligamento automático por troca de rede; veja "O que falta".)
+Na primeira vez o Windows pergunta se o PokéHub pode receber conexões: marque **Redes privadas** (não marque públicas). Se o celular não abrir o endereço, confira se a rede está como **Privada**. Em Wi-Fi Público (cafés, hotéis) o hub não abre a porta: aparece "Rede nova detectada".
 
-## SEGURANÇA (R1)
-- **Desligado por padrão**; ao desligar (chave, bandeja ou sair do app) todos os listeners e conexões fecham na hora (testado: a porta passa a recusar conexão).
-- **Só LAN:** bind apenas em IPv4 privado/loopback; cada conexão e cada requisição conferem o IP de origem (privado ou loopback) e o resto é derrubado. Sem UPnP, sem porta no roteador.
-- **Host/DNS rebinding:** o cabeçalho `Host` precisa ser um dos IPs vinculados ou `localhost`, senão 421. **CSRF:** todo POST exige `Origin` idêntico ao servidor e `Content-Type: application/json`; cookie `SameSite=Strict`.
-- **Corpo:** só JSON, no máximo 8 KB (413 acima). Cabeçalhos ≤ 8 KB, timeouts de requisição/handshake, máx. 64 conexões, SSE ≤ 20 (4 por aparelho). Limite por IP: 300 req/min (10/min no pareamento), 429 acima.
-- **Cabeçalhos:** CSP `default-src 'self'` (+ imagens do pokeidle.io), `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `nosniff`, CORP/COOP `same-origin`, `Cache-Control: no-store` na API. HSTS não é usado na LAN.
-- **Pareamento:** código de 8 caracteres Crockford (40 bits, `crypto.randomInt`), 2 min, uso único, **5 erros invalidam** o código; só 1 pedido pendente; o aparelho só entra depois do **Permitir** no PC (sem resposta em 60 s = recusado); no máximo 8 aparelhos.
-- **Token:** 256 bits aleatórios, **novo a cada pareamento**; o banco guarda só o SHA-256 e a comparação usa `timingSafeEqual`. Cookie `__Host-ph` com `Secure; HttpOnly; SameSite=Strict; Path=/` (sem `Domain`). **Revogar** apaga o aparelho e **fecha na hora os fluxos SSE** dele; o heartbeat também confere se o aparelho ainda existe.
-- **PIN:** 6 dígitos, scrypt com sal; 5 erros bloqueiam **o aparelho** por 15 min (nem o PIN certo passa durante o bloqueio; o contador fica em memória). Limite honesto: 6 dígitos é pouco contra ataque *offline* ao banco; a defesa real é o bloqueio e o banco ficar só no PC do usuário.
-- **Chaves:** a CA e o servidor têm chave privada só em `<userData>/remote/*.key.pem` (0600 no Linux/macOS; no Windows o diretório recebe ACL só do usuário via `icacls`, chamado sem shell e com argumentos fixos; se falhar, a pasta continua dentro do perfil do usuário). Nenhuma rota, IPC ou status devolve chave privada, hash, token ou caminho de arquivo (há teste para isso). Só o **certificado público** da CA é baixável e **só com o pareamento ativo**.
-- **Sem vazamento em log:** o servidor não escreve no console; códigos, tokens, PINs, cookies e IPs só existem na tabela de auditoria (IP apenas nos eventos de pareamento). Erros voltam genéricos ("Não autorizado.", "Não encontrado."...), sem pilha nem mensagem interna.
-- **Mesmas travas do hub:** a API só chama funções que já existem (`huntSnapshot`, `marketScan`, leitura de métricas), com as mesmas verificações de origem `pokeidle.io` e sessão legível. Nenhuma senha do jogo passa por aqui.
+## SEGURANÇA (R1, o que é garantido de verdade)
+**Garantias reais (testadas):**
+- **Desligado por padrão**; ao desligar (chave, bandeja ou sair do app) todos os listeners fecham na hora. Ligar, desligar e reiniciar passam por **fila serial com contador de geração**: um *listen* lento nunca sobrevive a um "desligar" posterior.
+- **Só a rede doméstica:** bind nas interfaces Privadas/físicas (Windows), origem na mesma sub-rede do soquete, sem UPnP e sem porta no roteador. Rede nova = servidor parado até você liberar.
+- **Host/DNS rebinding:** `Host` precisa ser um IP vinculado ou `localhost` (421). **CSRF:** todo POST exige `Origin` idêntico e `Content-Type: application/json`; cookie `SameSite=Strict`; GETs caros exigem `X-PH: 1`.
+- **Pareamento:** código de 8 caracteres (40 bits), 2 min, uso único; **5 erros por IP** bloqueiam só aquele IP e **20 no total** invalidam o código (um vizinho não queima o seu código sozinho; o modal mostra as tentativas por IP); 1 pedido pendente; SAS de 2 dígitos; confirmação **nativa**; sem resposta em 60 s = recusado; no máximo 8 aparelhos.
+- **Token:** 256 bits, só o SHA-256 no banco (`timingSafeEqual`), cookie `__Host-ph` (`Secure; HttpOnly; SameSite=Strict; Path=/`). **Rotação a cada 24 h** (novo `Set-Cookie`; o anterior vale 5 min), cookie com **Max-Age de 30 dias renovado no uso**, **expira após 30 dias sem uso** e tem **limite absoluto de 180 dias** (auditoria `expirado`). Revogar derruba os fluxos SSE na hora.
+- **PIN:** 6 dígitos, scrypt **assíncrono** com parâmetros **fixos** (o que estiver gravado no hash é ignorado). Contadores no **banco** (sobrevivem a reiniciar): 5 erros → bloqueio de 15 min, depois 1 h, depois 24 h; o ciclo de 5 erros seguinte **revoga o aparelho** e avisa o PC; **10 erros no dia** (todos os aparelhos) desligam as ações pelo celular até você religar no PC.
+- **Limites:** 300 req/min por IP (10/min no pareamento), 8 conexões por IP, 64 no total, verificação de conexões a cada 2 s, soquete de 30 s (só o SSE passa disso), SSE ≤ 20 (4 por aparelho) com **contrapressão** (fecha quem acumula mais de 256 KB), hunt/mercado 10/min por aparelho.
+- **Chaves:** CA e servidor com chave privada só em `<userData>/remote/*.key.pem`, **cifradas com o `safeStorage`** quando o sistema oferece (sem ele ficam em texto, protegidas só pela permissão do arquivo: 0600 no POSIX; no Windows, `icacls` com o **SID do usuário atual**, sem shell; se falhar, o status mostra o aviso). Nenhuma rota, IPC ou status devolve chave, token, hash de token ou caminho (há teste).
+- **Sem log:** o servidor não escreve no console; erros voltam genéricos.
+- **Empacotamento:** o app do celular vai para `dist-remote`; `GET /assets/main-*.js` do desktop dá 404; CSP sem origens externas.
+
+**Limites honestos (o que NÃO é garantido):**
+- O primeiro contato **depende de você comparar a impressão digital**; se não comparar, quem estiver na sua rede Wi-Fi pode se passar pelo PC. A trava `X-PH-SW` do pareamento é só **heurística** (um cliente próprio pode enviar o cabeçalho).
+- Quem já está na sua rede doméstica e conhece o código dentro de 2 minutos ainda pode pedir pareamento; o que o protege é o seu olho no número de conferência e na confirmação nativa.
+- A restrição de nomes da CA e a cifra das chaves **reduzem o risco**, não o eliminam (um malware rodando como você pode usar o `safeStorage`). 6 dígitos de PIN são pouco contra ataque offline ao banco.
+- Não há criptografia além do TLS da LAN; o celular perde a sessão se perder a resposta do `Set-Cookie` de uma rotação por mais de 5 min (é preciso parear de novo).
+- O acesso remoto **não** protege contra malware no PC ou no celular.
+
+## Requisitos obrigatórios para R3/R4/R5
+Nada disto existe ainda; **não implemente R3/R4/R5 sem cada item abaixo**:
+- **Compras (R4):** *tokens de confirmação emitidos pelo servidor*, de uso único, ligados ao **hash do plano** (item, quantidade, conta, preço), com validade curta; reserva **atômica** do teto diário em SQLite (`remote_spend`, uma transação que confere e soma antes de agir). O celular nunca decide o valor.
+- **Elevação por PIN no servidor:** ação que muda algo exige o PIN verificado **no servidor** (mesmos bloqueios/escalonamento), gerando uma elevação curta e vinculada ao aparelho e à ação; nada de `pin/check` que só devolve "ok".
+- **Push (R3):** *allowlist* de endpoints de push (host/esquema) para evitar **SSRF** ao enviar; chave **VAPID** guardada com `safeStorage`; payload sem dados sensíveis.
+- **Tela ao vivo (R5):** capturar **somente** views de conta em `https://pokeidle.io`, **nunca** a janela do hub nem campos de senha; recusar se a URL da view mudou de origem.
+- **WebSocket/stream (R5):** conferir o cabeçalho `Origin` no *upgrade*; sem ele, fechar.
+- **Controlar (R5):** *allowlist* de tipos de evento de entrada (clique, tecla, rolagem) com limites de taxa e tamanho; **atalhos bloqueados** (fechar janela, DevTools, colar, Alt+F4 etc.).
+- **Indicador visível no PC** enquanto houver alguém vendo/controlando (barra ou ícone na bandeja), com botão de cortar.
+- **Auditoria** de toda ação (aparelho, ação, parâmetros resumidos, resultado) e revisão de segurança antes de liberar cada fase.
 
 ## O que falta
 - **R3:** leitor mínimo de capturas + feed, Web Push (VAPID local), Discord/ntfy. O service worker já está registrado.
-- **R4:** ações com PIN (repor kit, recarregar, suspender, Modo leve), teto diário de ouro (`remote_daily_cap_gold`/`remote_spend` já existem) e a Loja.
-- **R5:** tela ao vivo (capturePage) e modo Controlar com PIN e expiração de 10 min.
-- **R6:** revisão de segurança (força bruta distribuída, replay, token roubado). Pendente também: desligar sozinho ao trocar para uma rede desconhecida/Pública, guardar o contador de PIN no banco, proteger a chave da CA com o cofre do sistema (`safeStorage`) e pareamento por QR com o código embutido.
-- Limitações conhecidas: a resposta do pareamento fica aberta até o PC aceitar (se o celular perder a conexão nesse meio-tempo, é preciso parear de novo); o ranking do Mercado no celular usa o que o PC já leu (o celular não clica nas páginas).
+- **R4:** ações com PIN (repor kit, recarregar, suspender, Modo leve), teto diário de ouro e a Loja, **com os requisitos acima**.
+- **R5:** tela ao vivo (capturePage) e modo Controlar com PIN e expiração de 10 min, **com os requisitos acima**.
+- **R6:** revisão de segurança (força bruta distribuída, replay, token roubado).
+- Limitações conhecidas: o ranking do Mercado no celular usa o que o PC já leu (o celular não clica nas páginas); a rede fixada usa o nome do perfil do Windows + sub-rede (sem o MAC do gateway).
 
 
 Objetivo: com o PC em casa farmando, abrir no navegador do celular, de **qualquer lugar**, um painel do PokéHub para ver capturas, Pokémon, estoque, hunts e mercado, fazer ações simples (repor kit, recarregar ou suspender conta) e, quando preciso, **ver e mexer no jogo** de uma conta.

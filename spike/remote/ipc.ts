@@ -10,12 +10,17 @@ export function registerRemoteIpc(ipcMain: Pick<IpcMain, 'handle'>, trusted: (ev
   });
   handle('remote:status', () => hub.status());
   handle('remote:enable', async value => { if (typeof value !== 'boolean') throw new Error(); await hub.setEnabled(value); return hub.status(); });
+  handle('remote:allow-network', async () => { await hub.allowNetwork(); return hub.status(); });
   handle('remote:pair-start', () => hub.startPairing());
   handle('remote:pair-cancel', () => { hub.cancelPairing(); return hub.status(); });
-  handle('remote:decide', allow => { if (typeof allow !== 'boolean') throw new Error(); hub.decide(allow); return hub.status(); });
-  handle('remote:set-pin', pin => { hub.setPin(pin); return hub.status(); });
+  handle('remote:reveal-code', () => hub.revealCode());
+  handle('remote:decide', async allow => { if (typeof allow !== 'boolean') throw new Error(); await hub.decide(allow); return hub.status(); });
+  handle('remote:set-pin', async pin => { await hub.setPin(pin); return hub.status(); });
   handle('remote:clear-pin', () => { hub.clearPin(); return hub.status(); });
+  handle('remote:reenable-actions', () => { hub.reenableActions(); return hub.status(); });
+  handle('remote:dismiss-notice', () => { hub.dismissNotice(); return hub.status(); });
   handle('remote:devices', () => hub.devices());
+  handle('remote:set-can-act', (id, value) => hub.setCanAct(id, value));
   handle('remote:revoke', id => { if (!hub.revoke(id)) throw new RemoteUserError('Aparelho não encontrado.'); return hub.devices(); });
   handle('remote:audit', () => hub.audit());
 }

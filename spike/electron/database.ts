@@ -5,9 +5,9 @@ export function openDatabase(path: string): Database {
   const db = new DatabaseSync(path);
   try {
     const version = db.prepare('PRAGMA user_version').get()?.user_version;
-    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== 11) throw new Error('Versão de banco incompatível');
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== 11 && version !== 12) throw new Error('Versão de banco incompatível');
     db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON'); // as cascatas do Grindolino dependem das FKs em toda conexão
-    if (version < 11) {
+    if (version < 12) {
       db.exec('BEGIN IMMEDIATE');
       try {
         if (version === 0) db.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY, label TEXT NOT NULL, emailLabel TEXT NOT NULL, characterName TEXT NOT NULL, colorToken TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)');
@@ -34,7 +34,9 @@ export function openDatabase(path: string): Database {
         // v10: bandeja do sistema (0/1): continuar ao fechar (padrão 1), ao minimizar (padrão 1) e aviso de primeira vez já mostrado (padrão 0)
         if (version < 10) db.exec('ALTER TABLE workspace_settings ADD COLUMN tray_on_close INTEGER NOT NULL DEFAULT 1; ALTER TABLE workspace_settings ADD COLUMN tray_on_minimize INTEGER NOT NULL DEFAULT 1; ALTER TABLE workspace_settings ADD COLUMN tray_hint_shown INTEGER NOT NULL DEFAULT 0');
         // v11: acesso remoto pelo celular (desligado por padrão), aparelhos pareados (só o hash do token) e auditoria; só colunas/tabelas novas
-        db.exec("ALTER TABLE workspace_settings ADD COLUMN remote_enabled INTEGER NOT NULL DEFAULT 0; ALTER TABLE workspace_settings ADD COLUMN remote_port INTEGER NOT NULL DEFAULT 47321; ALTER TABLE workspace_settings ADD COLUMN remote_pin_hash TEXT; ALTER TABLE workspace_settings ADD COLUMN remote_daily_cap_gold INTEGER NOT NULL DEFAULT 200000; CREATE TABLE remote_spend (day TEXT NOT NULL, profile_id TEXT NOT NULL, gold INTEGER NOT NULL, PRIMARY KEY (day, profile_id)); CREATE TABLE remote_devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen TEXT, can_act INTEGER NOT NULL DEFAULT 0); CREATE TABLE remote_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, device_id TEXT, action TEXT NOT NULL, detail TEXT); PRAGMA user_version=11; COMMIT");
+        if (version < 11) db.exec("ALTER TABLE workspace_settings ADD COLUMN remote_enabled INTEGER NOT NULL DEFAULT 0; ALTER TABLE workspace_settings ADD COLUMN remote_port INTEGER NOT NULL DEFAULT 47321; ALTER TABLE workspace_settings ADD COLUMN remote_pin_hash TEXT; ALTER TABLE workspace_settings ADD COLUMN remote_daily_cap_gold INTEGER NOT NULL DEFAULT 200000; CREATE TABLE remote_spend (day TEXT NOT NULL, profile_id TEXT NOT NULL, gold INTEGER NOT NULL, PRIMARY KEY (day, profile_id)); CREATE TABLE remote_devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, last_seen TEXT, can_act INTEGER NOT NULL DEFAULT 0); CREATE TABLE remote_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL, device_id TEXT, action TEXT NOT NULL, detail TEXT); ");
+        // v12: validade/rotação do token (hash anterior vale 5 min), pino da rede, ações remotas desligadas e contadores persistentes do PIN
+        db.exec("ALTER TABLE remote_devices ADD COLUMN prev_token_hash TEXT; ALTER TABLE remote_devices ADD COLUMN prev_valid_until INTEGER NOT NULL DEFAULT 0; ALTER TABLE remote_devices ADD COLUMN rotated_at INTEGER NOT NULL DEFAULT 0; ALTER TABLE workspace_settings ADD COLUMN remote_net_pin TEXT; ALTER TABLE workspace_settings ADD COLUMN remote_net_label TEXT; ALTER TABLE workspace_settings ADD COLUMN remote_actions_disabled INTEGER NOT NULL DEFAULT 0; CREATE TABLE remote_pin_state (key TEXT PRIMARY KEY, fails INTEGER NOT NULL DEFAULT 0, level INTEGER NOT NULL DEFAULT 0, locked_until INTEGER NOT NULL DEFAULT 0, day TEXT); PRAGMA user_version=12; COMMIT");
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     return db;

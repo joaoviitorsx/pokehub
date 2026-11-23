@@ -727,3 +727,10 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 .rm-pin input { width: 110px; letter-spacing: 4px; }
 .rm-audit { margin: 12px 0; color: var(--pi-sobre-dim); }
 .rm-audit ul { margin: 8px 0 0; padding-left: 18px; max-height: 220px; overflow: auto; font-size: 12px; line-height: 1.6; }
+
+.rm-warn { margin: 10px 0; padding: 10px 12px; border-radius: 6px; background: var(--pi-vao); box-shadow: inset 0 0 0 2px var(--pi-laranja); color: var(--pi-sobre); }
+.rm-warn p { margin: 4px 0; }
+.rm-sas { font-size: 16px; }
+.rm-sas strong { display: inline-block; padding: 2px 12px; border-radius: 6px; background: var(--pi-vao); box-shadow: inset 0 0 0 2px var(--pi-mad-linha); font: 700 34px/1.1 Consolas, "Courier New", monospace; letter-spacing: 4px; color: var(--pi-ouro-luz); }
+.rm-ask { margin: 8px 0; padding-left: 18px; line-height: 1.7; }
+.rm-fp { margin: 4px 0 10px !important; font: 700 15px/1.5 Consolas, "Courier New", monospace; letter-spacing: 1px; word-spacing: 6px; color: var(--pi-ouro-luz) !important; overflow-wrap: anywhere; user-select: all; }
