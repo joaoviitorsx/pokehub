@@ -146,12 +146,25 @@ button.link:not(:disabled):active { transform: none; box-shadow: none; }
   background: linear-gradient(var(--pi-mad-esc) 0 6px, var(--pi-mad) 6px calc(100% - 8px), var(--pi-mad-quente) calc(100% - 8px));
   box-shadow: inset 0 -2px 0 var(--pi-mad-linha), inset 0 2px 0 var(--pi-mad-linha), inset 0 -4px 0 var(--pi-mad-luz2);
 }
-/* Barra = área de arrastar da janela (clique duplo maximiza). O Electron desenha min/max/fechar por cima do canto direito (titleBarOverlay): o espaço vem de env(titlebar-area-*);
-   data-wco=fake é a simulação da prévia (138 px); data-mac reserva 72 px à esquerda para os semáforos do macOS. Como a barra é o container das consultas, a reserva já entra na largura usada. */
-.bar { -webkit-app-region: drag; padding-right: max(var(--sp-3), calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw))); }
-:root[data-wco=fake] .bar { padding-right: max(var(--sp-3), 138px); }
+/* Barra = área de arrastar da janela. Os botões min/max/fechar são do app (.winctl, no fim da barra); data-mac reserva 72 px à esquerda para os semáforos do macOS e esconde os botões. */
+.bar { -webkit-app-region: drag; }
 :root[data-mac] .bar { padding-left: 72px; }
 .bar :is(button, input, select, a, .seg, .bar-alert) { -webkit-app-region: no-drag; }
+/* Botões da janela: 3 × 40×32 (126 px com os vãos), colados ao canto direito da barra; ícones pixel art ×2. */
+.bar { padding-right: 0; }
+.tools { margin-right: var(--sp-1); }
+.winctl { display: flex; gap: 3px; flex: none; align-self: center; margin-left: auto; padding: 3px; height: 32px; box-sizing: content-box; -webkit-app-region: no-drag; transition: opacity var(--dur); }
+.winctl[data-focused=false] { opacity: .62; }
+:root[data-mac] .winctl { display: none; }
+.winctl button { width: 40px; height: 32px; padding: 0; display: grid; place-items: center; border-radius: 4px; background: var(--pi-vao); color: var(--pi-sobre); box-shadow: inset 0 0 0 2px var(--pi-mad-linha), inset 0 2px 0 var(--pi-vao-luz); text-shadow: none; filter: none; transform: none; -webkit-app-region: no-drag; transition: background var(--dur-fast), transform var(--dur-fast); }
+.winctl button:hover { background: linear-gradient(var(--pi-mad-luz2) 0 4px, var(--pi-mad-quente) 4px); color: var(--pi-mad-linha); filter: none; transform: none; box-shadow: inset 0 0 0 2px var(--pi-mad-linha), inset 0 2px 0 var(--pi-mad-luz); }
+.winctl button.wc-close:hover { background: linear-gradient(#f08377 0 4px, var(--pi-vermelho) 4px); color: #fff; box-shadow: inset 0 0 0 2px var(--pi-mad-linha), inset 0 2px 0 #ffb1a6; }
+.winctl button:active { transform: translateY(2px); box-shadow: inset 0 0 0 2px var(--pi-mad-linha); }
+.winctl button:focus-visible { outline: 2px solid var(--pi-rx-luz); outline-offset: -4px; }
+.pix { display: block; image-rendering: pixelated; }
+.pix-fg { fill: currentColor; }
+.pix-sh { fill: var(--pi-mad-linha); }
+.winctl button:not(:hover) .pix-sh { fill: #000a; }
 .brand { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
 .brand strong { font-family: var(--fonte-titulo); font-size: 17px; font-weight: 900; letter-spacing: .5px; color: var(--pi-sobre); text-shadow: 0 3px 0 var(--pi-titulo-linha), 2px 0 0 var(--pi-titulo-linha), -2px 0 0 var(--pi-titulo-linha), 0 -2px 0 var(--pi-titulo-linha), 2px 2px 0 var(--pi-titulo-linha), -2px 2px 0 var(--pi-titulo-linha); }
 nav { position: relative; flex: 1; min-width: 0; height: 100%; display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2); overflow-x: auto; scrollbar-width: none; }
@@ -231,8 +244,8 @@ nav { position: relative; flex: 1; min-width: 0; height: 100%; display: flex; al
 .bar-alert span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-alert .icon { height: 26px; width: 26px; box-shadow: inset 0 0 0 2px var(--pi-mad-linha); }
 /* Barra estreita (largura da própria barra): some o texto do Perfil e do selo de atualização encurta até virar só o ícone; as ferramentas nunca quebram nem passam por baixo. */
-@container bar (max-width: 1440px) { .brand strong, .seg span { display: none; } .tools .primary { width: 32px; padding: 0; } .tools .primary span { display: none; } .tools button.update .u-long { display: none; } .tools button.update .u-short { display: inline; } }
-@container bar (max-width: 780px) { .tools button.update { width: 32px; height: 32px; padding: 0; } .tools button.update .u-short { display: none; } nav { padding: 0 var(--sp-1); gap: 6px; } }
+@container bar (max-width: 1578px) { .brand strong, .seg span { display: none; } .tools .primary { width: 32px; padding: 0; } .tools .primary span { display: none; } .tools button.update .u-long { display: none; } .tools button.update .u-short { display: inline; } }
+@container bar (max-width: 918px) { .tools button.update { width: 32px; height: 32px; padding: 0; } .tools button.update .u-short { display: none; } nav { padding: 0 var(--sp-1); gap: 6px; } }
 
 /* ---------- Painéis de madeira sobre o xadrez ---------- */
 main { padding: 40px 20px; display: flex; justify-content: center; }

@@ -91,6 +91,12 @@ class FakeWindow extends EventEmitter {
   sizeCalls = 0;
   getContentSize() { this.sizeCalls++; return [1280,800]; }
   removeMenu() {}
+  isMaximized() { return false; }
+  isFocused() { return true; }
+  minimize() { windowCalls.push('minimize'); }
+  maximize() { windowCalls.push('maximize'); }
+  unmaximize() { windowCalls.push('unmaximize'); }
+  close() { windowCalls.push('close'); }
   isDestroyed() { return false; }
   isMinimized() { return false; }
   focus() { windowCalls.push('focus'); }
@@ -412,11 +418,11 @@ describe('processo principal', () => {
   expect((await call('update:download')).data?.status).toEqual({state:'disabled'});
   expect((await call('update:install')).ok).toBe(false);
  });
- it('a janela usa a barra de título escondida com overlay nas cores do app, ícone do app e AppUserModelId', () => {
+ it('a janela usa a barra de título escondida sem overlay (botões próprios), ícone do app e AppUserModelId', () => {
   expect(shell.options).toMatchObject({title:'PokéHub',backgroundColor:'#0f1218',webPreferences:{spellcheck:false,sandbox:true,contextIsolation:true,nodeIntegration:false}});
   expect(String(shell.options.icon).replace(/\\/g,'/')).toMatch(/\/build\/icon\.png$/);
   if (process.platform === 'darwin') expect(shell.options.titleBarStyle).toBe('hiddenInset');
-  else expect(shell.options).toMatchObject({titleBarStyle:'hidden',titleBarOverlay:{color:'#bd6951',symbolColor:'#fff6ef',height:48}});
+  else { expect(shell.options).toMatchObject({titleBarStyle:'hidden'}); expect(shell.options).not.toHaveProperty('titleBarOverlay'); }
   if (process.platform === 'win32') expect(appIds).toEqual(['local.pokehub.desktop']);
  });
  it('só avisa a interface quando o estado muda e ignora o carregamento de subframes', async () => {

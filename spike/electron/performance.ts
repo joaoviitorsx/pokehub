@@ -12,8 +12,8 @@ export const audioMuted = (enabled: boolean, visible: boolean): boolean => enabl
 export function mergeDisableFeatures(existing: string | undefined, add: readonly string[]): string {
   return [...new Set([...(existing ?? '').split(',').map(item => item.trim()).filter(Boolean),...add])].join(',');
 }
-/** Barra de título nativa escondida: o Windows/Linux desenham só os botões (overlay na cor da barra do app); no macOS ficam os semáforos. */
-export function windowChrome(platform: string, height: number) {
+/** Barra de título nativa escondida: no Windows/Linux os botões min/max/fechar são do próprio app (sem overlay; bordas e Aero Snap seguem nativos); no macOS ficam os semáforos. */
+export function windowChrome(platform: string) {
   if (platform === 'darwin') return {titleBarStyle: 'hiddenInset' as const};
-  return {titleBarStyle: 'hidden' as const, titleBarOverlay: {color: '#bd6951', symbolColor: '#fff6ef', height}};
+  return {titleBarStyle: 'hidden' as const};
 }

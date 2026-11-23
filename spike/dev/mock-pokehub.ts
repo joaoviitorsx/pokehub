@@ -25,6 +25,7 @@ let profiles: Profile[] = empty ? [] : seed.slice(0, accountCount).map(([label0,
 const states: Record<string, string> = {[uid(1)]: 'ready', [uid(2)]: 'loading', [uid(3)]: 'auth_required', [uid(4)]: 'error'};
 if (params.get('allready') === '1') for (const key of Object.keys(states)) states[key] = 'ready'; // ?allready=1: todas as contas prontas
 let preferences: 'grid' | 'focus-first' = 'grid';
+let winState = {maximized: false, focused: true};
 let trayPrefs = {onClose: true, onMinimize: true, hintShown: false};
 let perfPrefs = {lite: params.get('lite') === '1', muteUnfocused: false};
 
@@ -87,6 +88,13 @@ window.pokehub = {
   getPreferences: () => ok(preferences),
   getPerformance: () => ok({...perfPrefs}),
   setPerformance: change => { perfPrefs = {...perfPrefs, ...change}; return ok({...perfPrefs}); },
+  win: {
+    state: () => ok({...winState}),
+    minimize: () => ok(undefined),
+    toggleMaximize: () => { winState = {...winState, maximized: !winState.maximized}; emit('winstate', {...winState}); return ok(undefined); },
+    close: () => ok(undefined),
+    onState: cb => on<{maximized: boolean; focused: boolean}>('winstate', cb),
+  },
   getTray: () => ok({...trayPrefs}),
   setTray: change => { trayPrefs = {...trayPrefs, ...change}; return ok({...trayPrefs}); },
   onPerformance: cb => on<PerformancePrefs>('performance', cb),

@@ -383,7 +383,7 @@ if (primary) app.whenReady().then(() => {
   perf = preferences.getPerformance();
   trayPrefs = preferences.getTray();
   focused = initialFocus(perf.lite ? 'focus-first' : preferences.getStartupMode(), store.list().map(profile => profile.id)); // Modo leve começa em Foco
-  window = new BrowserWindow({title:'PokéHub',icon:join(__dirname,'../../build/icon.png'),backgroundColor:'#0f1218',...windowChrome(process.platform,TOP_BAR),width:1280,height:800,minWidth:700,minHeight:480,webPreferences:{preload:join(__dirname,'preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false,spellcheck:false,devTools:!app.isPackaged}});
+  window = new BrowserWindow({title:'PokéHub',icon:join(__dirname,'../../build/icon.png'),backgroundColor:'#0f1218',...windowChrome(process.platform),width:1280,height:800,minWidth:700,minHeight:480,webPreferences:{preload:join(__dirname,'preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false,spellcheck:false,devTools:!app.isPackaged}});
   if (process.platform !== 'darwin') window.removeMenu(); // no macOS o menu fica na barra do sistema e mantém copiar/colar
   updater = createUpdater({autoCheck:() => preferences.getAutoUpdateCheck(), onStatus:status => { if (!window.isDestroyed()) window.webContents.send('update:status',status); }});
   registerShortcuts(window.webContents);
@@ -398,6 +398,13 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('preferences:set', (event,mode: unknown) => invoke(event, () => preferences.setStartupMode(mode)));
   ipcMain.handle('performance:get', event => invoke(event, () => preferences.getPerformance()));
   ipcMain.handle('performance:set', (event,value: unknown) => invoke(event, () => { perf = preferences.setPerformance(value); arrange(); refreshTray.call(); return perf; }));
+  const winState = () => ({maximized:window.isMaximized(), focused:window.isFocused()});
+  const pushWinState = () => { if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('window:state',winState()); };
+  ipcMain.handle('window:state', event => invoke(event, winState));
+  ipcMain.handle('window:minimize', event => invoke(event, () => { window.minimize(); }));
+  ipcMain.handle('window:toggleMaximize', event => invoke(event, () => { if (window.isMaximized()) window.unmaximize(); else window.maximize(); }));
+  ipcMain.handle('window:close', event => invoke(event, () => { window.close(); })); // passa pelo evento 'close': a bandeja continua valendo
+  for (const name of ['maximize','unmaximize','focus','blur','restore'] as const) window.on(name as 'focus', pushWinState);
   ipcMain.handle('tray:get', event => invoke(event, () => trayPrefs));
   ipcMain.handle('tray:set', (event,value: unknown) => invoke(event, () => { trayPrefs = preferences.setTray(value); return trayPrefs; }));
   ipcMain.handle('extensions:list', event => invokeExtensions(event, () => applyExtensions('verify')));

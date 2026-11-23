@@ -20,9 +20,9 @@ describe('áudio, flags e janela', () => {
     expect(mergeDisableFeatures('A, B',['SpareRendererForSitePerProcess','A'])).toBe('A,B,SpareRendererForSitePerProcess');
   });
   it('barra de título: overlay no Windows/Linux, semáforos no macOS', () => {
-    expect(windowChrome('win32',48)).toEqual({titleBarStyle:'hidden',titleBarOverlay:{color:'#bd6951',symbolColor:'#fff6ef',height:48}});
-    expect(windowChrome('linux',48).titleBarStyle).toBe('hidden');
-    expect(windowChrome('darwin',48)).toEqual({titleBarStyle:'hiddenInset'});
+    expect(windowChrome('win32')).toEqual({titleBarStyle:'hidden'});
+    expect(windowChrome('linux').titleBarStyle).toBe('hidden');
+    expect(windowChrome('darwin')).toEqual({titleBarStyle:'hiddenInset'});
   });
 });
 describe('estado da sessão', () => {

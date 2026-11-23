@@ -5,6 +5,17 @@ contextBridge.exposeInMainWorld('pokehub', {
   setStartupMode: (mode: unknown) => ipcRenderer.invoke('preferences:set',mode),
   getPerformance: () => ipcRenderer.invoke('performance:get'),
   setPerformance: (value: unknown) => ipcRenderer.invoke('performance:set',value),
+  win: {
+    state: () => ipcRenderer.invoke('window:state'),
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    toggleMaximize: () => ipcRenderer.invoke('window:toggleMaximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    onState: (callback: (state: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
+      ipcRenderer.on('window:state', listener);
+      return () => ipcRenderer.removeListener('window:state', listener);
+    },
+  },
   getTray: () => ipcRenderer.invoke('tray:get'),
   setTray: (value: unknown) => ipcRenderer.invoke('tray:set',value),
   onPerformance: (callback: (value: unknown) => void) => {

@@ -18,7 +18,9 @@ import { columns, COL_HEAD, MAX_PROFILES, sideWidth, TOP_BAR } from '../electron
 
 type Result<T> = {ok:true; data:T} | {ok:false; error:string};
 type Status = {id:string;state:string};
+type WinState = {maximized:boolean; focused:boolean};
 declare global { interface Window { pokehub: {
+ win:{state():Promise<Result<WinState>>; minimize():Promise<Result<void>>; toggleMaximize():Promise<Result<void>>; close():Promise<Result<void>>; onState(callback:(state:WinState)=>void):()=>void};
  getTray():Promise<Result<TrayPrefs>>; setTray(value:Partial<TrayPrefs>):Promise<Result<TrayPrefs>>; onPerformance(callback:(value:PerformancePrefs)=>void):()=>void; getPerformance():Promise<Result<PerformancePrefs>>; setPerformance(value:Partial<PerformancePrefs>):Promise<Result<PerformancePrefs>>; suspend(id:string):Promise<Result<void>>; resume(id:string):Promise<Result<void>>; processes():Promise<Result<ProcessesSample>>;
  list(): Promise<Result<Profile[]>>; initialFocus():Promise<Result<string|null>>; getPreferences():Promise<Result<StartupMode>>; setStartupMode(mode:StartupMode):Promise<Result<StartupMode>>; create(input:ProfileInput): Promise<Result<Profile>>; update(id:string,input:ProfileInput): Promise<Result<Profile>>; remove(id:string): Promise<Result<void>>;
  layout(id:string|null,hide:boolean,side:boolean,panel?:number,account?:string|null): Promise<Result<void>>; onToggleExpand(callback:(id:string|null)=>void):()=>void; drag(active:boolean): Promise<Result<void>>; huntSnapshot(id:string,soLiberadas?:boolean):Promise<Result<HuntSnapshot>>; onToggleSide(callback:()=>void):()=>void; reload(id:string): Promise<Result<void>>; restart(id:string): Promise<Result<void>>; clearSession(id:string): Promise<Result<void>>; states(): Promise<Result<Record<string,string>>>; diagnostics():Promise<Result<DiagnosticsSample>>; onStatus(callback:(status:Status)=>void):()=>void; onFocus(callback:(id:string|null)=>void):()=>void; autoFocus():Promise<Result<string|null>>; onAutoFocus(callback:(id:string|null)=>void):()=>void;
@@ -35,6 +37,27 @@ function Logo() {
  return <svg className="logo" viewBox="62 62 388 388" aria-hidden="true"><defs><clipPath id={`${id}c`}><circle cx="256" cy="256" r="184"/></clipPath><radialGradient id={`${id}s`} cx="34%" cy="28%" r="70%"><stop offset="0" stopColor="#fff" stopOpacity=".35"/><stop offset=".45" stopColor="#fff" stopOpacity="0"/></radialGradient></defs>
   <g clipPath={`url(#${id}c)`}><rect x="72" y="72" width="184" height="184" fill="#f25f5c"/><rect x="256" y="72" width="184" height="184" fill="#ffca3a"/><rect x="72" y="256" width="184" height="184" fill="#3fa7d6"/><rect x="256" y="256" width="184" height="184" fill="#59cd90"/><rect x="72" y="72" width="368" height="368" fill={`url(#${id}s)`}/><rect x="72" y="238" width="368" height="36" fill="#480e1e"/><rect x="253" y="72" width="6" height="368" fill="#480e1e"/></g>
   <circle cx="256" cy="256" r="184" fill="none" stroke="#480e1e" strokeWidth="20"/><circle cx="256" cy="256" r="66" fill="#480e1e"/><circle cx="256" cy="256" r="44" fill="#fff6ef"/><circle cx="256" cy="256" r="22" fill="none" stroke="#f1d3b7" strokeWidth="6"/></svg>;
+}
+// Botões da janela (Windows/Linux). Ícones em pixel art: grade 10×10 só com retângulos de coordenadas inteiras, ampliada ×2 sem suavização; a sombra é o mesmo desenho deslocado 1 pixel.
+const PIX: Record<'min'|'max'|'restore'|'close',number[][]> = {
+ min: [[1,6,6,2]],
+ max: [[0,0,8,2],[0,2,1,6],[7,2,1,6],[1,7,6,1]],
+ restore: [[2,0,6,2],[7,2,1,4],[6,5,1,1],[0,2,6,2],[0,4,1,4],[5,4,1,4],[1,7,4,1]],
+ close: Array.from({length:7},(_,r) => r === 3 ? [[3,4,2,1]] : [[r,r+1,2,1],[6-r,r+1,2,1]]).flat(),
+};
+function PixelIcon({kind}: {kind: keyof typeof PIX}) {
+ const rects = PIX[kind].map(([x,y,w,h],i) => <rect key={i} x={x} y={y} width={w} height={h}/>);
+ return <svg className="pix" viewBox="0 0 10 10" width="20" height="20" shapeRendering="crispEdges" aria-hidden="true"><g className="pix-sh" transform="translate(1 1)">{rects}</g><g className="pix-fg">{rects}</g></svg>;
+}
+function WinControls({tray}: {tray: boolean}) {
+ const [state,setState] = useState<WinState>({maximized:false,focused:true});
+ useEffect(() => { void window.pokehub.win.state().then(result => { if (result.ok) setState(result.data); }).catch(() => undefined); return window.pokehub.win.onState(setState); },[]);
+ const run = (action: () => Promise<unknown>) => () => { void action().catch(() => undefined); };
+ return <div className="winctl" role="group" aria-label="Controles da janela" data-focused={state.focused}>
+  <button aria-label="Minimizar" title="Minimizar" onClick={run(window.pokehub.win.minimize)}><PixelIcon kind="min"/></button>
+  <button aria-label={state.maximized ? 'Restaurar' : 'Maximizar'} title={state.maximized ? 'Restaurar' : 'Maximizar'} onClick={run(window.pokehub.win.toggleMaximize)}><PixelIcon kind={state.maximized ? 'restore' : 'max'}/></button>
+  <button className="wc-close" aria-label="Fechar" title={tray ? 'Fechar (continua na bandeja)' : 'Fechar'} onClick={run(window.pokehub.win.close)}><PixelIcon kind="close"/></button>
+ </div>;
 }
 // Sublinhado único das abas: segue a aba ativa lida do DOM (a largura muda com rótulo, estado e media query).
 function placeIndicator(el: HTMLElement | null) {
@@ -317,10 +340,10 @@ function App() {
  const barAlert = message !== '' && editor === null && (loadError || profiles.length > 0);
  const smallWindow = 'Janela pequena: exibindo uma sessão por vez. Amplie para ver a grade.';
  return <>
- <header className="bar"><div className="brand"><Logo/><strong>PokéHub</strong></div>
+ <header className="bar" onDoubleClick={event => { const t = event.target as HTMLElement; if (t === event.currentTarget || t.closest('.brand') || t.tagName === 'NAV') void window.pokehub.win.toggleMaximize().catch(() => undefined); }}><div className="brand"><Logo/><strong>PokéHub</strong></div>
  {barAlert ? <div className="bar-alert" role="alert"><span title={message}>{message}</span><button className="icon" aria-label="Dispensar aviso" title="Dispensar aviso" onClick={() => setMessage('')}><Icon d={icons.close}/></button></div> :
  <nav aria-label="Sessões"><div className="seg" role="group" aria-label="Visualização"><button disabled={!loaded || loadError || busy} aria-keyshortcuts="Control+0" title={autoFocus ? smallWindow : 'Grade (Ctrl+0)'} aria-pressed={!active} onClick={() => go(null)}><ViewIcon mode="grid"/><span>Grade</span></button><button disabled={!loaded || loadError || busy || profiles.length === 0} title="Focar uma sessão" aria-pressed={Boolean(active)} onClick={() => go(active?.id ?? profiles[0]?.id ?? null)}><ViewIcon mode="focus"/><span>Foco</span></button></div>{autoFocus && <span className="sr" role="status">{smallWindow}</span>}{profiles.map((p,index) => {const state=states[p.id] ?? '';const label=labels[state] ?? 'Iniciando';const short=shortLabels[state] ?? 'Iniciando';return <button key={p.id} className="tab" style={{'--c':p.colorToken} as CSSProperties} disabled={!loaded || loadError || busy} aria-keyshortcuts={`Control+${index+1}`} aria-label={`${p.label} · ${label}`} title={`Focar ${p.label} (Ctrl+${index+1}) · ${label}`} aria-pressed={active?.id===p.id} onClick={() => go(p.id)}><El color={p.colorToken}/><span className="name">{p.label}</span><span className="st" data-state={state}><b/><span className="sr">{label}</span>{short && <small aria-hidden="true">{short}</small>}</span></button>;})}<i className="ind" ref={indicator} aria-hidden="true"/></nav>}
- <div className="tools">{updatePill}<button className="icon" disabled={!sideAllowed || busy} aria-label="Assistente: caçar e mercado" aria-keyshortcuts="Control+H" title="Assistente: onde caçar e mercado (Ctrl+H)" aria-pressed={sideShown} onClick={() => {if (editor === null) setSide(!side); else if (canLeaveEditor()) {setEditor(null);setEditorFrom(null);setMessage('');setSide(true);}}}><Icon d={icons.target}/></button><button className="icon" disabled={!loaded || busy} aria-label="Gerenciar" title="Gerenciar contas, extensões, atualizações e layout" aria-pressed={editor==='manage' || editorFrom==='manage'} onClick={() => void openManage()}><Icon d={icons.gear}/></button><button className="primary" disabled={!loaded || loadError || profiles.length >= MAX_PROFILES || busy} title={profiles.length >= MAX_PROFILES ? `Limite de ${MAX_PROFILES} perfis atingido` : 'Novo perfil'} onClick={() => openEditor()}><Icon d={icons.plus}/><span>Perfil</span></button></div></header>
+ <div className="tools">{updatePill}<button className="icon" disabled={!sideAllowed || busy} aria-label="Assistente: caçar e mercado" aria-keyshortcuts="Control+H" title="Assistente: onde caçar e mercado (Ctrl+H)" aria-pressed={sideShown} onClick={() => {if (editor === null) setSide(!side); else if (canLeaveEditor()) {setEditor(null);setEditorFrom(null);setMessage('');setSide(true);}}}><Icon d={icons.target}/></button><button className="icon" disabled={!loaded || busy} aria-label="Gerenciar" title="Gerenciar contas, extensões, atualizações e layout" aria-pressed={editor==='manage' || editorFrom==='manage'} onClick={() => void openManage()}><Icon d={icons.gear}/></button><button className="primary" disabled={!loaded || loadError || profiles.length >= MAX_PROFILES || busy} title={profiles.length >= MAX_PROFILES ? `Limite de ${MAX_PROFILES} perfis atingido` : 'Novo perfil'} onClick={() => openEditor()}><Icon d={icons.plus}/><span>Perfil</span></button></div><WinControls tray={tray.onClose}/></header>
  {editor === 'manage' && <main><section className="panel manage" aria-busy={busy}>
   <div className="manage-nav" role="group" aria-label="Seções de Gerenciar">{sections.map(item => <button key={item.id} aria-pressed={section === item.id} onClick={() => selectSection(item.id)}>{item.label}</button>)}<span className="grow"/><button onClick={() => go(undefined)}>Fechar</button></div>
   <div className="manage-body"><h1>Gerenciar · {sections.find(item => item.id === section)?.label}</h1>
