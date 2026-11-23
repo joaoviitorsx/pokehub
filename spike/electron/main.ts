@@ -255,6 +255,12 @@ function report(id: string, state: string) {
   if (changed) remote?.reportState(id,state); // "conta caiu/voltou" (alertas do acesso remoto)
 }
 const remoteAccounts = () => store.list().map(p => ({id:p.id, label:p.label, color:p.colorToken, state:states.get(p.id) ?? 'loading', suspended:suspended.has(p.id)}));
+// View oculta fora da área da janela, com o mesmo tamanho: no Electron 44 uma WebContentsView com setVisible(false) ainda
+// recebia o mouse (o Gerenciar e a lateral ficavam sem clique). Fora da tela ela segue desenhando/capturável (R5) sem cobrir a interface.
+const PARK_X = -32000;
+function parkView(view: WebContentsView, size?: {width: number; height: number} | null) {
+  try { const b = view.getBounds(); const w = size?.width ?? b.width, h = size?.height ?? b.height; if (b.x !== PARK_X || b.width !== w || b.height !== h) view.setBounds({x:PARK_X, y:0, width:w, height:h}); } catch { /* view fechando */ }
+}
 function arrange() {
   const profiles = store.list();
   if (!profiles.length) {
@@ -273,7 +279,8 @@ function arrange() {
   profiles.forEach((profile,i) => {
     const view = views.get(profile.id); const b = bounds[i];
     if (!view) return;
-    view.setVisible(!editing && !dragging && Boolean(b)); if (b) view.setBounds(b);
+    const show = !editing && !dragging && Boolean(b);
+    view.setVisible(show); if (show && b) view.setBounds(b); else parkView(view,b);
     const muted = audioMuted(muting,!editing && Boolean(b)); // som só na conta visível (em foco); o arrasto não muda o som
     if (!view.webContents.isDestroyed() && mutedState.get(view.webContents) !== muted) { mutedState.set(view.webContents,muted); try { view.webContents.setAudioMuted(muted); } catch { /* sessão encerrando */ } }
   });
@@ -290,7 +297,7 @@ function setDrag(active: boolean) {
   if (!active) { arrange(); return; }
   // se o renderer nunca avisar o fim (travou, recarregou), as sessões voltam sozinhas
   dragTimer = setTimeout(() => { try { if (!window.isDestroyed()) setDrag(false); } catch { console.error('Falha ao restaurar as sessões após o arrasto.'); } }, DRAG_FAILSAFE_MS);
-  for (const view of views.values()) { try { view.setVisible(false); } catch { /* sessão encerrando */ } }
+  for (const view of views.values()) { try { view.setVisible(false); parkView(view); } catch { /* sessão encerrando */ } }
 }
 function registerShortcuts(contents: Electron.WebContents, profileId: string | null = null) {
   contents.on('before-input-event', (event, input) => {
@@ -605,7 +612,7 @@ if (primary) app.whenReady().then(() => {
     if (hide) {
       editing = true; sideOpen = side;
       let failed = false;
-      for (const view of views.values()) { try { view.setVisible(false); } catch { failed = true; } }
+      for (const view of views.values()) { try { view.setVisible(false); parkView(view); } catch { failed = true; } }
       if (failed) throw new Error();
       return;
     }

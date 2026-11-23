@@ -413,7 +413,9 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 .col-head .el { width: 16px; height: 16px; padding: 2px; }
 .col-head .grow { flex: 1 1 0; min-width: 0; }
 .col-head button.icon { width: 24px; height: 22px; border-radius: 5px; position: relative; }
-/* área de clique de 28+ px sem engordar o botão */
+/* área de clique de 28+ px sem engordar o botão. O dono do ::after PRECISA ser posicionado: sem isso o ::after (absolute, inset negativo)
+   se estica até o ancestral posicionado mais próximo (o painel) e as camadas invisíveis roubam os cliques do Gerenciar inteiro. */
+.col-head button.icon, .side-opts .opt, .side-opts button.icon, .side-note .icon, .bar-alert .icon, .mkt-count .opt, .acc-row .actions button, .side-accounts .tab { position: relative; }
 .col-head button.icon::after, .side-opts .opt::after, .side-opts button.icon::after, .side-note .icon::after, .bar-alert .icon::after, .mkt-count .opt::after, .acc-row .actions button::after, .side-accounts .tab::after { content: ''; position: absolute; inset: -4px -2px; }
 /* Cabeçalho muito estreito (colunas normalmente têm 340+ px): o selo vira ponto e só ficam Expandir e Recarregar. */
 @container head (max-width: 300px) { .col-head .pill .t { display: none; } .col-head .pill { padding: 0; width: 10px; height: 10px; border-radius: 50%; background: currentColor; } .col-head button:nth-of-type(3) { display: none; } }

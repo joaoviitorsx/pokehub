@@ -35,6 +35,6 @@ export function BannerView({state, onEndControl, onEndAll}: {state: BannerState;
 }
 export function ScreenBanner() {
   const [state, setState] = useState<BannerState>({list: [], shortcutDown: false});
-  useEffect(() => startBanner(client(), setState), []);
+  useEffect(() => { const c = client(); return c ? startBanner(c, setState) : undefined; }, []); // sem a API remota (prévia/testes) a faixa só não aparece; nunca derruba a interface
   return <BannerView state={state} onEndControl={() => { void client().screenEnd('control'); }} onEndAll={() => { void client().screenEnd('all'); }}/>;
 }
