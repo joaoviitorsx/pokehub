@@ -29,4 +29,5 @@ export function registerRemoteIpc(ipcMain: Pick<IpcMain, 'handle'>, trusted: (ev
   const spend = () => ({purchases: hub.purchases(), spend: hub.spendToday(), capGold: hub.status().dailyCapGold});
   handle('remote:purchases', () => spend());
   handle('remote:set-cap', async value => { await hub.setDailyCap(value); return spend(); });
+  handle('remote:screen-end', mode => { if (mode !== 'control' && mode !== 'all') throw new Error(); if (mode === 'control') hub.endControl(); else hub.endScreen(); return hub.status(); });
 }

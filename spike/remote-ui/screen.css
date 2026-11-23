@@ -1,0 +1,47 @@
+/* Conta → Jogo (R5): palco da tela ao vivo, teclado de PIN e botões grandes (≥ 52 px). Mesmos tokens --pi-* do resto do app. */
+.screen { display: grid; gap: var(--sp-3); }
+.sv-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); min-height: 28px; }
+.sv-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 5px; font: 700 11px var(--fonte-titulo); text-transform: uppercase; letter-spacing: .5px; background: var(--pi-campo); box-shadow: inset 0 0 0 2px var(--pi-mad-linha); color: var(--pi-sobre-dim); }
+.sv-chip[data-state=streaming] { color: var(--pi-verde-txt, #8fe0a6); }
+.sv-chip[data-state=protected], .sv-chip[data-state=password], .sv-chip[data-state=hidden], .sv-chip[data-state=closed] { color: var(--pi-ouro-luz); }
+.screen[data-control] .sv-chip { background: var(--pi-vermelho); color: #fff; }
+.sv-stage { position: relative; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; aspect-ratio: var(--ratio, 1.7778); width: min(100%, calc(62dvh * var(--ratio, 1.7778))); margin-inline: auto; border-radius: 8px; background: #0b1218; box-shadow: inset 0 0 0 2px var(--pi-mad-linha), 0 1px 0 var(--pi-mad-luz2); }
+.screen[data-control] .sv-stage { box-shadow: inset 0 0 0 3px var(--pi-vermelho), 0 0 0 2px var(--pi-mad-linha); }
+/* o palco tem a proporção do quadro (--ratio): sem faixas, e o toque cai no pixel certo */
+.sv-stage canvas { display: block; width: 100%; height: 100%; transform-origin: 0 0; image-rendering: auto; will-change: transform; }
+.sv-over { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 6px; padding: var(--sp-4); text-align: center; background: color-mix(in srgb, #0b1218 86%, transparent); }
+.sv-over strong { font: 700 13px var(--fonte-titulo); text-transform: uppercase; letter-spacing: .5px; }
+.sv-over small { color: var(--pi-vao-dim); max-width: 28ch; }
+.sv-lock { color: var(--pi-ouro-luz); }
+.sv-badge { position: absolute; left: 8px; top: 8px; padding: 2px 8px; border-radius: 4px; font: 800 10px var(--fonte-titulo); letter-spacing: 1px; background: var(--pi-vermelho); color: #fff; box-shadow: 0 0 0 2px var(--pi-mad-linha); pointer-events: none; }
+.sv-full { min-height: 36px; padding: 0 var(--sp-3); font-size: 11px; }
+.screen[data-full] { position: fixed; inset: 0; z-index: 9; align-content: start; overflow: hidden auto; padding: calc(var(--sp-2) + env(safe-area-inset-top)) var(--sp-2) calc(var(--sp-2) + env(safe-area-inset-bottom)); background: var(--pi-noite-esc, #1b1220); }
+.screen[data-full] .sv-stage { width: min(100%, calc((100dvh - 150px) * var(--ratio, 1.7778))); }
+.sv-bar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: var(--sp-2); }
+.sv-bar button { min-height: 52px; padding: 0 var(--sp-2); }
+.sv-kb { width: 100%; min-height: 48px; padding: 0 var(--sp-3); border: 0; border-radius: 6px; font-size: 16px; /* 16 px: sem zoom automático no iOS */ color: var(--pi-sobre); background: var(--pi-campo); box-shadow: inset 0 0 0 2px var(--pi-mad-linha); }
+.screen .hint { margin: 0; text-align: left; }
+
+/* teclado de PIN: folha por cima da tela */
+.sv-pin { position: fixed; inset: auto 0 0 0; z-index: 10; display: grid; gap: var(--sp-3); justify-items: center; max-width: 420px; margin: 0 auto; padding: var(--sp-4) var(--sp-4) calc(var(--sp-4) + env(safe-area-inset-bottom)); border-radius: 12px 12px 0 0;
+  background: linear-gradient(var(--pi-mad-esc) 0 8px, var(--pi-mad) 8px); box-shadow: inset 0 0 0 2px var(--pi-mad-linha), 0 -8px 0 #0008; }
+.sv-pin h2 { margin: 0; }
+.sv-dots { display: flex; gap: 10px; }
+.sv-dots i { width: 16px; height: 16px; border-radius: 3px; background: var(--pi-campo); box-shadow: inset 0 0 0 2px var(--pi-mad-linha); }
+.sv-dots i[data-on] { background: var(--pi-ouro); }
+.sv-pin .msg { margin: 0; min-height: 2.6em; text-align: center; }
+.sv-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-2); width: 100%; }
+.sv-keys button { min-height: 56px; font-size: 20px; }
+.sv-pin .hint { text-align: center; }
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .screen { grid-template-columns: minmax(0, 1fr) 150px; align-items: start; }
+  .sv-head, .screen > .msg, .screen > .hint, .sv-kb { grid-column: 2; }
+  .sv-head { flex-direction: column; align-items: stretch; }
+  .sv-head small { white-space: normal; }
+  .sv-stage { grid-column: 1; grid-row: 1 / span 6; width: min(100%, calc((100dvh - 130px) * var(--ratio, 1.7778))); }
+  .screen[data-full] .sv-stage { width: min(100%, calc((100dvh - 24px) * var(--ratio, 1.7778))); }
+  .sv-bar { grid-column: 2; grid-auto-flow: row; }
+  .sv-pin { max-width: 360px; }
+}
+@media (prefers-reduced-motion: reduce) { .sv-stage canvas, .sv-pin { transition: none; animation: none; } }

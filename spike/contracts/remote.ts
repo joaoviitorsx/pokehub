@@ -1,4 +1,5 @@
 import type { Capture } from '../domain/captures';
+import type { RemoteScreenSession } from './screen';
 // Estado do acesso remoto mostrado em Gerenciar → Acesso remoto. Nunca carrega chaves, tokens, hashes nem caminhos de arquivo.
 export interface RemotePairing {
   /** Código legível; vazio enquanto oculto (1º pareamento: só depois de conferir a impressão digital no celular). */
@@ -14,6 +15,8 @@ export interface RemoteStatus {
   fingerprint: string | null; caNotice: string | null; aclOk: boolean; notice: string | null; actionsDisabled: boolean;
   pairing: RemotePairing | null; request: RemoteRequest | null; paired: string | null;
   pinSet: boolean; devices: number; firstPairing: boolean; dailyCapGold: number;
+  /** R5: quem está vendo/controlando uma conta agora (banner do PC). */
+  screen?: RemoteScreenSession[];
 }
 export interface RemoteDevice { id: string; name: string; createdAt: string; lastSeen: string | null; canAct: boolean; /** Assinaturas de push ativas deste aparelho (0–2) */ push?: number }
 export interface RemoteAuditEntry { id: number; at: string; deviceId: string | null; action: string; detail: string | null }
