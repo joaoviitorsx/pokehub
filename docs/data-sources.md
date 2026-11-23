@@ -77,3 +77,5 @@ Leitura **somente do DOM** do painel esquerdo "CAPTURAS" do jogo (lista da sess�
 - **Armazenamento local:** memória (até 1.000 por conta) e, opcionalmente, `captures.json` em `userData` (últimos **7 dias**, no máximo **5.000** entradas, gravação com atraso de 5 s e atômica; arquivo validado ao ler). Sem banco de dados. "Limpar histórico" apaga memória e arquivo. Nada sai do computador por esta fonte.
 - **Alertas:** Shiny, P5, recorde e, opcionalmente, nota mínima; aviso na lateral e, se o usuário ligar (`localStorage` `pokehub.captures`), notificação do sistema.
 - **Riscos:** DOM não é API; se o jogo mudar as classes a lista fica vazia (a interface avisa). Capturas idênticas (mesmo nome, nível, hora, P, IV, Q e nota) no mesmo minuto contam como uma.
+
+> Validação em 2026-11-23 (jogo v1.474, conta real, somente leitura): o `CAPTURES_SCRIPT` leu as 10 capturas da sessão com nome, nível, hora, P, IV, Q e Nota. O recorde vem da classe `recorde` da linha, e o selo "NOVO" (espécie nova) não gera alerta de recorde.
