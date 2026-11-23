@@ -58,6 +58,8 @@ export async function verifyPinHash(pin: string, stored: string | null): Promise
     return got.length === want.length && timingSafeEqual(got, want);
   } catch { return false; }
 }
+/** Dia no fuso LOCAL do PC (AAAA-MM-DD). */
+export const localDay = (ms: number): string => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
 export const PIN_MAX_WRONG = 5, PIN_LOCKS_MS = [15 * 60_000, 60 * 60_000, 24 * 60 * 60_000] as const, PIN_LOCK_MS = PIN_LOCKS_MS[0], PIN_GLOBAL_DAILY = 10;
 export type PinCheck = {ok: true} | {ok: false; reason: 'no-pin' | 'wrong' | 'locked' | 'disabled' | 'revoked'; retryAfterMs?: number; attemptsLeft?: number};
 /** Onde o PIN guarda os contadores: o banco no app (sobrevive a reiniciar o acesso remoto) ou memória nos testes. */
@@ -90,7 +92,7 @@ export class PinGuard {
   }
   private lockLeft(deviceId: string): number { const s = this.store.get(deviceId); return s && s.lockedUntil > this.now() ? s.lockedUntil - this.now() : 0; }
   private countGlobal(t: number): void {
-    const day = new Date(t).toISOString().slice(0, 10), g = this.store.get('*') ?? {fails: 0, level: 0, lockedUntil: 0, day};
+    const day = localDay(t), g = this.store.get('*') ?? {fails: 0, level: 0, lockedUntil: 0, day};
     if (g.day !== day) { g.fails = 0; g.day = day; }
     g.fails++; this.store.set('*', g);
     if (g.fails >= PIN_GLOBAL_DAILY && !this.store.actionsDisabled()) { this.store.setActionsDisabled(true); this.events.onDisable?.(); }

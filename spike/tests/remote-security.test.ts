@@ -124,7 +124,7 @@ describe('PIN: scrypt assíncrono, parâmetros fixos e bloqueios', () => {
     expect(await new PinGuard(() => null).check('a', '123456')).toEqual({ok: false, reason: 'no-pin'});
   });
   it('10 erros no mesmo dia desligam tudo; dia novo zera a contagem; religar limpa', async () => {
-    let t = Date.UTC(2026, 0, 1, 23, 0); const h = await hashPin('246810'), off: number[] = [], store = memoryPinStore();
+    let t = new Date(2026, 0, 1, 23, 0).getTime(); const h = await hashPin('246810'), off: number[] = [], store = memoryPinStore();
     const g = new PinGuard(() => h, () => t, {onDisable: () => off.push(t)}, store);
     for (let i = 0; i < 4; i++) { await g.check('a', '1'); await g.check('b', '1'); } await g.check('c', '0');
     expect(store.actionsDisabled()).toBe(false);

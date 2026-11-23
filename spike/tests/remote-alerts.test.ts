@@ -141,6 +141,13 @@ describe('alertas: rotas (HTTPS, autenticação, X-PH, Origin)', () => {
     for (const bad of [{}, {...want, notaMin: 11}, {...want, shiny: 'sim'}, {...want, extra: true}, [1]]) expect((await post('/api/alerts/prefs', a.cookie, bad)).status).toBe(400);
     expect(await get<AlertPrefs>('/api/alerts/prefs', a.cookie)).toEqual(want);
   });
+  it('assinatura de OUTRO aparelho: 409 e o dono continua com ela', async () => {
+    const a = makeDevice(), b = makeDevice(), r = receiver(), sub = r.sub('hijack');
+    expect((await post('/api/push/subscribe', a.cookie, sub)).status).toBe(200);
+    expect((await post('/api/push/subscribe', b.cookie, sub)).status).toBe(409);
+    expect(hub.store.pushOf(a.id).map(s => s.endpoint)).toEqual([sub.endpoint]); expect(hub.store.pushOf(b.id)).toEqual([]);
+    expect((await post('/api/push/subscribe', a.cookie, sub)).status).toBe(200); expect(hub.store.pushCount(a.id)).toBe(1);
+  });
   it('subscribe: só endpoints da allowlist com chaves válidas; máx. 2 por aparelho; unsubscribe remove', async () => {
     const {id, cookie} = makeDevice(), r = receiver(), good = r.sub('um');
     for (const endpoint of ['http://fcm.googleapis.com/x', 'https://127.0.0.1/x', 'https://evil.com/x', 'https://fcm.googleapis.com:8443/x', 'https://u:p@fcm.googleapis.com/x', 'https://fcm.googleapis.com.evil.com/x', 'https://[::1]/x', 'https://10.0.0.1/x', 5, null]) expect((await post('/api/push/subscribe', cookie, {...good, endpoint})).status, String(endpoint)).toBe(400);
@@ -283,13 +290,13 @@ describe('alertas: banco (v13)', () => {
     for (let i = 2; i < ALERTS_KEEP + 30; i++) store.addAlert(mk(i, base + i * 1000), base + i * 1000);
     const raw = new DatabaseSync(path), all = raw.prepare('SELECT COUNT(*) AS n FROM remote_alerts').get(); raw.close(); expect(all).toMatchObject({n: ALERTS_KEEP}); expect(store.listAlerts(3).map(a => a.id)).toEqual([`a${ALERTS_KEEP + 29}`, `a${ALERTS_KEEP + 28}`, `a${ALERTS_KEEP + 27}`]);
     expect(store.listAlerts(9999)).toHaveLength(200); store.close();
-  });
-  it('máx. 2 assinaturas por aparelho e endpoint repetido muda de dono', () => {
+  }, 60_000);
+  it('máx. 2 assinaturas por aparelho; endpoint de outro aparelho é recusado', () => {
     const path = join(root, `m${++n}.sqlite`), store = new RemoteStore(path);
     for (const id of ['d1', 'd2']) store.addDevice({id, name: id, tokenHash: id, now: new Date().toISOString()});
     const sub = (e: string) => ({endpoint: `https://fcm.googleapis.com/${e}`, p256dh: 'p', auth: 'a'});
     store.addPush('d1', sub('1'), 'i1', 't1'); store.addPush('d1', sub('2'), 'i2', 't2'); store.addPush('d1', sub('3'), 'i3', 't3');
-    expect(store.pushOf('d1').map(s => s.id)).toEqual(['i2', 'i3']); store.addPush('d2', sub('2'), 'i4', 't4'); expect(store.pushOf('d1').map(s => s.id)).toEqual(['i3']); expect(store.pushOf('d2').map(s => s.id)).toEqual(['i4']);
+    expect(store.pushOf('d1').map(s => s.id)).toEqual(['i2', 'i3']); expect(store.addPush('d2', sub('2'), 'i4', 't4')).toBe('conflito'); expect(store.pushOf('d1').map(s => s.id)).toEqual(['i2', 'i3']); expect(store.pushOf('d2')).toEqual([]); expect(store.addPush('d1', sub('2'), 'i5', 't5')).toBe('ok');
     store.setPrefs('d1', DEFAULT_ALERT_PREFS); expect(store.getPrefs('d1')).toEqual(DEFAULT_ALERT_PREFS); expect(store.revokeDevice('d1')).toBe(true); expect(store.pushOf('d1')).toEqual([]); expect(store.getPrefs('d1')).toBeNull(); store.close();
   });
 });

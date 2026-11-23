@@ -11,7 +11,9 @@ export interface PushRow { id: string; deviceId: string; endpoint: string; p256d
 export interface ConfirmRow { id: string; deviceId: string; planHash: string; planJson: string; createdAt: number; expiresAt: number; used: boolean; idemKey: string | null; resultJson: string | null }
 export interface PurchaseRow { id: number; at: string; deviceId: string | null; deviceName: string | null; profileId: string; confirmId: string | null; planHash: string | null; item: string; qty: number; unitPrice: number; total: number; result: string }
 export const MAX_CAP_GOLD = 1_000_000_000;
-export const DEFAULT_PORT = 47321, MAX_DEVICES = 8, AUDIT_KEEP = 1000, PUSH_PER_DEVICE = 2, ALERTS_KEEP = 1000, ALERTS_MAX_AGE_MS = 7 * 86_400_000;
+/** Categorias de auditoria que a poda por contagem nunca apaga (GLOB: `_` e `*` literais/curinga como escritos). */
+export const AUDIT_CRITICAL = ['compra_*', 'controle_*', 'pin_*', 'pode_agir*', 'pode_controlar*', 'aparelho_revogado*', 'teto_diario*', 'pareado*', 'pareamento_*', 'acoes_*', 'rede_*'] as const;
+export const DEFAULT_PORT = 47321, MAX_DEVICES = 8, AUDIT_KEEP = 2000, AUDIT_PRUNE_EVERY = 25, AUDIT_DAYS = 30, AUDIT_CRIT_DAYS = 365, PUSH_PER_DEVICE = 2, ALERTS_KEEP = 1000, ALERTS_MAX_AGE_MS = 7 * 86_400_000;
 export const validPort = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 1024 && value <= 65535;
 const clip = (value: string | null | undefined, max: number) => value == null ? null : value.slice(0, max);
 
@@ -53,8 +55,12 @@ export class RemoteStore {
   setPinState(key: string, s: PinStateRow): void { this.db.prepare('INSERT INTO remote_pin_state (key, fails, level, locked_until, day) VALUES (?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET fails=excluded.fails, level=excluded.level, locked_until=excluded.locked_until, day=excluded.day').run(key, s.fails, s.level, s.lockedUntil, s.day); }
   clearPinState(key?: string): void { if (key) this.db.prepare('DELETE FROM remote_pin_state WHERE key=?').run(key); else this.db.exec('DELETE FROM remote_pin_state'); }
   audit(deviceId: string | null, action: string, detail: string | null, now: string): void {
-    this.db.prepare('INSERT INTO remote_audit (at, device_id, action, detail) VALUES (?, ?, ?, ?)').run(now, clip(deviceId, 64), action.slice(0, 40), clip(detail, 200));
-    this.db.prepare('DELETE FROM remote_audit WHERE id <= (SELECT MAX(id) FROM remote_audit) - ?').run(AUDIT_KEEP);
+    const added = this.db.prepare('INSERT INTO remote_audit (at, device_id, action, detail) VALUES (?, ?, ?, ?)').run(now, clip(deviceId, 64), action.slice(0, 40), clip(detail, 200));
+    if (Number(added.lastInsertRowid) % AUDIT_PRUNE_EVERY !== 0) return; // poda em lotes (a cada 25 linhas): barata e o excesso é limitado
+    // poda: o que é crítico (compras, controle, PIN, permissões, revogação, teto, pareamento, rede) fica 365 dias e NUNCA cai por contagem; o resto, 30 dias ou as últimas 2000
+    const t = Date.parse(now), base = Number.isFinite(t) ? t : Date.now(), crit = AUDIT_CRITICAL.map(() => 'action GLOB ?').join(' OR ');
+    this.db.prepare(`DELETE FROM remote_audit WHERE NOT (${crit}) AND (at < ? OR id NOT IN (SELECT id FROM remote_audit WHERE NOT (${crit}) ORDER BY id DESC LIMIT ?))`).run(...AUDIT_CRITICAL, new Date(base - AUDIT_DAYS * 86_400_000).toISOString(), ...AUDIT_CRITICAL, AUDIT_KEEP);
+    this.db.prepare(`DELETE FROM remote_audit WHERE (${crit}) AND at < ?`).run(...AUDIT_CRITICAL, new Date(base - AUDIT_CRIT_DAYS * 86_400_000).toISOString());
   }
   listAudit(limit = 100): AuditRow[] {
     return this.db.prepare('SELECT id, at, device_id, action, detail FROM remote_audit ORDER BY id DESC LIMIT ?').all(Math.min(Math.max(1, limit | 0), 100)).map(row => ({id: Number(row.id), at: String(row.at), deviceId: row.device_id == null ? null : String(row.device_id), action: String(row.action), detail: row.detail == null ? null : String(row.detail)}));
@@ -64,12 +70,15 @@ export class RemoteStore {
   pushOf(deviceId: string): PushRow[] { return this.db.prepare('SELECT * FROM remote_push WHERE device_id=? ORDER BY rowid').all(deviceId).map(r => this.toPush(r)); }
   pushAll(): PushRow[] { return this.db.prepare('SELECT * FROM remote_push ORDER BY rowid').all().map(r => this.toPush(r)); }
   pushCount(deviceId?: string): number { return Number((deviceId === undefined ? this.db.prepare('SELECT COUNT(*) AS n FROM remote_push').get() : this.db.prepare('SELECT COUNT(*) AS n FROM remote_push WHERE device_id=?').get(deviceId))?.n ?? 0); }
-  /** Registra a assinatura do aparelho (no máx. 2: a mais antiga sai). O mesmo endpoint de outro aparelho passa para este (é o mesmo navegador). */
-  addPush(deviceId: string, sub: {endpoint: string; p256dh: string; auth: string}, id: string, now: string): void {
+  /** Registra a assinatura do aparelho (no máx. 2: a mais antiga sai). Endpoint que já é de OUTRO aparelho é recusado ('conflito'): ninguém toma a assinatura de outro. */
+  addPush(deviceId: string, sub: {endpoint: string; p256dh: string; auth: string}, id: string, now: string): 'ok' | 'conflito' {
+    const owner = this.db.prepare('SELECT device_id FROM remote_push WHERE endpoint=?').get(sub.endpoint);
+    if (owner && String(owner.device_id) !== deviceId) return 'conflito';
     this.db.prepare('DELETE FROM remote_push WHERE endpoint=?').run(sub.endpoint);
     const mine = this.pushOf(deviceId);
     for (const old of mine.slice(0, Math.max(0, mine.length - PUSH_PER_DEVICE + 1))) this.db.prepare('DELETE FROM remote_push WHERE id=?').run(old.id);
     this.db.prepare('INSERT INTO remote_push (id, device_id, endpoint, p256dh, auth, created_at, last_ok, fail_count) VALUES (?, ?, ?, ?, ?, ?, NULL, 0)').run(id, deviceId, sub.endpoint, sub.p256dh, sub.auth, now);
+    return 'ok';
   }
   removePush(deviceId: string, endpoint: string): boolean { return this.db.prepare('DELETE FROM remote_push WHERE device_id=? AND endpoint=?').run(deviceId, endpoint).changes > 0; }
   deletePush(id: string): void { this.db.prepare('DELETE FROM remote_push WHERE id=?').run(id); }

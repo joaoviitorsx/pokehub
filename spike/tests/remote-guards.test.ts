@@ -78,9 +78,9 @@ describe('banco do acesso remoto (migração v11 e store)', () => {
     s.addDevice({id: 'd1', name: 'X'.repeat(100), tokenHash: 'h1', now: 't0'});
     expect(() => s.addDevice({id: 'd2', name: 'Y', tokenHash: 'h1', now: 't0'})).toThrow(); // hash único
     expect(s.tokenHashOf('d1')).toBe('h1'); expect(s.getDevice('d1')!.name).toHaveLength(60); expect(s.countDevices()).toBe(1);
-    for (let i = 0; i < 1100; i++) s.audit('d1', 'acao', `i${i}`, `t${i}`);
-    const list = s.listAudit(); expect(list).toHaveLength(100); expect(list[0]!.detail).toBe('i1099');
-    const db = new DatabaseSync(join(dir, 'dev.sqlite')); expect(Number(db.prepare('SELECT COUNT(*) n FROM remote_audit').get()!.n)).toBeLessThanOrEqual(1001); db.close();
+    for (let i = 0; i < 2100; i++) s.audit('d1', 'acao', `i${i}`, `t${i}`);
+    const list = s.listAudit(); expect(list).toHaveLength(100); expect(list[0]!.detail).toBe('i2099');
+    const db = new DatabaseSync(join(dir, 'dev.sqlite')); expect(Number(db.prepare('SELECT COUNT(*) n FROM remote_audit').get()!.n)).toBeLessThanOrEqual(2025); db.close();
     expect(s.revokeDevice('d1')).toBe(true); expect(s.revokeDevice('d1')).toBe(false);
     expect(() => s.setPort(80)).toThrow(); s.setPort(50000); expect(s.getPort()).toBe(50000); s.close();
     rmSync(dir, {recursive: true, force: true});
