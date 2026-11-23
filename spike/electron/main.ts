@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, Tray, Menu, Notification, nativeImage, type IpcMainInvokeEvent } from 'electron';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -16,12 +16,13 @@ import { canReadHunt, classifyLoadFailure, classifyLoadRejection, isMainFrameLoa
 import { audioMuted, mergeDisableFeatures, startupPlan, windowChrome } from './performance';
 import { isExpandShortcut, isSideShortcut, shortcutFocus, shortcutIndex } from './workspace-shortcuts';
 import { acquireSingleInstance } from './single-instance';
+import { debounced, runningCount, TRAY_HINT, trayAction, trayIconSize, trayMenuItems, trayTooltip, type TrayEvent } from './tray';
 import { resetSession, restartSession, openSessionSafely, mountSessionView } from './session-recovery';
 import { approvedHostsOf, catalogIdOf, createAuditCache, CATALOG, checkExtension, findInstalled, HUNT_ID, hostsCovered, resolveExtensionPath } from './extension-check';
 import type { AuditFinding, AuditVerdict, ExtensionInfo } from '../contracts/extensions';
 import { createUpdater, type Updater } from './updater';
 import type { UpdateInfo } from '../contracts/update';
-import type { PerformancePrefs } from '../contracts/preferences';
+import type { PerformancePrefs, TrayPrefs } from '../contracts/preferences';
 import { ProfileLimitError, type ProfileInput } from '../domain/profiles';
 
 let window: BrowserWindow;
@@ -46,6 +47,10 @@ let diagnosticsBaseline: DiagnosticsBaseline | null = null;
 let externalNoticeOpen = false;
 const suspended = new Set<string>(); // contas suspensas: só em memória; ao reiniciar o app todas abrem
 let perf: PerformancePrefs = {lite: false, muteUnfocused: false};
+let tray: Tray | null = null;
+let trayPrefs: TrayPrefs = {onClose:true, onMinimize:true, hintShown:false};
+let quitting = false; // before-quit: a partir daqui fechar a janela encerra de verdade
+const refreshTray = debounced(() => updateTray(), 300);
 const mutedState = new WeakMap<Electron.WebContents, boolean>();
 const startupTimers = new Set<ReturnType<typeof setTimeout>>();
 let resizeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -188,6 +193,7 @@ const trusted = (event: IpcMainInvokeEvent) => Boolean(window && !window.isDestr
 function report(id: string, state: string) {
   const changed = statusChanged(states.get(id),state);
   states.set(id,state);
+  if (changed) refreshTray.call();
   if (changed && !window.isDestroyed()) window.webContents.send('session:status', {id,state});
 }
 function arrange() {
@@ -333,16 +339,49 @@ function readMetrics() {
   return {list:metricsList, first:metricsReads <= 1};
 }
 if (process.platform === 'win32') app.setAppUserModelId('local.pokehub.desktop'); // a barra de tarefas usa o ícone do app (mesmo appId do electron-builder)
-const primary = acquireSingleInstance(app, () => {
+// Bandeja: a janela some, as sessões continuam vivas (views intactas); só o ícone fica nos ícones ocultos.
+function showWindow() {
   if (!window || window.isDestroyed()) return;
   if (window.isMinimized()) window.restore();
-  window.focus();
-});
+  window.show(); window.focus();
+}
+function hideToTray() {
+  if (!tray || window.isDestroyed()) return;
+  window.hide();
+  if (trayPrefs.hintShown) return;
+  try { trayPrefs = preferences.setTray({hintShown:true}); } catch { console.error('Falha ao salvar o aviso da bandeja.'); }
+  try {
+    if (process.platform === 'win32') tray.displayBalloon({title:'PokéHub', content:TRAY_HINT, iconType:'info'});
+    else if (Notification.isSupported()) new Notification({title:'PokéHub', body:TRAY_HINT}).show();
+  } catch { console.error('Falha ao mostrar o aviso da bandeja.'); }
+}
+function updateTray() {
+  if (!tray || tray.isDestroyed() || !store) return;
+  try {
+    const profiles = store.list();
+    tray.setToolTip(trayTooltip(runningCount(profiles,states)));
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuItems({
+      profiles, states, lite:perf.lite, open:showWindow, quit:() => app.quit(),
+      focus:id => { showWindow(); if (window.isDestroyed() || !store.list().some(profile => profile.id === id)) return; focused = id; arrange(); window.webContents.send('workspace:focus',id); },
+      setLite:lite => { try { perf = preferences.setPerformance({lite}); arrange(); updateTray(); if (!window.isDestroyed()) window.webContents.send('performance:changed',perf); } catch { console.error('Falha ao salvar o Modo leve.'); } },
+    })));
+  } catch { console.error('Falha ao atualizar a bandeja.'); }
+}
+function createTray() {
+  try {
+    const icon = nativeImage.createFromPath(join(__dirname,'../../build/icon.png')).resize({width:trayIconSize(process.platform)});
+    tray = new Tray(icon);
+    tray.on('click',showWindow);
+    updateTray();
+  } catch { tray = null; console.error('Não foi possível criar o ícone da bandeja.'); }
+}
+const primary = acquireSingleInstance(app, showWindow);
 if (primary) app.whenReady().then(() => {
   const databasePath = join(app.getPath('userData'),'pokehub.sqlite');
   store = new ProfileStore(databasePath);
   preferences = new PreferencesStore(databasePath);
   perf = preferences.getPerformance();
+  trayPrefs = preferences.getTray();
   focused = initialFocus(perf.lite ? 'focus-first' : preferences.getStartupMode(), store.list().map(profile => profile.id)); // Modo leve começa em Foco
   window = new BrowserWindow({title:'PokéHub',icon:join(__dirname,'../../build/icon.png'),backgroundColor:'#0f1218',...windowChrome(process.platform,TOP_BAR),width:1280,height:800,minWidth:700,minHeight:480,webPreferences:{preload:join(__dirname,'preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false,spellcheck:false,devTools:!app.isPackaged}});
   if (process.platform !== 'darwin') window.removeMenu(); // no macOS o menu fica na barra do sistema e mantém copiar/colar
@@ -352,13 +391,15 @@ if (primary) app.whenReady().then(() => {
   window.webContents.on('will-navigate', event => event.preventDefault());
   window.webContents.on('will-prevent-unload', event => {
     const choice = dialog.showMessageBoxSync(window,{type:'question',title:'Alterações não salvas',message:'Há alterações não salvas ou uma operação em andamento. Deseja sair mesmo assim?',buttons:['Continuar no PokéHub','Sair mesmo assim'],defaultId:0,cancelId:0,noLink:true});
-    if (choice === 1) event.preventDefault();
+    if (choice === 1) event.preventDefault(); else quitting = false; // ficou: o próximo fechar volta a seguir a bandeja
   });
   ipcMain.handle('profiles:list', event => invoke(event, () => store.list()));
   ipcMain.handle('preferences:get', event => invoke(event, () => preferences.getStartupMode()));
   ipcMain.handle('preferences:set', (event,mode: unknown) => invoke(event, () => preferences.setStartupMode(mode)));
   ipcMain.handle('performance:get', event => invoke(event, () => preferences.getPerformance()));
-  ipcMain.handle('performance:set', (event,value: unknown) => invoke(event, () => { perf = preferences.setPerformance(value); arrange(); return perf; }));
+  ipcMain.handle('performance:set', (event,value: unknown) => invoke(event, () => { perf = preferences.setPerformance(value); arrange(); refreshTray.call(); return perf; }));
+  ipcMain.handle('tray:get', event => invoke(event, () => trayPrefs));
+  ipcMain.handle('tray:set', (event,value: unknown) => invoke(event, () => { trayPrefs = preferences.setTray(value); return trayPrefs; }));
   ipcMain.handle('extensions:list', event => invokeExtensions(event, () => applyExtensions('verify')));
   ipcMain.handle('extensions:detect', event => invokeExtensions(event, detectExtensions));
   ipcMain.handle('extensions:add', event => invokeExtensions(event, addExtension));
@@ -387,8 +428,8 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('update:download', async event => { if (!trusted(event)) return {ok:false,error:'Origem não autorizada.'}; await updater.download(); return {ok:true,data:updateInfo()}; });
   ipcMain.handle('update:install', event => invoke(event, () => { if (!updater.install()) throw new Error(); }));
   ipcMain.handle('workspace:initial-focus', event => invoke(event, () => focused));
-  ipcMain.handle('profiles:create', (event,input: ProfileInput) => invoke(event, () => { const profile = store.create(input); openView(profile.id); arrange(); return profile; }));
-  ipcMain.handle('profiles:update', (event,id: unknown,input: ProfileInput) => invoke(event, () => { if (typeof id !== 'string') throw new Error(); return store.update(id,input); }));
+  ipcMain.handle('profiles:create', (event,input: ProfileInput) => invoke(event, () => { const profile = store.create(input); openView(profile.id); arrange(); refreshTray.call(); return profile; }));
+  ipcMain.handle('profiles:update', (event,id: unknown,input: ProfileInput) => invoke(event, () => { if (typeof id !== 'string') throw new Error(); const profile = store.update(id,input); refreshTray.call(); return profile; }));
   ipcMain.handle('profiles:remove', async (event,id: unknown) => {
     if (!trusted(event) || typeof id !== 'string' || resetting.has(id)) return {ok:false,error:'Não foi possível remover o perfil.'};
     resetting.add(id);
@@ -398,6 +439,7 @@ if (primary) app.whenReady().then(() => {
       try { store.remove(id); } catch (error) { if (!window.isDestroyed()) openView(id); throw error; }
       suspended.delete(id);
       if (focused === id) focused = null;
+      refreshTray.call();
       if (!window.isDestroyed()) arrange();
       return {ok:true,data:undefined};
     } catch { return {ok:false,error:'Não foi possível remover o perfil. Verifique o estado e tente novamente.'}; }
@@ -453,6 +495,7 @@ if (primary) app.whenReady().then(() => {
     try {
       await closeViewAwaited(id);
       if (!window.isDestroyed()) { report(id,'suspended'); arrange(); }
+      refreshTray.call();
       return {ok:true,data:undefined};
     } catch { suspended.delete(id); return {ok:false,error:'Não foi possível suspender a conta.'}; }
     finally { resetting.delete(id); }
@@ -461,7 +504,7 @@ if (primary) app.whenReady().then(() => {
     if (typeof id !== 'string' || resetting.has(id) || !suspended.has(id) || !store.list().some(profile => profile.id === id)) throw new Error();
     suspended.delete(id);
     if (!openView(id)) { suspended.add(id); throw new Error(); }
-    report(id,'loading'); arrange();
+    report(id,'loading'); arrange(); refreshTray.call();
   }));
   ipcMain.handle('session:clear', async (event,id: unknown) => {
     if (!trusted(event) || typeof id !== 'string' || resetting.has(id)) return {ok:false,error:'Não foi possível limpar a sessão.'};
@@ -494,7 +537,12 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('session:states', event => invoke(event, () => Object.fromEntries(states)));
   ipcMain.handle('workspace:auto-focus', event => invoke(event, () => autoFocused));
   window.on('resize', arrangeSoon);
+  const trayEvent = (event: TrayEvent) => trayAction({event, platform:process.platform, prefs:trayPrefs, quitting, hasTray:tray !== null});
+  window.on('close', event => { if (trayEvent('close') === 'hide') { event.preventDefault(); hideToTray(); } });
+  window.on('minimize', () => { if (trayEvent('minimize') === 'hide') hideToTray(); });
+  createTray();
   window.on('closed', () => {
+    refreshTray.cancel(); tray?.destroy(); tray = null;
     clearTimeout(dragTimer); clearTimeout(resizeTimer); for (const timer of startupTimers) clearTimeout(timer); startupTimers.clear(); updater.dispose();
     for (const view of views.values()) { try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { console.error('Falha ao encerrar uma sessão.'); } }
     views.clear(); preferences.close(); store.close();
@@ -528,4 +576,5 @@ if (primary) app.whenReady().then(() => {
     : 'Não foi possível iniciar o aplicativo ou abrir os dados locais. Verifique a instalação e o armazenamento.';
   dialog.showErrorBox('PokéHub', message); app.quit();
 });
-app.on('window-all-closed', () => app.quit());
+app.on('before-quit', () => { quitting = true; });
+app.on('window-all-closed', () => { if (quitting || !tray) app.quit(); }); // escondida na bandeja a janela não está fechada; só o Sair encerra

@@ -69,6 +69,18 @@ class FakeView {
   setVisible(visible: boolean) { this.visible = visible; }
   setBounds() {}
 }
+const trays: FakeTray[] = [];
+const windowCalls: string[] = [];
+let menuTemplate: {label?:string;type?:string;checked?:boolean;click?:() => void}[] = [];
+class FakeTray extends EventEmitter {
+  tip = ''; balloons: unknown[] = []; destroyedFlag = false;
+  constructor(public icon: unknown) { super(); trays.push(this); }
+  setToolTip(text: string) { this.tip = text; }
+  setContextMenu() {}
+  displayBalloon(options: unknown) { this.balloons.push(options); }
+  isDestroyed() { return this.destroyedFlag; }
+  destroy() { this.destroyedFlag = true; }
+}
 let shell: FakeWindow;
 class FakeWindow extends EventEmitter {
   webContents = new FakeContents();
@@ -81,7 +93,10 @@ class FakeWindow extends EventEmitter {
   removeMenu() {}
   isDestroyed() { return false; }
   isMinimized() { return false; }
-  focus() {}
+  focus() { windowCalls.push('focus'); }
+  hide() { windowCalls.push('hide'); }
+  show() { windowCalls.push('show'); }
+  restore() { windowCalls.push('restore'); }
   loadFile() { return Promise.resolve(); }
 }
 const switches: [string, string][] = [];
@@ -98,7 +113,7 @@ const fakeApp = Object.assign(new EventEmitter(), {
     : [{pid:123,creationTime:100,memory:{workingSetSize:2048},cpu:{percentCPUUsage:3}}],
   quit: () => {},
 });
-vi.doMock('electron', () => ({app: fakeApp, BrowserWindow:FakeWindow, WebContentsView:FakeView, ipcMain:{handle: (name:string, handler:Handler) => handlers.set(name,handler)}, shell:{openExternal:async (url:string) => {openedExternal.push(url);}}, dialog:{showOpenDialog:async () => ({canceled:chosenFolder === null,filePaths:chosenFolder === null ? [] : [chosenFolder]}),showErrorBox() {},showMessageBoxSync:()=>confirmChoice,showMessageBox:async (_window:unknown, options:{message:string}) => {notices.push(options.message);return {response:noticeChoice};}}}));
+vi.doMock('electron', () => ({Tray:FakeTray, Menu:{buildFromTemplate:(template: typeof menuTemplate) => { menuTemplate = template; return {}; }}, Notification:class { static isSupported() { return false; } }, nativeImage:{createFromPath:() => ({resize:(size:unknown) => size})}, app: fakeApp, BrowserWindow:FakeWindow, WebContentsView:FakeView, ipcMain:{handle: (name:string, handler:Handler) => handlers.set(name,handler)}, shell:{openExternal:async (url:string) => {openedExternal.push(url);}}, dialog:{showOpenDialog:async () => ({canceled:chosenFolder === null,filePaths:chosenFolder === null ? [] : [chosenFolder]}),showErrorBox() {},showMessageBoxSync:()=>confirmChoice,showMessageBox:async (_window:unknown, options:{message:string}) => {notices.push(options.message);return {response:noticeChoice};}}}));
 afterAll(() => { shell?.emit('closed'); vi.doUnmock('electron'); rmSync(directory,{recursive:true,force:true}); });
 
 describe('processo principal', () => {
@@ -468,6 +483,44 @@ describe('processo principal', () => {
   expect(call('performance:set',{lite:false})).toEqual({ok:true,data:{lite:false,muteUnfocused:false}});
   expect(ids.map(last).every(value => value === false)).toBe(true);
   expect(call('session:layout',null,false,false).ok).toBe(true);
+ });
+ it('bandeja: preferências validadas, esconder ao fechar/minimizar, aviso único, menu e Sair', async () => {
+  const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
+  const call = (channel:string,...args:unknown[]) => handlers.get(channel)?.(sender,...args) as {ok:boolean;data?:unknown};
+  const tray = trays[0]!; expect(trays).toHaveLength(1);
+  expect(tray.icon).toEqual({width:16}); expect(tray.tip).toMatch(/^PokéHub — \d conta/);
+  expect(call('tray:get')).toEqual({ok:true,data:{onClose:true,onMinimize:true,hintShown:false}});
+  for (const bad of ['x',null,{onClose:'sim'},{onMinimize:1}]) expect(call('tray:set',bad).ok).toBe(false);
+  expect((handlers.get('tray:set')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame},{onClose:false}) as {ok:boolean}).ok).toBe(false);
+  // fechar: cancela o fechar e esconde (as views continuam)
+  const viewsBefore = shell.children.size; windowCalls.length = 0;
+  const prevent = vi.fn(); shell.emit('close',{preventDefault:prevent});
+  expect(prevent).toHaveBeenCalledTimes(1); expect(windowCalls).toEqual(['hide']); expect(shell.children.size).toBe(viewsBefore);
+  expect(tray.balloons).toHaveLength(1); expect(call('tray:get').data).toMatchObject({hintShown:true});
+  shell.emit('minimize'); expect(windowCalls).toEqual(['hide','hide']); expect(tray.balloons).toHaveLength(1); // aviso só na primeira vez
+  // opções desligadas: o fechar segue normal
+  expect(call('tray:set',{onClose:false,onMinimize:false})).toEqual({ok:true,data:{onClose:false,onMinimize:false,hintShown:true}});
+  const noPrevent = vi.fn(); windowCalls.length = 0; shell.emit('close',{preventDefault:noPrevent}); shell.emit('minimize');
+  expect(noPrevent).not.toHaveBeenCalled(); expect(windowCalls).toEqual([]);
+  expect(call('tray:set',{onClose:true,onMinimize:true}).ok).toBe(true);
+  // clique no ícone e segunda instância mostram a janela escondida
+  windowCalls.length = 0; tray.emit('click'); expect(windowCalls).toEqual(['show','focus']);
+  windowCalls.length = 0; fakeApp.emit('second-instance'); expect(windowCalls).toEqual(['show','focus']);
+  // menu (reconstruído com debounce): Abrir, uma entrada por conta, Modo leve e Sair
+  const total = (call('profiles:list').data as unknown[]).length; await vi.waitFor(() => expect(menuTemplate.filter(item => / — /.test(item.label ?? '')).length).toBe(total));
+  const labels = menuTemplate.map(item => item.type === 'separator' ? '-' : item.label);
+  expect(labels[0]).toBe('Abrir PokéHub'); expect(labels.filter(label => / — (pronta|carregando|suspensa|sem conexão|precisa entrar|com erro)$/.test(label ?? ''))).toHaveLength(total); expect(labels.at(-2)).toBe('Modo leve'); expect(labels.at(-1)).toBe('Sair do PokéHub');
+  const profileItem = menuTemplate[2]!; shell.webContents.sent.length = 0; windowCalls.length = 0; profileItem.click?.();
+  expect(windowCalls).toEqual(['show','focus']); expect(shell.webContents.sent.at(-1)?.[0]).toBe('workspace:focus');
+  const lite = menuTemplate.find(item => item.label === 'Modo leve')!; lite.click?.();
+  expect(call('performance:get')).toEqual({ok:true,data:{lite:true,muteUnfocused:false}}); expect(shell.webContents.sent.some(entry => entry[0] === 'performance:changed')).toBe(true);
+  expect(call('performance:set',{lite:false}).ok).toBe(true);
+  // Sair: before-quit libera o fechar, o fechar seguinte não é cancelado e o guarda de alterações continua valendo
+  fakeApp.emit('before-quit');
+  const quitClose = vi.fn(); windowCalls.length = 0; shell.emit('close',{preventDefault:quitClose}); expect(quitClose).not.toHaveBeenCalled(); expect(windowCalls).toEqual([]);
+  confirmChoice = 1; const unload = vi.fn(); shell.webContents.emit('will-prevent-unload',{preventDefault:unload}); expect(unload).toHaveBeenCalledTimes(1);
+  confirmChoice = 0; shell.webContents.emit('will-prevent-unload',{preventDefault:unload}); // "Continuar no PokéHub": volta a seguir a bandeja
+  const again = vi.fn(); shell.emit('close',{preventDefault:again}); expect(again).toHaveBeenCalledTimes(1);
  });
  it('monitor por conta: agrupa CPU e memória privada por conta, hub e GPU, só para a interface', async () => {
   const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};

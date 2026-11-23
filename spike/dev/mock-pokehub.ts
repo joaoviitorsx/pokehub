@@ -4,6 +4,7 @@ import type { ExtensionInfo } from '../contracts/extensions';
 import type { HuntRow, HuntSnapshot, HuntSprite } from '../contracts/hunt';
 import type { MarketListing, MarketScan } from '../domain/market';
 import type { UpdateInfo, UpdateStatus } from '../contracts/update';
+import type { PerformancePrefs } from '../contracts/preferences';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
 const ok = <T>(data: T): Promise<Result<T>> => new Promise(resolve => setTimeout(() => resolve({ok: true, data}), 40));
@@ -24,6 +25,7 @@ let profiles: Profile[] = empty ? [] : seed.slice(0, accountCount).map(([label0,
 const states: Record<string, string> = {[uid(1)]: 'ready', [uid(2)]: 'loading', [uid(3)]: 'auth_required', [uid(4)]: 'error'};
 if (params.get('allready') === '1') for (const key of Object.keys(states)) states[key] = 'ready'; // ?allready=1: todas as contas prontas
 let preferences: 'grid' | 'focus-first' = 'grid';
+let trayPrefs = {onClose: true, onMinimize: true, hintShown: false};
 let perfPrefs = {lite: params.get('lite') === '1', muteUnfocused: false};
 
 const ext = (o: Partial<ExtensionInfo> & Pick<ExtensionInfo, 'id' | 'name'>): ExtensionInfo => ({catalogId: null, version: null, path: `C:\\Extensoes\\${o.name}`, enabled: true, loaded: 4, sessions: 4, verdict: 'leitura', findings: [], hosts: [], approvedHosts: [], pending: false, error: null, ...o});
@@ -85,6 +87,9 @@ window.pokehub = {
   getPreferences: () => ok(preferences),
   getPerformance: () => ok({...perfPrefs}),
   setPerformance: change => { perfPrefs = {...perfPrefs, ...change}; return ok({...perfPrefs}); },
+  getTray: () => ok({...trayPrefs}),
+  setTray: change => { trayPrefs = {...trayPrefs, ...change}; return ok({...trayPrefs}); },
+  onPerformance: cb => on<PerformancePrefs>('performance', cb),
   suspend: id => { states[id] = 'suspended'; emit('status', {id, state: 'suspended'}); return ok(undefined); },
   resume: id => { states[id] = 'loading'; emit('status', {id, state: 'loading'}); setTimeout(() => { states[id] = 'ready'; emit('status', {id, state: 'ready'}); }, 1200); return ok(undefined); },
   processes: () => ok(processes()),

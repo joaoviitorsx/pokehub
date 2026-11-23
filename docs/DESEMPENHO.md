@@ -82,10 +82,12 @@ Entregue, com testes automatizados:
 - **P1-6 e P2-4** monitor por conta em Diagnóstico (`diagnostics:processes`, a cada 4 s só com a seção aberta): CPU, memória privada e conjunto de trabalho por conta, hub, GPU e outros. Aviso e botão Recarregar (manual) acima de 2 GB por conta, limite configurável.
 - **P2-1** `disable-features=SpareRendererForSitePerProcess` (junta com o que já existir).
 - **P2-5/6** cache de `store.list()` (invalidado nas escritas e, via `PRAGMA data_version`, por outra conexão); `arrange()` no resize no máximo a cada ~33 ms, sempre com uma última chamada ao parar; `useLayoutEffect` do indicador com dependências e o listener de resize registrado uma vez.
+- **Bandeja do sistema** (migração v10: `tray_on_close` 1, `tray_on_minimize` 1, `tray_hint_shown` 0; `spike/electron/tray.ts`): ao fechar/minimizar (opções em Gerenciar → Layout; no macOS só o fechar) a janela some com `hide()` e o ícone fica nos ícones ocultos; as views das contas **não são destruídas**, então os jogos seguem rodando. Menu: Abrir, uma entrada por conta (com estado), Modo leve e Sair do PokéHub (único jeito de encerrar de verdade). Com a janela escondida o renderer fica `document.hidden` e o polling da interface já pausa. O menu é reconstruído com debounce de 300 ms.
 - Barra de título nativa escondida (overlay nas cores do app) e `AppUserModelId` no Windows.
 
 **Falta medir na máquina real (Windows, app empacotado):**
 - **P0-1** se as views ocultas ficam com `visibilityState=hidden`.
+- **Bandeja × throttling (mesma dúvida do P0-2):** com a janela escondida na bandeja o Chromium pode reduzir timers/renderização das páginas do jogo. Como testar: deixe uma conta caçando/farmando, anote XP/itens, clique no X (vai para a bandeja), espere 5–10 min, reabra pelo ícone e compare o ganho com o de uma janela aberta; repita com a Diagnóstico → CPU por conta. Se não progredir, a saída é a opção por conta "Manter ativa" (`setBackgroundThrottling(false)`).
 - **P0-2** se o jogo progride com a view oculta (`backgroundThrottling`); só então decidir a opção por conta "Manter ativa".
 - Os ganhos reais de CPU, GPU e memória de cada item acima (cenários S0–S6 deste documento).
 - Não implementados: P2-2 (`--enable-low-end-device-mode`) e P2-7 (extensões por conta).

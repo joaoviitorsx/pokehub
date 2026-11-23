@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type CSS
 import { createRoot } from 'react-dom/client';
 import type { Profile, ProfileInput } from '../domain/profiles';
 import type { DiagnosticsSample, ProcessesSample } from '../contracts/diagnostics';
-import type { PerformancePrefs, StartupMode } from '../contracts/preferences';
+import type { PerformancePrefs, StartupMode, TrayPrefs } from '../contracts/preferences';
 import type { AuditFinding, AuditVerdict, ExtensionInfo } from '../contracts/extensions';
 import type { UpdateInfo, UpdateStatus } from '../contracts/update';
 import './style.css';
@@ -19,7 +19,7 @@ import { columns, COL_HEAD, MAX_PROFILES, sideWidth, TOP_BAR } from '../electron
 type Result<T> = {ok:true; data:T} | {ok:false; error:string};
 type Status = {id:string;state:string};
 declare global { interface Window { pokehub: {
- getPerformance():Promise<Result<PerformancePrefs>>; setPerformance(value:Partial<PerformancePrefs>):Promise<Result<PerformancePrefs>>; suspend(id:string):Promise<Result<void>>; resume(id:string):Promise<Result<void>>; processes():Promise<Result<ProcessesSample>>;
+ getTray():Promise<Result<TrayPrefs>>; setTray(value:Partial<TrayPrefs>):Promise<Result<TrayPrefs>>; onPerformance(callback:(value:PerformancePrefs)=>void):()=>void; getPerformance():Promise<Result<PerformancePrefs>>; setPerformance(value:Partial<PerformancePrefs>):Promise<Result<PerformancePrefs>>; suspend(id:string):Promise<Result<void>>; resume(id:string):Promise<Result<void>>; processes():Promise<Result<ProcessesSample>>;
  list(): Promise<Result<Profile[]>>; initialFocus():Promise<Result<string|null>>; getPreferences():Promise<Result<StartupMode>>; setStartupMode(mode:StartupMode):Promise<Result<StartupMode>>; create(input:ProfileInput): Promise<Result<Profile>>; update(id:string,input:ProfileInput): Promise<Result<Profile>>; remove(id:string): Promise<Result<void>>;
  layout(id:string|null,hide:boolean,side:boolean,panel?:number,account?:string|null): Promise<Result<void>>; onToggleExpand(callback:(id:string|null)=>void):()=>void; drag(active:boolean): Promise<Result<void>>; huntSnapshot(id:string,soLiberadas?:boolean):Promise<Result<HuntSnapshot>>; onToggleSide(callback:()=>void):()=>void; reload(id:string): Promise<Result<void>>; restart(id:string): Promise<Result<void>>; clearSession(id:string): Promise<Result<void>>; states(): Promise<Result<Record<string,string>>>; diagnostics():Promise<Result<DiagnosticsSample>>; onStatus(callback:(status:Status)=>void):()=>void; onFocus(callback:(id:string|null)=>void):()=>void; autoFocus():Promise<Result<string|null>>; onAutoFocus(callback:(id:string|null)=>void):()=>void;
  market: {scan(id:string):Promise<Result<MarketScan>>; readAll(id:string):Promise<Result<void>>; stop(id:string):Promise<Result<boolean>>; onProgress(callback:(progress:MarketProgress)=>void):()=>void};
@@ -99,11 +99,13 @@ function App() {
    return () => window.removeEventListener('resize',place);
  },[]);
  const [perf,setPerf] = useState<PerformancePrefs>({lite:false,muteUnfocused:false});
+ const [tray,setTray] = useState<TrayPrefs>({onClose:true,onMinimize:true,hintShown:false});
  const [procs,setProcs] = useState<ProcessesSample | null>(null);
  const [memLimitGb,setMemLimitGb] = useState(() => { try { const value = Number(localStorage.getItem('pokehub.memLimitGb')); return value > 0 ? value : 2; } catch { return 2; } });
  useEffect(() => { try { localStorage.setItem('pokehub.memLimitGb',String(memLimitGb)); } catch { /* preferência só não persiste */ } },[memLimitGb]);
  useEffect(() => { if (perf.lite) document.documentElement.dataset.lite = ''; else delete document.documentElement.dataset.lite; },[perf.lite]); // Modo leve: sem animações (CSS)
  useEffect(() => { void window.pokehub.getPerformance().then(result => { if (result.ok) setPerf(result.data); }).catch(() => undefined); },[]);
+ useEffect(() => { void window.pokehub.getTray().then(result => { if (result.ok) setTray(result.data); }).catch(() => undefined); return window.pokehub.onPerformance(setPerf); },[]); // o menu da bandeja também muda o Modo leve
  async function refresh() {
    const result = await window.pokehub.list();
    if (result.ok) {setProfiles(result.data);setLoadError(false);} else {setLoadError(true);setMessage(result.error);}
@@ -199,6 +201,10 @@ function App() {
  async function changePerf(change: Partial<PerformancePrefs>) {
    try { const result = await window.pokehub.setPerformance(change); if (result.ok) setPerf(result.data); else setMessage(result.error); }
    catch { setMessage('Não foi possível salvar o Modo leve.'); }
+ }
+ async function changeTray(change: Partial<TrayPrefs>) {
+   try { const result = await window.pokehub.setTray(change); if (result.ok) setTray(result.data); else setMessage(result.error); }
+   catch { setMessage('Não foi possível salvar a opção da bandeja.'); }
  }
  async function suspendToggle(id: string, suspended: boolean) {
    try { const result = await (suspended ? window.pokehub.resume(id) : window.pokehub.suspend(id)); if (!result.ok) setMessage(result.error); }
@@ -356,6 +362,9 @@ function App() {
    {perf.lite && <p className="lite-tip" role="note">Nas contas que você não está olhando, ative o Modo economia do próprio jogo (botão na tela de sessão) — economiza CPU/GPU.</p>}
    <label className="switch"><span>Som só na conta em foco</span><input type="checkbox" role="switch" checked={perf.muteUnfocused || perf.lite} disabled={perf.lite} onChange={event => void changePerf({muteUnfocused:event.target.checked})}/></label>
    <p className="note">Silencia as contas que não estão visíveis (em Foco, as outras). Na grade todas as colunas continuam com som. O Modo leve já inclui esta opção.</p>
+   <label className="switch"><span>Ao fechar, continuar na bandeja</span><input type="checkbox" role="switch" checked={tray.onClose} onChange={event => void changeTray({onClose:event.target.checked})}/></label>
+   <label className="switch"><span>Ao minimizar, ir para a bandeja</span><input type="checkbox" role="switch" checked={tray.onMinimize} onChange={event => void changeTray({onMinimize:event.target.checked})}/></label>
+   <p className="note">Na bandeja o PokéHub fica só no ícone da área de notificação e os jogos continuam rodando. Para encerrar de vez: clique com o botão direito no ícone da bandeja → Sair do PokéHub. No macOS minimizar segue o Dock.</p>
    <p className="note">Atalhos: Ctrl+0 grade, Ctrl+1–4 foca uma conta, Ctrl+H abre o assistente (Caçar e Mercado). {expandHint}</p></section>}
   {section === 'diag' && <section aria-label="Diagnóstico"><p>Valores dos processos do PokéHub, incluindo as páginas do jogo. Os dados ficam nesta máquina.</p>{diagnostics && <dl className="diagnostics"><div><dt>Processos</dt><dd>{diagnostics.processCount}</dd></div><div><dt>Memória residente somada</dt><dd>{diagnostics.memoryKb === null ? 'Indisponível' : `${new Intl.NumberFormat('pt-BR').format(diagnostics.memoryKb)} KB`}</dd></div><div><dt>CPU somada</dt><dd>{diagnostics.cpuPercent === null ? 'Indisponível' : `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(diagnostics.cpuPercent)}%`}</dd></div>{diagnostics.cpuIntervalMs !== null && <div><dt>Intervalo aproximado da CPU</dt><dd>{new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(diagnostics.cpuIntervalMs / 1000)} s</dd></div>}</dl>}<p>A memória compartilhada pode ser contada mais de uma vez. A CPU pode ultrapassar 100% e exige duas amostras com pelo menos 1 segundo de intervalo; mudanças nos processos reiniciam a comparação.</p>{diagnostics && <p>Última amostra: {new Date(diagnostics.sampledAt).toLocaleTimeString('pt-BR')}</p>}
    <div className="diag-procs"><h2>Por conta</h2>{procs ? <table className="diag-table"><thead><tr><th>Item</th><th>CPU</th><th>Memória privada</th><th>Conjunto de trabalho</th><th/></tr></thead><tbody>

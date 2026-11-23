@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from './database';
-import type { PerformancePrefs, StartupMode } from '../contracts/preferences';
+import type { PerformancePrefs, StartupMode, TrayPrefs } from '../contracts/preferences';
 
 export interface ExtensionRow { id: string; path: string; enabled: boolean; approvedHosts: string[] }
 const parseHosts = (value: unknown): string[] => {
@@ -39,6 +39,22 @@ export class PreferencesStore {
       if (typeof input[key] !== 'boolean' || this.db.prepare(`UPDATE workspace_settings SET ${column}=? WHERE id=1`).run(input[key] ? 1 : 0).changes !== 1) throw new Error('Preferência inválida');
     }
     return this.getPerformance();
+  }
+  getTray(): TrayPrefs {
+    const row = this.db.prepare('SELECT tray_on_close, tray_on_minimize, tray_hint_shown FROM workspace_settings WHERE id=1').get();
+    return {onClose:Number(row?.tray_on_close ?? 1) !== 0, onMinimize:Number(row?.tray_on_minimize ?? 1) !== 0, hintShown:Number(row?.tray_hint_shown ?? 0) !== 0};
+  }
+  /** Aceita só os campos booleanos presentes; o resto fica como está. */
+  setTray(value: unknown): TrayPrefs {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Preferência inválida');
+    const input = value as Record<string, unknown>;
+    const fields = [['onClose','tray_on_close'],['onMinimize','tray_on_minimize'],['hintShown','tray_hint_shown']] as const;
+    if (fields.some(([key]) => input[key] !== undefined && typeof input[key] !== 'boolean')) throw new Error('Preferência inválida'); // valida tudo antes de gravar
+    for (const [key,column] of fields) {
+      if (input[key] === undefined) continue;
+      if (typeof input[key] !== 'boolean' || this.db.prepare(`UPDATE workspace_settings SET ${column}=? WHERE id=1`).run(input[key] ? 1 : 0).changes !== 1) throw new Error('Preferência inválida');
+    }
+    return this.getTray();
   }
   listExtensions(): ExtensionRow[] {
     return this.db.prepare('SELECT id, path, enabled, approved_hosts FROM extensions ORDER BY rowid').all().map(row => ({id:String(row.id), path:String(row.path), enabled:row.enabled === 1, approvedHosts:parseHosts(row.approved_hosts)}));
