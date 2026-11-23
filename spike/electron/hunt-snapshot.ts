@@ -4,7 +4,7 @@ export const HUNT_UNAVAILABLE = 'Dados do /hunt indisponíveis nesta conta';
 const GAME_ORIGIN = 'https://pokeidle.io';
 const MAX_ROWS = 60;
 const SPRITE_MS = 4000;
-const CACHE_MS = 60_000; // os bônus de XP expiram sem mudar a assinatura
+const CACHE_MS = 180_000; // os bônus de XP expiram sem mudar a assinatura
 
 // Código fixo executado na página do jogo: nunca recebe dado do renderer. Só lê o que a extensão
 // expõe em `__pokeidleHunt` (últimos eventos retidos do barramento) e chama o cálculo DELA

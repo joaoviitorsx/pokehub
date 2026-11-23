@@ -22,7 +22,7 @@ describe('banco v7/v8: extensões, atualização e hosts aprovados', () => {
       expect(store.getStartupMode()).toBe('focus-first'); expect(store.getAutoUpdateCheck()).toBe(true);
       store.close();
       const check = new DatabaseSync(path);
-      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:8});
+      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:9});
       expect(check.prepare('SELECT hunt_extension_path FROM workspace_settings').get()).toMatchObject({hunt_extension_path:'/home/u/ext/1.0.17_0'});
       expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'});
       check.close();
@@ -40,7 +40,7 @@ describe('banco v7/v8: extensões, atualização e hosts aprovados', () => {
       const again = new PreferencesStore(path);
       expect(again.listExtensions()).toEqual([]); again.close();
       const check = new DatabaseSync(path);
-      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:8}); check.close();
+      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:9}); check.close();
     });
   });
   it('migra a v7 só acrescentando approved_hosts, sem perder as extensões', () => {
@@ -48,7 +48,7 @@ describe('banco v7/v8: extensões, atualização e hosts aprovados', () => {
       const store = new PreferencesStore(path);
       expect(store.listExtensions()).toEqual([{id:'a',path:'/ext/a',enabled:true,approvedHosts:[]}]); store.close();
       const check = new DatabaseSync(path);
-      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:8}); check.close();
+      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:9}); check.close();
     });
   });
   it('uma v8 já migrada abre sem repetir a migração', () => {

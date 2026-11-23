@@ -31,6 +31,7 @@ export function MarketPanel({id, state}: {id: string | undefined; state: string}
   const [runs, setRuns] = useState<Record<string, MarketProgress | {starting: true}>>({});
   const [startError, setStartError] = useState<Record<string, string>>({});
   const running = useRef(new Set<string>());
+  const lastScan = useRef<Record<string, {sig: string; at: number}>>({}); // retrato igual ao anterior não gera setState (o acúmulo só é renovado a cada 60 s)
   const live = huntFetchable(state);
   const add = useCallback((profileId: string, scan: MarketScan) => { if (!scan.open) return; const at = Date.now(); setNow(at); setAccs(old => ({...old, [profileId]: accumulate(old[profileId] ?? null, sessionKey(profileId, scan.query), scan, at)})); }, []);
   // Progresso da leitura assistida (processo principal): cada página lida entra no acúmulo; ao sair da aba a leitura é interrompida.
@@ -47,12 +48,16 @@ export function MarketPanel({id, state}: {id: string | undefined; state: string}
   useEffect(() => {
     if (!id || !live) return;
     let alive = true, timer = 0;
+    delete lastScan.current[id]; // reinício do ciclo (Limpar, Tentar de novo): a próxima leitura sempre entra
     const cycle = async () => {
       if (!document.hidden && !running.current.has(id)) { // durante a leitura de páginas o próprio laço lê; sem leituras concorrentes
         let timeout: ReturnType<typeof setTimeout> | undefined;
         const result = await Promise.race([window.pokehub.market.scan(id), new Promise<never>((_resolve, reject) => { timeout = setTimeout(reject, READ_TIMEOUT_MS); })])
           .catch(() => ({ok: false as const, error: unavailable})).finally(() => clearTimeout(timeout));
         if (!alive) return;
+        const sig = JSON.stringify(result), prev = lastScan.current[id], at = Date.now();
+        if (prev && prev.sig === sig && at - prev.at < 60_000) { if (alive) timer = window.setTimeout(() => void cycle(), MARKET_REFRESH_MS); return; }
+        lastScan.current[id] = {sig, at};
         setEntries(old => ({...old, [id]: result.ok ? {data: result.data} : {error: result.error}}));
         if (result.ok) add(id, result.data);
       }

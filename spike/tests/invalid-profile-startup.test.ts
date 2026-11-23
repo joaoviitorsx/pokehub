@@ -27,7 +27,7 @@ class FakeWindow extends EventEmitter {
  focus(){}
  loadFile(){return Promise.resolve();}
 }
-const app=Object.assign(new EventEmitter(),{requestSingleInstanceLock:()=>true,whenReady:()=>Promise.resolve(),getPath:()=>directory,quit:vi.fn()});
+const app=Object.assign(new EventEmitter(),{requestSingleInstanceLock:()=>true,commandLine:{getSwitchValue:()=>'',appendSwitch:vi.fn()},setAppUserModelId:vi.fn(),whenReady:()=>Promise.resolve(),getPath:()=>directory,quit:vi.fn()});
 vi.doMock('electron',()=>({app,BrowserWindow:FakeWindow,WebContentsView:createView,ipcMain:{handle:(name:string,handler:(...args:unknown[])=>unknown)=>handlers.set(name,handler)},dialog:{showErrorBox(){}}}));
 afterAll(()=>{shell?.emit('closed');vi.doUnmock('electron');rmSync(directory,{recursive:true,force:true});});
 

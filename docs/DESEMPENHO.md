@@ -68,3 +68,24 @@ Quem mais consome são os 4 renderers do jogo: um por partição, sem compartilh
 4. **Progresso oculto:** duas contas na mesma hunt, uma visível e outra oculta, por 30–60 min. Comparar o XP e o ouro ganhos.
 5. **24 h:** anotar a memória por conta em 0 h, 1 h, 6 h e 24 h.
 6. Registrar os resultados em `docs/benchmarks/`. **Nunca** rodar `bun run benchmark` com o jogo aberto.
+
+## Implementado (branch `perf`)
+Entregue, com testes automatizados:
+- **P0-3** auditoria de extensões assíncrona (`fs.promises`) e em cache por pasta, versão do manifest e lista de `.js` com tamanho e mtime. `extensions:list` só faz `stat` (nada é relido se nada mudou); Detectar e Adicionar forçam a releitura; toggle e remover usam o cache sem tocar no disco. A janela abre antes: a primeira conta espera a auditoria inicial em segundo plano.
+- **P0-4** `session:status` só sai quando o estado muda; `did-start-loading` de subframe é ignorado (o `did-stop-loading` continua destravando o estado). A lateral deriva o `pool` de uma chave em texto, guardada em ref: o ciclo não reinicia por eventos de status.
+- **P0-5** `pulse` e `shimmer` finitos; `:root[data-lite]` desliga animações e transições.
+- **P1-1** início escalonado: interface, depois a conta em foco (ou a primeira), depois as outras a cada 2,5 s.
+- **P1-2** `spellcheck:false` e `devTools: !app.isPackaged` (janela e views).
+- **P1-3** lateral: conta selecionada a cada 10 s, pré-aquecimento a cada 5 min, cache do cálculo completo de 3 min (mesma assinatura); sem `setState` quando o retrato não mudou (Caçar e Mercado; no Mercado o acúmulo é renovado a cada 60 s para os anúncios não expirarem).
+- **P1-4 e P1-7 / Modo leve** (migração v9: colunas `lite_mode` e `mute_unfocused`, padrão 0): em Gerenciar → Layout. Liga: sem animações, lateral a cada 20 s e sem pré-aquecimento, início em Foco, áudio mutado fora de foco, dica do Modo economia do jogo. "Som só na conta em foco" é independente. Na grade todas as colunas visíveis seguem com som.
+- **P1-5** Suspender/Retomar (`session:suspend`/`session:resume`): fecha só a view pelo caminho aguardado, sem tocar na partição. O estado `suspended` é **só em memória**: ao reiniciar o app todas as contas abrem. A coluna fica com o marcador "Conta suspensa" (`.col-suspended`, botão `.col-head .suspend`).
+- **P1-6 e P2-4** monitor por conta em Diagnóstico (`diagnostics:processes`, a cada 4 s só com a seção aberta): CPU, memória privada e conjunto de trabalho por conta, hub, GPU e outros. Aviso e botão Recarregar (manual) acima de 2 GB por conta, limite configurável.
+- **P2-1** `disable-features=SpareRendererForSitePerProcess` (junta com o que já existir).
+- **P2-5/6** cache de `store.list()` (invalidado nas escritas e, via `PRAGMA data_version`, por outra conexão); `arrange()` no resize no máximo a cada ~33 ms, sempre com uma última chamada ao parar; `useLayoutEffect` do indicador com dependências e o listener de resize registrado uma vez.
+- Barra de título nativa escondida (overlay nas cores do app) e `AppUserModelId` no Windows.
+
+**Falta medir na máquina real (Windows, app empacotado):**
+- **P0-1** se as views ocultas ficam com `visibilityState=hidden`.
+- **P0-2** se o jogo progride com a view oculta (`backgroundThrottling`); só então decidir a opção por conta "Manter ativa".
+- Os ganhos reais de CPU, GPU e memória de cada item acima (cenários S0–S6 deste documento).
+- Não implementados: P2-2 (`--enable-low-end-device-mode`) e P2-7 (extensões por conta).

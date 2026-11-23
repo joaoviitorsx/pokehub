@@ -5,9 +5,9 @@ export function openDatabase(path: string): Database {
   const db = new DatabaseSync(path);
   try {
     const version = db.prepare('PRAGMA user_version').get()?.user_version;
-    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8) throw new Error('Versão de banco incompatível');
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9) throw new Error('Versão de banco incompatível');
     db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON'); // as cascatas do Grindolino dependem das FKs em toda conexão
-    if (version < 8) {
+    if (version < 9) {
       db.exec('BEGIN IMMEDIATE');
       try {
         if (version === 0) db.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY, label TEXT NOT NULL, emailLabel TEXT NOT NULL, characterName TEXT NOT NULL, colorToken TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)');
@@ -28,7 +28,9 @@ export function openDatabase(path: string): Database {
         // v7: várias extensões (a coluna hunt_extension_path fica, sem uso) e verificação automática de atualização
         if (version < 7) db.exec("CREATE TABLE extensions (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL, added_at TEXT NOT NULL); INSERT INTO extensions SELECT 'mhnplloljgchpfpcpbhmcokmnefodjnh', hunt_extension_path, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM workspace_settings WHERE id=1 AND hunt_extension_path IS NOT NULL AND hunt_extension_path<>''; ALTER TABLE workspace_settings ADD COLUMN auto_update_check INTEGER NOT NULL DEFAULT 1");
         // v8: sites externos que o usuário aprovou para cada extensão (JSON; NULL = nenhum)
-        db.exec('ALTER TABLE extensions ADD COLUMN approved_hosts TEXT; PRAGMA user_version=8; COMMIT');
+        if (version < 8) db.exec('ALTER TABLE extensions ADD COLUMN approved_hosts TEXT');
+        // v9: Modo leve e "som só na conta em foco" (0/1); só colunas novas com padrão 0, nada é reescrito
+        db.exec('ALTER TABLE workspace_settings ADD COLUMN lite_mode INTEGER NOT NULL DEFAULT 0; ALTER TABLE workspace_settings ADD COLUMN mute_unfocused INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=9; COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     return db;

@@ -20,6 +20,7 @@ const seed: [string, string, string, string][] = [
 let profiles: Profile[] = empty ? [] : seed.map(([label, emailLabel, characterName, colorToken], i) => ({id: uid(i + 1), label, emailLabel, characterName, colorToken, createdAt: now, updatedAt: now}));
 const states: Record<string, string> = {[uid(1)]: 'ready', [uid(2)]: 'loading', [uid(3)]: 'auth_required', [uid(4)]: 'error'};
 let preferences: 'grid' | 'focus-first' = 'grid';
+let perfPrefs = {lite: params.get('lite') === '1', muteUnfocused: false};
 
 const ext = (o: Partial<ExtensionInfo> & Pick<ExtensionInfo, 'id' | 'name'>): ExtensionInfo => ({catalogId: null, version: null, path: `C:\\Extensoes\\${o.name}`, enabled: true, loaded: 4, sessions: 4, verdict: 'leitura', findings: [], hosts: [], approvedHosts: [], pending: false, error: null, ...o});
 let extensions: ExtensionInfo[] = [
@@ -52,6 +53,15 @@ async function readAllMock(id: string) {
 }
 const diagnostics = () => ({sampledAt: new Date().toISOString(), memoryKb: 1_450_000 + Math.round(Math.random() * 90000), cpuPercent: 4 + Math.random() * 6, cpuIntervalMs: 2000, processCount: 11});
 
+// Monitor por conta simulado: a conta 2 passa de 2 GB para exibir o aviso e o botão Recarregar; suspensas não têm processo.
+const processes = () => ({
+  sampledAt: new Date().toISOString(),
+  accounts: profiles.map((p, i) => states[p.id] === 'suspended' ? {id: p.id, cpuPercent: null, privateKb: null, workingSetKb: null} : {id: p.id, cpuPercent: 2 + Math.random() * 8, privateKb: i === 1 ? 2_300_000 + Math.round(Math.random() * 40000) : 900_000 + i * 150_000, workingSetKb: 1_100_000 + i * 150_000}),
+  hub: {cpuPercent: 1.2, privateKb: 180_000, workingSetKb: 260_000, count: 2},
+  gpu: {cpuPercent: 3.4, privateKb: 210_000, workingSetKb: 240_000, count: 1},
+  other: {cpuPercent: 0.2, privateKb: 60_000, workingSetKb: 90_000, count: 3},
+});
+
 type LayoutCall = {id: string | null; hide: boolean; side: boolean; panel: number; account: string | null};
 export const layoutState: LayoutCall = {id: null, hide: false, side: false, panel: 340, account: null};
 const layoutListeners = new Set<() => void>();
@@ -65,6 +75,11 @@ const setUpdate = (status: UpdateStatus) => { update = {...update, status}; emit
 window.pokehub = {
   list: () => ok(profiles.map(p => ({...p}))),
   getPreferences: () => ok(preferences),
+  getPerformance: () => ok({...perfPrefs}),
+  setPerformance: change => { perfPrefs = {...perfPrefs, ...change}; return ok({...perfPrefs}); },
+  suspend: id => { states[id] = 'suspended'; emit('status', {id, state: 'suspended'}); return ok(undefined); },
+  resume: id => { states[id] = 'loading'; emit('status', {id, state: 'loading'}); setTimeout(() => { states[id] = 'ready'; emit('status', {id, state: 'ready'}); }, 1200); return ok(undefined); },
+  processes: () => ok(processes()),
   setStartupMode: mode => { preferences = mode; return ok(mode); },
   initialFocus: () => ok(null),
   create: (input: ProfileInput) => { const p: Profile = {...input, id: uid(profiles.length + 10), createdAt: now, updatedAt: now}; profiles = [...profiles, p]; states[p.id] = 'loading'; return ok(p); },

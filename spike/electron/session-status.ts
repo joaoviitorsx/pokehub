@@ -20,3 +20,8 @@ export function offlineRetryDelay(attempt: number): number | null {
 export function canReadHunt(state: string | undefined, loadingMainFrame: boolean): boolean {
   return state === 'ready' || (state === 'loading' && !loadingMainFrame);
 }
+
+/** `did-start-loading` também dispara por subframes (anúncios, iframes) e navegação interna: só a carga do frame principal vira "carregando". */
+export const isMainFrameLoading = (loadingMainFrame: boolean): boolean => loadingMainFrame;
+/** O renderer só é avisado quando o estado de fato muda (sem IPC repetido para o mesmo estado). */
+export const statusChanged = (previous: string | undefined, next: string): boolean => previous !== next;

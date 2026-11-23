@@ -11,15 +11,17 @@ import { ProfileStore } from './profile-store';
 import { partitionFor } from './partition';
 import { PreferencesStore } from './preferences-store';
 import { closeContents } from './close-contents';
-import { summarizeMetrics, type DiagnosticsBaseline } from './diagnostics';
-import { canReadHunt, classifyLoadFailure, classifyLoadRejection, offlineRetryDelay } from './session-status';
+import { groupMetrics, summarizeMetrics, type DiagnosticsBaseline } from './diagnostics';
+import { canReadHunt, classifyLoadFailure, classifyLoadRejection, isMainFrameLoading, offlineRetryDelay, statusChanged } from './session-status';
+import { audioMuted, mergeDisableFeatures, startupPlan, windowChrome } from './performance';
 import { isExpandShortcut, isSideShortcut, shortcutFocus, shortcutIndex } from './workspace-shortcuts';
 import { acquireSingleInstance } from './single-instance';
 import { resetSession, restartSession, openSessionSafely, mountSessionView } from './session-recovery';
-import { approvedHostsOf, auditExtension, catalogIdOf, CATALOG, checkExtension, findInstalled, HUNT_ID, hostsCovered, resolveExtensionPath } from './extension-check';
+import { approvedHostsOf, catalogIdOf, createAuditCache, CATALOG, checkExtension, findInstalled, HUNT_ID, hostsCovered, resolveExtensionPath } from './extension-check';
 import type { AuditFinding, AuditVerdict, ExtensionInfo } from '../contracts/extensions';
 import { createUpdater, type Updater } from './updater';
 import type { UpdateInfo } from '../contracts/update';
+import type { PerformancePrefs } from '../contracts/preferences';
 import { ProfileLimitError, type ProfileInput } from '../domain/profiles';
 
 let window: BrowserWindow;
@@ -42,18 +44,33 @@ let sideAccount: string | null = null; // conta escolhida na lateral: é a mostr
 let autoFocused: string | null = null;
 let diagnosticsBaseline: DiagnosticsBaseline | null = null;
 let externalNoticeOpen = false;
+const suspended = new Set<string>(); // contas suspensas: só em memória; ao reiniciar o app todas abrem
+let perf: PerformancePrefs = {lite: false, muteUnfocused: false};
+const mutedState = new WeakMap<Electron.WebContents, boolean>();
+const startupTimers = new Set<ReturnType<typeof setTimeout>>();
+let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+let resizePending = false;
+const RESIZE_THROTTLE_MS = 33;
+// Evita um processo renderer ocioso de reserva por site (Chromium); preserva flags já definidas.
+app.commandLine.appendSwitch('disable-features', mergeDisableFeatures(app.commandLine.getSwitchValue('disable-features'), ['SpareRendererForSitePerProcess']));
 const gameUrl = 'https://pokeidle.io/app';
 // Extensões de terceiros (/hunt, Smart Market...): carregadas da pasta do navegador do usuário, nunca copiadas.
 interface ExtState {id: string; catalogId: string | null; name: string; version: string | null; path: string; enabled: boolean; verdict: AuditVerdict | null; findings: AuditFinding[]; hosts: string[]; approvedHosts: string[]; pending: boolean; error: string | null; loadable: boolean}
 let extensions: ExtState[] = [];
 const extErrors = new Map<string, string>(); // falhas de carga por extensão; as sessões seguem abertas sem ela
 let extBusy = false;
+const auditCache = createAuditCache();
+let extensionsLoaded = false; // a primeira leitura (assíncrona) das extensões terminou: as sessões esperam por ela
+let extensionsReady: Promise<void> = Promise.resolve();
 const extLoaded = new WeakMap<Electron.Session, Map<string, {id: string; path: string}>>();
 const catalogName = (id: string | null) => CATALOG.find(entry => entry.id === id)?.name;
 const BLOCKED_PREFIX = 'Bloqueada pela auditoria: ';
 const findingText = (finding: AuditFinding) => finding.kind === 'skipped' ? finding.detail : `${finding.detail} em ${finding.file}`;
-function refreshExtensions() {
-  extensions = preferences.listExtensions().map(row => {
+type RefreshMode = 'cached' | 'verify' | 'force';
+// A auditoria roda assíncrona e é guardada por (pasta, versão, .js com tamanho/mtime): 'verify' só faz stat, 'force' relê.
+async function refreshExtensions(mode: RefreshMode = 'verify') {
+  const next: ExtState[] = [];
+  for (const row of preferences.listExtensions()) {
     const catalogId = CATALOG.some(entry => entry.id === row.id) ? row.id : null;
     const path = catalogId ? resolveExtensionPath(row.path) : row.path; // o Chrome troca a pasta da versão ao atualizar
     if (path !== row.path) { try { preferences.setExtensionPath(row.id,path); } catch { /* caminho já usado por outra linha: segue com o antigo na lista */ } }
@@ -61,12 +78,15 @@ function refreshExtensions() {
     const approvedHosts = approvedHostsOf(catalogId && catalogIdOf(path) === catalogId ? catalogId : '',row.approvedHosts);
     const base = {id:row.id, catalogId, path, enabled:row.enabled, findings:[] as AuditFinding[], hosts:[] as string[], approvedHosts, pending:false};
     const check = checkExtension(path);
-    if (!check.ok) return {...base, name:catalogName(catalogId) ?? (path.split(/[\\/]/).filter(Boolean).pop() ?? 'Extensão'), version:null, verdict:'bloqueada' as const, error:check.error, loadable:false};
-    const audit = auditExtension(path);
+    if (!check.ok) { next.push({...base, name:catalogName(catalogId) ?? (path.split(/[\\/]/).filter(Boolean).pop() ?? 'Extensão'), version:null, verdict:'bloqueada' as const, error:check.error, loadable:false}); continue; }
+    if (mode === 'force') auditCache.forget(path);
+    const audit = await auditCache.get(path,check.version,mode !== 'cached');
     const reasons = [...new Set(audit.findings.filter(finding => finding.kind === 'eval' || finding.kind === 'skipped').map(findingText))].slice(0,3);
     const pending = audit.verdict === 'externa' && !hostsCovered(audit.hosts,approvedHosts); // host novo ou ainda não aprovado: não carrega
-    return {...base, name:check.name, version:check.version, findings:audit.findings, hosts:audit.hosts, pending, verdict:audit.verdict, error:audit.verdict === 'bloqueada' ? `${BLOCKED_PREFIX}${reasons.join('; ')}.` : null, loadable:audit.verdict !== 'bloqueada' && !pending};
-  });
+    next.push({...base, name:check.name, version:check.version, findings:audit.findings, hosts:audit.hosts, pending, verdict:audit.verdict, error:audit.verdict === 'bloqueada' ? `${BLOCKED_PREFIX}${reasons.join('; ')}.` : null, loadable:audit.verdict !== 'bloqueada' && !pending});
+  }
+  extensions = next;
+  auditCache.prune(next.map(extension => extension.path));
   for (const id of [...extErrors.keys()]) if (!extensions.some(extension => extension.id === id)) extErrors.delete(id);
 }
 const loadedIn = (session: Electron.Session, extension: ExtState) => {
@@ -105,8 +125,8 @@ function extensionList(): ExtensionInfo[] {
     return {id:extension.id, catalogId:extension.catalogId, name:extension.name, version:extension.version, path:extension.path, enabled:extension.enabled, loaded, sessions:contents.length, verdict:extension.verdict, findings:extension.findings, hosts:extension.hosts, approvedHosts:extension.approvedHosts, pending:extension.pending, error:extension.error ?? extErrors.get(extension.id) ?? null};
   });
 }
-async function applyExtensions(): Promise<ExtensionInfo[]> {
-  refreshExtensions();
+async function applyExtensions(mode: RefreshMode = 'verify'): Promise<ExtensionInfo[]> {
+  await refreshExtensions(mode);
   await Promise.all([...views.values()].map(view => view.webContents.isDestroyed() ? null : syncExtensions(view.webContents.session)));
   return extensionList();
 }
@@ -118,12 +138,12 @@ async function detectExtensions(): Promise<ExtensionInfo[]> {
     if (same) { if (same.path !== found.path && !rows.some(row => row.path === found.path)) preferences.setExtensionPath(found.id,found.path); }
     else if (!rows.some(row => row.path === found.path)) preferences.addExtension({id:found.id,path:found.path,enabled:true});
   }
-  return applyExtensions();
+  return applyExtensions('force');
 }
 async function addExtension(): Promise<ExtensionInfo[]> {
   const {canceled, filePaths} = await dialog.showOpenDialog(window,{title:'Pasta da extensão (a pasta com o manifest.json)',buttonLabel:'Usar esta pasta',properties:['openDirectory']});
   const path = filePaths[0];
-  if (canceled || !path) return applyExtensions();
+  if (canceled || !path) return applyExtensions('cached');
   const check = checkExtension(path);
   if (!check.ok) throw new ExtensionRefused(check.error);
   const rows = preferences.listExtensions();
@@ -131,7 +151,7 @@ async function addExtension(): Promise<ExtensionInfo[]> {
   if (rows.length >= MAX_EXTENSIONS) throw new ExtensionRefused(`O limite é de ${MAX_EXTENSIONS} extensões. Remova alguma antes de adicionar outra.`);
   const catalogId = catalogIdOf(path);
   preferences.addExtension({id:catalogId && !rows.some(row => row.id === catalogId) ? catalogId : randomUUID(),path,enabled:true});
-  return applyExtensions();
+  return applyExtensions('force');
 }
 class ExtensionRefused extends Error {}
 const MAX_EXTENSIONS = 16;
@@ -166,8 +186,9 @@ const sprites = async (looks: number[]) => {
 };
 const trusted = (event: IpcMainInvokeEvent) => Boolean(window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame && event.senderFrame === window.webContents.mainFrame);
 function report(id: string, state: string) {
+  const changed = statusChanged(states.get(id),state);
   states.set(id,state);
-  if (!window.isDestroyed()) window.webContents.send('session:status', {id,state});
+  if (changed && !window.isDestroyed()) window.webContents.send('session:status', {id,state});
 }
 function arrange() {
   const profiles = store.list();
@@ -183,7 +204,20 @@ function arrange() {
   const nextAuto = effective.automatic ? profiles[effective.index ?? 0]?.id ?? null : null;
   if (nextAuto !== autoFocused) { autoFocused = nextAuto; if (!window.isDestroyed()) window.webContents.send('workspace:auto-focus', nextAuto); }
   const bounds = layout(width, Math.max(height,TOP_BAR), profiles.length, effective.index, side);
-  profiles.forEach((profile,i) => { const view = views.get(profile.id); const b = bounds[i]; if (view) { view.setVisible(!editing && !dragging && Boolean(b)); if (b) view.setBounds(b); } });
+  const muting = perf.lite || perf.muteUnfocused;
+  profiles.forEach((profile,i) => {
+    const view = views.get(profile.id); const b = bounds[i];
+    if (!view) return;
+    view.setVisible(!editing && !dragging && Boolean(b)); if (b) view.setBounds(b);
+    const muted = audioMuted(muting,!editing && Boolean(b)); // som só na conta visível (em foco); o arrasto não muda o som
+    if (!view.webContents.isDestroyed() && mutedState.get(view.webContents) !== muted) { mutedState.set(view.webContents,muted); try { view.webContents.setAudioMuted(muted); } catch { /* sessão encerrando */ } }
+  });
+}
+// Durante o resize o layout é refeito no máximo a cada ~33 ms, e sempre uma última vez ao parar.
+function arrangeSoon() {
+  if (resizeTimer) { resizePending = true; return; }
+  arrange();
+  resizeTimer = setTimeout(() => { resizeTimer = undefined; if (resizePending) { resizePending = false; try { if (!window.isDestroyed()) arrange(); } catch { console.error('Falha ao reorganizar as sessões.'); } } },RESIZE_THROTTLE_MS);
 }
 function setDrag(active: boolean) {
   clearTimeout(dragTimer);
@@ -209,7 +243,7 @@ function registerShortcuts(contents: Electron.WebContents, profileId: string | n
   });
 }
 function addView(id: string) {
-  const view = new WebContentsView({webPreferences:{partition:partitionFor(id), sandbox:true, contextIsolation:true, nodeIntegration:false}});
+  const view = new WebContentsView({webPreferences:{partition:partitionFor(id), sandbox:true, contextIsolation:true, nodeIntegration:false, spellcheck:false, devTools:!app.isPackaged}});
   huntDocuments.set(view.webContents, {});
   let attached = false;
   let atProvider = false;
@@ -235,7 +269,7 @@ function addView(id: string) {
       view.webContents.on('will-redirect', (event, url) => { if (!isAllowedSessionNavigation(url)) event.preventDefault(); });
       view.webContents.once('destroyed', () => clearTimeout(retry));
       view.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => { if (isMainFrame && !isInPlace) huntDocuments.set(view.webContents, {}); });
-      view.webContents.on('did-start-loading', () => reportCurrent('loading'));
+      view.webContents.on('did-start-loading', () => { if (isMainFrameLoading(view.webContents.isLoadingMainFrame())) reportCurrent('loading'); }); // subframe não reabre o "carregando"
       view.webContents.on('did-navigate', (_event, url) => { atProvider = isOAuthProviderUrl(url); if (atProvider) reportCurrent('auth_required'); });
       const loaded = () => { if (states.get(id) === 'loading') reportCurrent(atProvider ? 'auth_required' : 'ready'); };
       view.webContents.on('did-finish-load', loaded);
@@ -251,8 +285,12 @@ function addView(id: string) {
     if (views.get(id) !== view || view.webContents.isDestroyed()) return; // sessão fechada enquanto a extensão carregava
     void view.webContents.loadURL(gameUrl).catch((error: unknown) => { const state = classifyLoadRejection(error); if (state && states.get(id) !== 'offline' && states.get(id) !== 'error') reportCurrent(state); });
   };
-  const pending = syncExtensions(view.webContents.session); // content scripts em document_start exigem a extensão antes do loadURL
-  if (pending) void pending.then(load); else load();
+  const start = () => {
+    if (views.get(id) !== view || view.webContents.isDestroyed()) return;
+    const pending = syncExtensions(view.webContents.session); // content scripts em document_start exigem a extensão antes do loadURL
+    if (pending) void pending.then(load); else load();
+  };
+  if (extensionsLoaded) start(); else void extensionsReady.then(start); // a auditoria inicial roda em segundo plano; a interface já está de pé
 }
 function closeView(id: string) {
   const view = views.get(id); if (!view) return;
@@ -288,6 +326,13 @@ function readable(profileId: string): Electron.WebContents | null {
   if (!view || view.webContents.isDestroyed() || resetting.has(profileId)) return null;
   return canReadHunt(states.get(profileId), view.webContents.isLoadingMainFrame()) ? view.webContents : null;
 }
+let metricsAt = -Infinity, metricsReads = 0, metricsList: ReturnType<typeof app.getAppMetrics> = [];
+function readMetrics() {
+  const now = performance.now();
+  if (now - metricsAt >= 1000) { metricsList = app.getAppMetrics(); metricsAt = now; metricsReads++; }
+  return {list:metricsList, first:metricsReads <= 1};
+}
+if (process.platform === 'win32') app.setAppUserModelId('local.pokehub.desktop'); // a barra de tarefas usa o ícone do app (mesmo appId do electron-builder)
 const primary = acquireSingleInstance(app, () => {
   if (!window || window.isDestroyed()) return;
   if (window.isMinimized()) window.restore();
@@ -297,9 +342,9 @@ if (primary) app.whenReady().then(() => {
   const databasePath = join(app.getPath('userData'),'pokehub.sqlite');
   store = new ProfileStore(databasePath);
   preferences = new PreferencesStore(databasePath);
-  try { refreshExtensions(); } catch { console.error('Não foi possível ler a configuração das extensões.'); }
-  focused = initialFocus(preferences.getStartupMode(), store.list().map(profile => profile.id));
-  window = new BrowserWindow({title:'PokéHub',icon:join(__dirname,'../../build/icon.png'),backgroundColor:'#0f1218',width:1280,height:800,minWidth:700,minHeight:480,webPreferences:{preload:join(__dirname,'preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
+  perf = preferences.getPerformance();
+  focused = initialFocus(perf.lite ? 'focus-first' : preferences.getStartupMode(), store.list().map(profile => profile.id)); // Modo leve começa em Foco
+  window = new BrowserWindow({title:'PokéHub',icon:join(__dirname,'../../build/icon.png'),backgroundColor:'#0f1218',...windowChrome(process.platform,TOP_BAR),width:1280,height:800,minWidth:700,minHeight:480,webPreferences:{preload:join(__dirname,'preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false,spellcheck:false,devTools:!app.isPackaged}});
   if (process.platform !== 'darwin') window.removeMenu(); // no macOS o menu fica na barra do sistema e mantém copiar/colar
   updater = createUpdater({autoCheck:() => preferences.getAutoUpdateCheck(), onStatus:status => { if (!window.isDestroyed()) window.webContents.send('update:status',status); }});
   registerShortcuts(window.webContents);
@@ -312,15 +357,17 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('profiles:list', event => invoke(event, () => store.list()));
   ipcMain.handle('preferences:get', event => invoke(event, () => preferences.getStartupMode()));
   ipcMain.handle('preferences:set', (event,mode: unknown) => invoke(event, () => preferences.setStartupMode(mode)));
-  ipcMain.handle('extensions:list', event => invokeExtensions(event, applyExtensions));
+  ipcMain.handle('performance:get', event => invoke(event, () => preferences.getPerformance()));
+  ipcMain.handle('performance:set', (event,value: unknown) => invoke(event, () => { perf = preferences.setPerformance(value); arrange(); return perf; }));
+  ipcMain.handle('extensions:list', event => invokeExtensions(event, () => applyExtensions('verify')));
   ipcMain.handle('extensions:detect', event => invokeExtensions(event, detectExtensions));
   ipcMain.handle('extensions:add', event => invokeExtensions(event, addExtension));
-  ipcMain.handle('extensions:toggle', (event,id: unknown,enabled: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error(); preferences.setExtensionEnabled(id,enabled); return applyExtensions(); }));
-  ipcMain.handle('extensions:remove', (event,id: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string') throw new Error(); preferences.removeExtension(id); return applyExtensions(); }));
+  ipcMain.handle('extensions:toggle', (event,id: unknown,enabled: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error(); preferences.setExtensionEnabled(id,enabled); return applyExtensions('cached'); }));
+  ipcMain.handle('extensions:remove', (event,id: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string') throw new Error(); preferences.removeExtension(id); return applyExtensions('cached'); }));
   // aprova os hosts externos que a auditoria acha AGORA; `hosts` (o que a tela mostrou) precisa ser o mesmo conjunto
-  ipcMain.handle('extensions:approve', (event,id: unknown,hosts: unknown) => invokeExtensions(event, () => {
+  ipcMain.handle('extensions:approve', (event,id: unknown,hosts: unknown) => invokeExtensions(event, async () => {
     if (typeof id !== 'string' || (hosts !== undefined && (!Array.isArray(hosts) || hosts.some(host => typeof host !== 'string')))) throw new Error();
-    refreshExtensions();
+    await refreshExtensions('verify');
     const extension = extensions.find(item => item.id === id);
     if (!extension || extension.verdict !== 'externa' || extension.hosts.length === 0) throw new ExtensionRefused('Esta extensão não precisa de aprovação.');
     const shown = hosts as string[] | undefined;
@@ -349,6 +396,7 @@ if (primary) app.whenReady().then(() => {
       if (!store.list().some(profile => profile.id === id)) throw new Error();
       await closeViewAwaited(id);
       try { store.remove(id); } catch (error) { if (!window.isDestroyed()) openView(id); throw error; }
+      suspended.delete(id);
       if (focused === id) focused = null;
       if (!window.isDestroyed()) arrange();
       return {ok:true,data:undefined};
@@ -392,12 +440,29 @@ if (primary) app.whenReady().then(() => {
     resetting.add(id);
     try {
       if (!store.list().some(profile => profile.id === id)) throw new Error();
-      await restartSession(id, {close: closeViewAwaited, open: sessionId => {if (!window.isDestroyed() && !openView(sessionId)) throw new Error();}});
+      await restartSession(id, {close: closeViewAwaited, open: sessionId => {if (!window.isDestroyed() && !openView(sessionId)) throw new Error(); suspended.delete(sessionId);}});
       if (!window.isDestroyed()) arrange();
       return {ok:true,data:undefined};
     } catch { return {ok:false,error:'Não foi possível reabrir a sessão.'}; }
     finally { resetting.delete(id); }
   });
+  // Suspender fecha só a view (libera o renderer); a partição e o login ficam. O estado vive em memória: ao reiniciar o app todas abrem.
+  ipcMain.handle('session:suspend', async (event,id: unknown) => {
+    if (!trusted(event) || typeof id !== 'string' || resetting.has(id) || suspended.has(id) || !views.has(id) || !store.list().some(profile => profile.id === id)) return {ok:false,error:'Não foi possível suspender a conta.'};
+    resetting.add(id); suspended.add(id);
+    try {
+      await closeViewAwaited(id);
+      if (!window.isDestroyed()) { report(id,'suspended'); arrange(); }
+      return {ok:true,data:undefined};
+    } catch { suspended.delete(id); return {ok:false,error:'Não foi possível suspender a conta.'}; }
+    finally { resetting.delete(id); }
+  });
+  ipcMain.handle('session:resume', (event,id: unknown) => invoke(event, () => {
+    if (typeof id !== 'string' || resetting.has(id) || !suspended.has(id) || !store.list().some(profile => profile.id === id)) throw new Error();
+    suspended.delete(id);
+    if (!openView(id)) { suspended.add(id); throw new Error(); }
+    report(id,'loading'); arrange();
+  }));
   ipcMain.handle('session:clear', async (event,id: unknown) => {
     if (!trusted(event) || typeof id !== 'string' || resetting.has(id)) return {ok:false,error:'Não foi possível limpar a sessão.'};
     const view = views.get(id);
@@ -415,21 +480,43 @@ if (primary) app.whenReady().then(() => {
     finally { resetting.delete(id); }
   });
   ipcMain.handle('diagnostics:sample', event => invoke(event, () => {
-    const result = summarizeMetrics(app.getAppMetrics(),performance.now(),diagnosticsBaseline);
+    const result = summarizeMetrics(readMetrics().list,performance.now(),diagnosticsBaseline);
     diagnosticsBaseline = result.baseline;
     return {...result.sample,sampledAt:new Date().toISOString()};
   }));
+  // Monitor por conta (só consultado com a seção Diagnóstico aberta). getAppMetrics mede a CPU desde a chamada anterior: leituras a menos de 1 s reaproveitam a anterior.
+  ipcMain.handle('diagnostics:processes', event => invoke(event, () => {
+    const metrics = readMetrics();
+    const pids = new Map<string, number | null>();
+    for (const profile of store.list()) { const view = views.get(profile.id); let pid: number | null = null; try { if (view && !view.webContents.isDestroyed()) pid = view.webContents.getOSProcessId(); } catch { /* sem processo */ } pids.set(profile.id,pid); }
+    return {sampledAt:new Date().toISOString(), ...groupMetrics(metrics.list,pids,window.webContents.getOSProcessId(),metrics.first)};
+  }));
   ipcMain.handle('session:states', event => invoke(event, () => Object.fromEntries(states)));
   ipcMain.handle('workspace:auto-focus', event => invoke(event, () => autoFocused));
-  window.on('resize', arrange);
+  window.on('resize', arrangeSoon);
   window.on('closed', () => {
-    clearTimeout(dragTimer); updater.dispose();
+    clearTimeout(dragTimer); clearTimeout(resizeTimer); for (const timer of startupTimers) clearTimeout(timer); startupTimers.clear(); updater.dispose();
     for (const view of views.values()) { try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { console.error('Falha ao encerrar uma sessão.'); } }
     views.clear(); preferences.close(); store.close();
   });
-  for (const profile of store.list()) openView(profile.id);
-  arrange();
+  // Início escalonado: a interface primeiro; depois a conta em foco (ou a primeira) e as demais, uma a cada 2,5 s. A auditoria das extensões roda em segundo plano.
   void window.loadFile(join(__dirname,'../../dist/index.html')).catch(() => { dialog.showErrorBox('PokéHub', 'Não foi possível carregar a interface local. Verifique a instalação e tente novamente.'); app.quit(); });
+  extensionsReady = refreshExtensions().catch(() => { console.error('Não foi possível ler a configuração das extensões.'); }).then(() => { extensionsLoaded = true; });
+  const openAtStartup = (id: string) => {
+    try {
+      if (window.isDestroyed() || views.has(id) || suspended.has(id) || resetting.has(id) || !store.list().some(profile => profile.id === id)) return;
+      openView(id); arrange();
+    } catch { console.error('Falha ao abrir uma sessão.'); }
+  };
+  void extensionsReady.then(() => {
+    if (window.isDestroyed()) return;
+    for (const {id,delay} of startupPlan(store.list().map(profile => profile.id),focused)) {
+      if (delay === 0) { openAtStartup(id); continue; }
+      const timer = setTimeout(() => { startupTimers.delete(timer); openAtStartup(id); },delay);
+      startupTimers.add(timer);
+    }
+    arrange();
+  });
 }).catch((error: unknown) => {
   console.error('Falha ao iniciar o PokéHub.');
   if (!window) {

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from './database';
-import type { StartupMode } from '../contracts/preferences';
+import type { PerformancePrefs, StartupMode } from '../contracts/preferences';
 
 export interface ExtensionRow { id: string; path: string; enabled: boolean; approvedHosts: string[] }
 const parseHosts = (value: unknown): string[] => {
@@ -25,6 +25,20 @@ export class PreferencesStore {
     if (typeof value !== 'boolean') throw new Error('Preferência inválida');
     if (this.db.prepare('UPDATE workspace_settings SET auto_update_check=? WHERE id=1').run(value ? 1 : 0).changes !== 1) throw new Error('Preferência ausente');
     return value;
+  }
+  getPerformance(): PerformancePrefs {
+    const row = this.db.prepare('SELECT lite_mode, mute_unfocused FROM workspace_settings WHERE id=1').get();
+    return {lite:Number(row?.lite_mode ?? 0) !== 0, muteUnfocused:Number(row?.mute_unfocused ?? 0) !== 0};
+  }
+  /** Aceita só os campos booleanos presentes; o resto fica como está. */
+  setPerformance(value: unknown): PerformancePrefs {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('Preferência inválida');
+    const input = value as Record<string, unknown>;
+    for (const [key,column] of [['lite','lite_mode'],['muteUnfocused','mute_unfocused']] as const) {
+      if (input[key] === undefined) continue;
+      if (typeof input[key] !== 'boolean' || this.db.prepare(`UPDATE workspace_settings SET ${column}=? WHERE id=1`).run(input[key] ? 1 : 0).changes !== 1) throw new Error('Preferência inválida');
+    }
+    return this.getPerformance();
   }
   listExtensions(): ExtensionRow[] {
     return this.db.prepare('SELECT id, path, enabled, approved_hosts FROM extensions ORDER BY rowid').all().map(row => ({id:String(row.id), path:String(row.path), enabled:row.enabled === 1, approvedHosts:parseHosts(row.approved_hosts)}));

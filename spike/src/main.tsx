@@ -1,8 +1,8 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { Profile, ProfileInput } from '../domain/profiles';
-import type { DiagnosticsSample } from '../contracts/diagnostics';
-import type { StartupMode } from '../contracts/preferences';
+import type { DiagnosticsSample, ProcessesSample } from '../contracts/diagnostics';
+import type { PerformancePrefs, StartupMode } from '../contracts/preferences';
 import type { AuditFinding, AuditVerdict, ExtensionInfo } from '../contracts/extensions';
 import type { UpdateInfo, UpdateStatus } from '../contracts/update';
 import './style.css';
@@ -19,6 +19,7 @@ import { columns, COL_HEAD, MAX_PROFILES, sideWidth, TOP_BAR } from '../electron
 type Result<T> = {ok:true; data:T} | {ok:false; error:string};
 type Status = {id:string;state:string};
 declare global { interface Window { pokehub: {
+ getPerformance():Promise<Result<PerformancePrefs>>; setPerformance(value:Partial<PerformancePrefs>):Promise<Result<PerformancePrefs>>; suspend(id:string):Promise<Result<void>>; resume(id:string):Promise<Result<void>>; processes():Promise<Result<ProcessesSample>>;
  list(): Promise<Result<Profile[]>>; initialFocus():Promise<Result<string|null>>; getPreferences():Promise<Result<StartupMode>>; setStartupMode(mode:StartupMode):Promise<Result<StartupMode>>; create(input:ProfileInput): Promise<Result<Profile>>; update(id:string,input:ProfileInput): Promise<Result<Profile>>; remove(id:string): Promise<Result<void>>;
  layout(id:string|null,hide:boolean,side:boolean,panel?:number,account?:string|null): Promise<Result<void>>; onToggleExpand(callback:(id:string|null)=>void):()=>void; drag(active:boolean): Promise<Result<void>>; huntSnapshot(id:string,soLiberadas?:boolean):Promise<Result<HuntSnapshot>>; onToggleSide(callback:()=>void):()=>void; reload(id:string): Promise<Result<void>>; restart(id:string): Promise<Result<void>>; clearSession(id:string): Promise<Result<void>>; states(): Promise<Result<Record<string,string>>>; diagnostics():Promise<Result<DiagnosticsSample>>; onStatus(callback:(status:Status)=>void):()=>void; onFocus(callback:(id:string|null)=>void):()=>void; autoFocus():Promise<Result<string|null>>; onAutoFocus(callback:(id:string|null)=>void):()=>void;
  market: {scan(id:string):Promise<Result<MarketScan>>; readAll(id:string):Promise<Result<void>>; stop(id:string):Promise<Result<boolean>>; onProgress(callback:(progress:MarketProgress)=>void):()=>void};
@@ -26,8 +27,8 @@ declare global { interface Window { pokehub: {
  updates: {get():Promise<Result<UpdateInfo>>; check():Promise<Result<UpdateInfo>>; download():Promise<Result<UpdateInfo>>; install():Promise<Result<void>>; setAuto(enabled:boolean):Promise<Result<UpdateInfo>>; onStatus(callback:(status:UpdateStatus)=>void):()=>void};
 } } }
 const blank: ProfileInput = {label:'',emailLabel:'',characterName:'',colorToken:'#d4a65f'};
-const labels: Record<string,string> = {loading:'Carregando',ready:'Página carregada',offline:'Sem conexão',auth_required:'Login no provedor',error:'Erro ao carregar'};
-const shortLabels: Record<string,string> = {loading:'Carregando',ready:'',offline:'Offline',auth_required:'Login',error:'Erro'};
+const labels: Record<string,string> = {loading:'Carregando',ready:'Página carregada',offline:'Sem conexão',auth_required:'Login no provedor',error:'Erro ao carregar',suspended:'Conta suspensa'};
+const shortLabels: Record<string,string> = {loading:'Carregando',ready:'',offline:'Offline',auth_required:'Login',error:'Erro',suspended:'Suspensa'};
 // Bola de captura em quatro cores (mesma arte de build/icon.svg, sem o fundo): ids únicos por instância.
 function Logo() {
  const id = useId();
@@ -53,6 +54,8 @@ const fairUse = 'Use apenas suas contas e respeite o limite total do jogo.';
 type Section = 'accounts' | 'ext' | 'upd' | 'layout' | 'diag';
 const sections: {id: Section; label: string}[] = [{id:'accounts',label:'Contas'},{id:'ext',label:'Extensões'},{id:'upd',label:'Atualizações'},{id:'layout',label:'Layout'},{id:'diag',label:'Diagnóstico'}];
 const expandHint = 'Ctrl+Shift+Enter alterna de qualquer lugar (inclusive dentro do jogo); Esc ou Ctrl+Enter na barra e nos cabeçalhos também voltam à grade.';
+const fmtCpu = (value: number | null) => value === null ? '—' : `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(value)}%`;
+const fmtMem = (kb: number | null) => kb === null ? '—' : `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:0}).format(kb / 1024)} MB`;
 const typing = (target: EventTarget | null) => target instanceof HTMLElement && (target.isContentEditable || ['INPUT','TEXTAREA','SELECT'].includes(target.tagName));
 function App() {
  const [profiles,setProfiles] = useState<Profile[]>([]);
@@ -90,11 +93,17 @@ function App() {
  const focusEventReceived = useRef(false);
  const hoverCol = useRef<string|null>(null); // última coluna sob o ponteiro: alvo do Ctrl+Enter
  const indicator = useRef<HTMLElement>(null);
- useLayoutEffect(() => {
+ useEffect(() => {
    const place = () => placeIndicator(indicator.current);
-   place();window.addEventListener('resize',place);
+   window.addEventListener('resize',place);
    return () => window.removeEventListener('resize',place);
- });
+ },[]);
+ const [perf,setPerf] = useState<PerformancePrefs>({lite:false,muteUnfocused:false});
+ const [procs,setProcs] = useState<ProcessesSample | null>(null);
+ const [memLimitGb,setMemLimitGb] = useState(() => { try { const value = Number(localStorage.getItem('pokehub.memLimitGb')); return value > 0 ? value : 2; } catch { return 2; } });
+ useEffect(() => { try { localStorage.setItem('pokehub.memLimitGb',String(memLimitGb)); } catch { /* preferência só não persiste */ } },[memLimitGb]);
+ useEffect(() => { if (perf.lite) document.documentElement.dataset.lite = ''; else delete document.documentElement.dataset.lite; },[perf.lite]); // Modo leve: sem animações (CSS)
+ useEffect(() => { void window.pokehub.getPerformance().then(result => { if (result.ok) setPerf(result.data); }).catch(() => undefined); },[]);
  async function refresh() {
    const result = await window.pokehub.list();
    if (result.ok) {setProfiles(result.data);setLoadError(false);} else {setLoadError(true);setMessage(result.error);}
@@ -124,6 +133,7 @@ function App() {
  },[]);
  if (expandedId !== null && focus !== expandedId) setExpandedId(null); // qualquer outra troca de foco encerra o "expandido"
  const active = profiles.find(p => p.id === (focus ?? autoFocus));
+ useLayoutEffect(() => placeIndicator(indicator.current),[active?.id,profiles,states,editor,size.w,loaded]); // reposiciona só quando a aba ou a largura muda
  // A lateral "Onde caçar?" vale em qualquer modo (grade, foco, expandido). Se a grade não couber ao lado dela, o processo principal reduz colunas/linhas
  // e, em último caso, mostra só a conta escolhida na lateral (foco automático). Largura: sideWidth() em electron/layout.ts.
  const sideAllowed = loaded && !loadError && profiles.length > 0;
@@ -174,6 +184,25 @@ function App() {
    try { const result = await window.pokehub.diagnostics(); if (result.ok) setDiagnostics(result.data); else setMessage(result.error); }
    catch { setMessage('Não foi possível obter o diagnóstico local.'); }
    finally { setBusy(false); }
+ }
+ // Monitor por conta: atualiza a cada 4 s só com Gerenciar → Diagnóstico aberto e a janela visível.
+ useEffect(() => {
+   if (editor !== 'manage' || section !== 'diag') return;
+   let alive = true, timer = 0;
+   const tick = async () => {
+     if (!document.hidden) { try { const result = await window.pokehub.processes(); if (alive && result.ok) setProcs(result.data); } catch { /* tenta de novo no próximo ciclo */ } }
+     if (alive) timer = window.setTimeout(() => void tick(),4000);
+   };
+   void tick();
+   return () => { alive = false; clearTimeout(timer); setProcs(null); };
+ },[editor,section]);
+ async function changePerf(change: Partial<PerformancePrefs>) {
+   try { const result = await window.pokehub.setPerformance(change); if (result.ok) setPerf(result.data); else setMessage(result.error); }
+   catch { setMessage('Não foi possível salvar o Modo leve.'); }
+ }
+ async function suspendToggle(id: string, suspended: boolean) {
+   try { const result = await (suspended ? window.pokehub.resume(id) : window.pokehub.suspend(id)); if (!result.ok) setMessage(result.error); }
+   catch { setMessage('Não foi possível alterar a conta.'); }
  }
  function selectSection(next: Section) {
    setSection(next);setMessage('');
@@ -294,7 +323,7 @@ function App() {
    {profiles.length === 0 ? <p className="ext-state" data-on="false">Nenhum perfil ainda.</p> : <ul className="acc-list">{profiles.map(p => {const state=states[p.id] ?? '';return <li key={p.id} className="acc-row" style={{'--c':p.colorToken} as CSSProperties}>
     <div className="acc-main"><El color={p.colorToken}/><strong>{p.label}</strong><span className="pill" data-state={state}>{labels[state] ?? 'Iniciando'}</span></div>
     <small>{p.characterName ? `${p.characterName} · ` : ''}{p.emailLabel}</small>
-    <div className="actions"><button disabled={busy} onClick={() => openEditor(p)}>Editar</button><button disabled={busy} onClick={() => void reload(p.id)}>Recarregar</button><button disabled={busy} onClick={() => void restart(p.id)}>Reabrir sessão</button><button disabled={busy} onClick={() => void clearSession(p)}>Limpar dados</button><button className="danger" disabled={busy} onClick={() => void remove(p)}>Remover</button></div></li>;})}</ul>}
+    <div className="actions"><button disabled={busy} onClick={() => openEditor(p)}>Editar</button><button disabled={busy || state === 'suspended'} onClick={() => void reload(p.id)}>Recarregar</button><button disabled={busy} onClick={() => void suspendToggle(p.id,state === 'suspended')}>{state === 'suspended' ? 'Retomar' : 'Suspender'}</button><button disabled={busy} onClick={() => void restart(p.id)}>Reabrir sessão</button><button disabled={busy} onClick={() => void clearSession(p)}>Limpar dados</button><button className="danger" disabled={busy} onClick={() => void remove(p)}>Remover</button></div></li>;})}</ul>}
    <div className="actions"><button className="primary" disabled={busy || loadError || profiles.length >= MAX_PROFILES} title={profiles.length >= MAX_PROFILES ? `Limite de ${MAX_PROFILES} perfis atingido` : 'Novo perfil'} onClick={() => openEditor()}><Icon d={icons.plus}/>Novo perfil</button></div>
    <p className="note">{fairUse}</p></section>}
   {section === 'ext' && (ext ? <section className="ext" aria-label="Extensões">
@@ -322,20 +351,32 @@ function App() {
   <div className="actions"><button disabled={!upd.packaged || upd.status.state === 'checking' || upd.status.state === 'downloading'} onClick={() => void updateAction(window.pokehub.updates.check)}>Verificar agora</button>{upd.status.state === 'available' && <button className="primary" onClick={() => void updateAction(window.pokehub.updates.download)}>Baixar {upd.status.version}</button>}{upd.status.state === 'ready' && <button className="primary" onClick={() => void installUpdate()}>Reiniciar e atualizar</button>}</div>
  </section> : <p role="status">Carregando…</p>)}
   {section === 'layout' && <section aria-label="Layout"><p>Escolha como o workspace aparece na próxima abertura.</p>{startupMode && <fieldset className="settings-choice"><legend>Ao iniciar</legend><label><input type="radio" name="startupMode" checked={startupMode==='grid'} onChange={() => {setStartupMode('grid');setSettingsSaved(false);}}/>Abrir em grade</label><label><input type="radio" name="startupMode" checked={startupMode==='focus-first'} onChange={() => {setStartupMode('focus-first');setSettingsSaved(false);}}/>Focar a primeira conta</label></fieldset>}{!startupMode && busy && <p role="status">Carregando configuração…</p>}<div className="actions"><button className="primary" disabled={busy || !startupMode} onClick={() => void saveSettings()}>Salvar</button></div>{settingsSaved && <p role="status">Preferência salva para a próxima abertura.</p>}
+   <label className="switch"><span>Modo leve</span><input type="checkbox" role="switch" checked={perf.lite} onChange={event => void changePerf({lite:event.target.checked})}/></label>
+   <p className="note">Reduz o consumo de CPU, GPU e memória: sem animações, lateral Caçar a cada 20 s e sem pré-aquecimento das outras contas, início em Foco e som só na conta em foco.</p>
+   {perf.lite && <p className="lite-tip" role="note">Nas contas que você não está olhando, ative o Modo economia do próprio jogo (botão na tela de sessão) — economiza CPU/GPU.</p>}
+   <label className="switch"><span>Som só na conta em foco</span><input type="checkbox" role="switch" checked={perf.muteUnfocused || perf.lite} disabled={perf.lite} onChange={event => void changePerf({muteUnfocused:event.target.checked})}/></label>
+   <p className="note">Silencia as contas que não estão visíveis (em Foco, as outras). Na grade todas as colunas continuam com som. O Modo leve já inclui esta opção.</p>
    <p className="note">Atalhos: Ctrl+0 grade, Ctrl+1–4 foca uma conta, Ctrl+H abre o assistente (Caçar e Mercado). {expandHint}</p></section>}
-  {section === 'diag' && <section aria-label="Diagnóstico"><p>Valores dos processos do PokéHub, incluindo as páginas do jogo. Os dados ficam nesta máquina.</p>{diagnostics && <dl className="diagnostics"><div><dt>Processos</dt><dd>{diagnostics.processCount}</dd></div><div><dt>Memória residente somada</dt><dd>{diagnostics.memoryKb === null ? 'Indisponível' : `${new Intl.NumberFormat('pt-BR').format(diagnostics.memoryKb)} KB`}</dd></div><div><dt>CPU somada</dt><dd>{diagnostics.cpuPercent === null ? 'Indisponível' : `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(diagnostics.cpuPercent)}%`}</dd></div>{diagnostics.cpuIntervalMs !== null && <div><dt>Intervalo aproximado da CPU</dt><dd>{new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(diagnostics.cpuIntervalMs / 1000)} s</dd></div>}</dl>}<p>A memória compartilhada pode ser contada mais de uma vez. A CPU pode ultrapassar 100% e exige duas amostras com pelo menos 1 segundo de intervalo; mudanças nos processos reiniciam a comparação.</p>{diagnostics && <p>Última amostra: {new Date(diagnostics.sampledAt).toLocaleTimeString('pt-BR')}</p>}<div className="actions"><button className="primary" disabled={busy} onClick={() => void sampleDiagnostics()}>{busy ? 'Consultando…' : 'Atualizar'}</button></div></section>}
+  {section === 'diag' && <section aria-label="Diagnóstico"><p>Valores dos processos do PokéHub, incluindo as páginas do jogo. Os dados ficam nesta máquina.</p>{diagnostics && <dl className="diagnostics"><div><dt>Processos</dt><dd>{diagnostics.processCount}</dd></div><div><dt>Memória residente somada</dt><dd>{diagnostics.memoryKb === null ? 'Indisponível' : `${new Intl.NumberFormat('pt-BR').format(diagnostics.memoryKb)} KB`}</dd></div><div><dt>CPU somada</dt><dd>{diagnostics.cpuPercent === null ? 'Indisponível' : `${new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(diagnostics.cpuPercent)}%`}</dd></div>{diagnostics.cpuIntervalMs !== null && <div><dt>Intervalo aproximado da CPU</dt><dd>{new Intl.NumberFormat('pt-BR',{maximumFractionDigits:1}).format(diagnostics.cpuIntervalMs / 1000)} s</dd></div>}</dl>}<p>A memória compartilhada pode ser contada mais de uma vez. A CPU pode ultrapassar 100% e exige duas amostras com pelo menos 1 segundo de intervalo; mudanças nos processos reiniciam a comparação.</p>{diagnostics && <p>Última amostra: {new Date(diagnostics.sampledAt).toLocaleTimeString('pt-BR')}</p>}
+   <div className="diag-procs"><h2>Por conta</h2>{procs ? <table className="diag-table"><thead><tr><th>Item</th><th>CPU</th><th>Memória privada</th><th>Conjunto de trabalho</th><th/></tr></thead><tbody>
+    {procs.accounts.map(item => {const profile=profiles.find(p => p.id === item.id);const over=item.privateKb !== null && item.privateKb > memLimitGb * 1024 * 1024;return <tr key={item.id} data-over={over || undefined}><td>{profile?.label ?? item.id}{states[item.id] === 'suspended' ? ' (suspensa)' : ''}</td><td>{fmtCpu(item.cpuPercent)}</td><td>{fmtMem(item.privateKb)}</td><td>{fmtMem(item.workingSetKb)}</td><td>{over && <button disabled={busy} title="Recarrega só esta conta; nada é recarregado sozinho" onClick={() => void reload(item.id)}>Recarregar</button>}</td></tr>;})}
+    {([['Hub (janela do PokéHub)',procs.hub],['GPU',procs.gpu],['Outros',procs.other]] as const).map(([name,group]) => <tr key={name}><td>{name}</td><td>{fmtCpu(group.cpuPercent)}</td><td>{fmtMem(group.privateKb)}</td><td>{fmtMem(group.workingSetKb)}</td><td/></tr>)}
+   </tbody></table> : <p role="status">Medindo…</p>}
+   <label>Avisar acima de <input type="number" min={0.5} max={32} step={0.5} value={memLimitGb} onChange={event => {const value=Number(event.target.value);if (value > 0) setMemLimitGb(value);}}/> GB de memória privada por conta</label>
+   <p className="note">Atualiza a cada 4 s enquanto esta seção está aberta. A CPU aparece a partir da segunda leitura. Uma conta acima do limite ganha o botão Recarregar (não recarrega sozinha).</p></div><div className="actions"><button className="primary" disabled={busy} onClick={() => void sampleDiagnostics()}>{busy ? 'Consultando…' : 'Atualizar'}</button></div></section>}
   {message && <p role="alert">{message}</p>}</div></section></main>}
  {editor !== null && editor !== 'manage' && <main><section className="panel"><h1>{editor==='new'?'Novo perfil':'Editar perfil'}</h1><p>O e-mail é apenas uma identificação. O login acontece na página oficial do jogo.</p><form aria-busy={busy} onSubmit={event => void submit(event)}><label>Nome do perfil<input required maxLength={80} value={form.label} onChange={e => setForm({...form,label:e.target.value})}/></label><label>E-mail de identificação<input required type="email" maxLength={254} value={form.emailLabel} onChange={e => setForm({...form,emailLabel:e.target.value})}/></label><label>Personagem (opcional)<input maxLength={80} value={form.characterName} onChange={e => setForm({...form,characterName:e.target.value})}/></label><label className="color" style={{'--c':form.colorToken} as CSSProperties}>Cor<span><input type="color" value={form.colorToken} onChange={e => setForm({...form,colorToken:e.target.value})}/><El color={form.colorToken}/>{elements[elementOf(form.colorToken)].name}</span></label><div className="actions"><button className="primary" disabled={busy}>Salvar</button><button type="button" disabled={busy} onClick={() => {if (canLeaveEditor()) closeEditor();}}>Cancelar</button></div>{editor !== 'new' && <div className="zone"><h2>Dados e remoção</h2><div className="actions"><button type="button" disabled={busy} onClick={() => {const profile=profiles.find(p=>p.id===editor);if(profile) void clearSession(profile);}}>Limpar dados da sessão</button><button type="button" className="danger" disabled={busy} onClick={() => {const profile=profiles.find(p=>p.id===editor);if(profile) void remove(profile);}}>Remover só o perfil</button><button type="button" className="danger" disabled={busy} onClick={() => {const profile=profiles.find(p=>p.id===editor);if(profile) void removeWithData(profile);}}>Apagar perfil e dados</button></div></div>}</form>{message && <p role="alert">{message}</p>}<p className="note">{fairUse}</p></section></main>}
  {colsShown && <div className="cols">{profiles.map((p,index) => {const r = rects[index]; if (!r) return null; const state = states[p.id] ?? ''; const label = labels[state] ?? 'Iniciando'; const short = shortLabels[state] ?? 'Iniciando'; const focused = active?.id === p.id; const expanded = expandedId === p.id && focused;
   const toggle = () => { if (focused) { if (focus !== null) collapse(); } else expand(p.id); };
-  return <section key={p.id} className="col-head" aria-label={`Sessão ${p.label}`} data-state={state} style={{'--c':p.colorToken,left:r.x,top:r.y,width:r.width,height:COL_HEAD} as CSSProperties}
+  return <Fragment key={p.id}>{state === 'suspended' && <div className="col-suspended" style={{left:r.x,top:r.y + COL_HEAD,width:r.width,height:Math.max(0,r.height - COL_HEAD)}}><p>Conta suspensa</p><button className="primary" disabled={busy} onClick={() => void suspendToggle(p.id,true)}>Retomar</button></div>}<section className="col-head" aria-label={`Sessão ${p.label}`} data-state={state} style={{'--c':p.colorToken,left:r.x,top:r.y,width:r.width,height:COL_HEAD} as CSSProperties}
    onPointerEnter={() => {hoverCol.current = p.id;}} onDoubleClick={event => {if (!busy && !(event.target as HTMLElement).closest('button') && !(focused && focus === null)) toggle();}}>
    <El color={p.colorToken}/><strong title={p.characterName ? `${p.label} · ${p.characterName}` : p.label}>{p.label}</strong>{short && <span className="pill" data-state={state} role="status" title={label}>{short}</span>}<span className="grow"/>
    <button className="icon" disabled={busy || (focused && focus === null)} aria-pressed={expanded} aria-keyshortcuts="Control+Shift+Enter" aria-label={focused ? 'Voltar à grade' : `Expandir ${p.label}`} title={focused ? (focus === null ? smallWindow : `Voltar à grade (${expanded ? 'Esc · ' : ''}Ctrl+Shift+Enter)`) : `Expandir ${p.label} (Ctrl+Shift+Enter ou duplo clique no cabeçalho). ${expandHint}`} onClick={toggle}><Icon d={focused ? icons.collapse : icons.expand}/></button>
-   <button className="icon" disabled={busy} aria-label={`Recarregar ${p.label}`} title={`Recarregar ${p.label}`} onClick={() => void reload(p.id)}><Icon d={icons.reload}/></button>
+   <button className="suspend" disabled={busy} title={state === 'suspended' ? `Retomar ${p.label}` : `Suspender ${p.label}: fecha a página do jogo e libera memória; o login é mantido`} onClick={() => void suspendToggle(p.id,state === 'suspended')}>{state === 'suspended' ? 'Retomar' : 'Suspender'}</button>
+   <button className="icon" disabled={busy || state === 'suspended'} aria-label={`Recarregar ${p.label}`} title={`Recarregar ${p.label}`} onClick={() => void reload(p.id)}><Icon d={icons.reload}/></button>
    <button className="icon" disabled={busy} aria-label={`Reabrir sessão de ${p.label}`} title={`Reabrir sessão de ${p.label}`} onClick={() => void restart(p.id)}><Icon d={icons.restart}/></button>
-  </section>;})}</div>}
- {sideShown && <HuntSide profiles={profiles} states={states} prefs={sidePrefs} onPrefs={setSidePrefs} onClose={() => setSide(false)} onSettings={() => void openManage('ext')} focusId={active?.id ?? null} onAccount={setSidePick}/>}
+  </section></Fragment>;})}</div>}
+ {sideShown && <HuntSide profiles={profiles} states={states} prefs={sidePrefs} onPrefs={setSidePrefs} onClose={() => setSide(false)} onSettings={() => void openManage('ext')} focusId={active?.id ?? null} onAccount={setSidePick} lite={perf.lite}/>}
  {!loaded && <main><section className="panel" role="status"><h1>Carregando perfis</h1><p>Preparando suas sessões locais.</p></section></main>}
  {loaded && loadError && editor === null && <main><section className="panel"><h1>Não foi possível carregar os perfis</h1><p>Verifique o armazenamento local e tente novamente.</p><button className="primary" onClick={() => {setLoaded(false);void initialize().catch(() => {setLoadError(true);setLoaded(true);});}}>Tentar novamente</button></section></main>}
  {loaded && !loadError && editor === null && profiles.length === 0 && <main><section className="panel empty"><Logo/><h1>Suas sessões em um só lugar</h1><p>Crie um perfil para abrir o PokéIdle. Cada perfil usa uma sessão local separada.</p><button className="primary" onClick={() => openEditor()}>Criar primeiro perfil</button>{message && <p role="alert">{message}</p>}<p className="note">{fairUse}</p></section></main>}

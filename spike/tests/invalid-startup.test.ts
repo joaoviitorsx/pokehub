@@ -8,7 +8,7 @@ const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
 
 const directory=mkdtempSync(join(tmpdir(),'pokehub-invalid-start-'));
 const path=join(directory,'pokehub.sqlite');
-const app=Object.assign(new EventEmitter(),{requestSingleInstanceLock:()=>true,whenReady:()=>Promise.resolve(),getPath:()=>directory,quit:vi.fn()});
+const app=Object.assign(new EventEmitter(),{requestSingleInstanceLock:()=>true,commandLine:{getSwitchValue:()=>'',appendSwitch:vi.fn()},setAppUserModelId:vi.fn(),whenReady:()=>Promise.resolve(),getPath:()=>directory,quit:vi.fn()});
 const showErrorBox=vi.fn(); const createWindow=vi.fn(); const createView=vi.fn();
 vi.doMock('electron',()=>({app,BrowserWindow:createWindow,WebContentsView:createView,ipcMain:{handle(){}},dialog:{showErrorBox}}));
 afterAll(()=>{vi.doUnmock('electron');rmSync(directory,{recursive:true,force:true});});
