@@ -531,8 +531,9 @@ describe('processo principal', () => {
   const viewsBefore = shell.children.size; windowCalls.length = 0;
   const prevent = vi.fn(); shell.emit('close',{preventDefault:prevent});
   expect(prevent).toHaveBeenCalledTimes(1); expect(windowCalls).toEqual(['hide']); expect(shell.children.size).toBe(viewsBefore);
-  expect(tray.balloons).toHaveLength(1); expect(call('tray:get').data).toMatchObject({hintShown:true});
-  shell.emit('minimize'); expect(windowCalls).toEqual(['hide','hide']); expect(tray.balloons).toHaveLength(1); // aviso só na primeira vez
+  const balloons = process.platform === 'win32' ? 1 : 0; // balão só no Windows; Linux/macOS usam Notification (indisponível no mock)
+  expect(tray.balloons).toHaveLength(balloons); expect(call('tray:get').data).toMatchObject({hintShown:true});
+  shell.emit('minimize'); expect(windowCalls).toEqual(['hide','hide']); expect(tray.balloons).toHaveLength(balloons); // aviso só na primeira vez
   // opções desligadas: o fechar segue normal
   expect(call('tray:set',{onClose:false,onMinimize:false})).toEqual({ok:true,data:{onClose:false,onMinimize:false,hintShown:true}});
   const noPrevent = vi.fn(); windowCalls.length = 0; shell.emit('close',{preventDefault:noPrevent}); shell.emit('minimize');
