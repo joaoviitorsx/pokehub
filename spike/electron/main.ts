@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, Tray, Menu, Notification, nativeImage, powerSaveBlocker, safeStorage, session, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, WebContentsView, globalShortcut, ipcMain, dialog, shell, net, Tray, Menu, Notification, nativeImage, powerSaveBlocker, safeStorage, session, type IpcMainInvokeEvent } from 'electron';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +10,8 @@ import { createMarketReader } from './market-read';
 import { createShop, SHOP_UNAVAILABLE } from './shop';
 import { createCaptureService, parseQuery } from './captures';
 import { alertsOf, alertText } from '../domain/captures';
-import { isAllowedSessionNavigation, isOAuthProviderUrl } from './navigation';
+import { isAllowedGameUrl, isAllowedSessionNavigation, isOAuthProviderUrl } from './navigation';
+import { createGhostWindow, createScreenTarget, type GhostWindow } from './screen-target';
 import { ProfileStore } from './profile-store';
 import { partitionFor } from './partition';
 import { PreferencesStore } from './preferences-store';
@@ -64,6 +65,9 @@ let externalNoticeOpen = false;
 const suspended = new Set<string>(); // contas suspensas: só em memória; ao reiniciar o app todas abrem
 let perf: PerformancePrefs = {lite: false, muteUnfocused: false};
 let tray: Tray | null = null;
+let ghost: GhostWindow | null = null; // R5: janela fantasma (captura com a janela na bandeja)
+const screenTargets = new WeakMap<WebContentsView, ReturnType<typeof createScreenTarget>>();
+const CONTROL_SHORTCUT = 'CommandOrControl+Shift+F12'; // encerra TODO controle remoto (registrado só enquanto alguém controla)
 let remote: RemoteHub | null = null; // acesso remoto pelo celular (spike/remote); só liga se o usuário ativar
 let trayPrefs: TrayPrefs = {onClose:true, onMinimize:true, hintShown:false};
 let quitting = false; // before-quit: a partir daqui fechar a janela encerra de verdade
@@ -323,8 +327,9 @@ function addView(id: string) {
       view.webContents.setWindowOpenHandler(() => { void explainBlockedPopup(); return {action:'deny'}; });
       lockSession(view.webContents.session); // sem downloads e sem permissões
       installNetworkPolicy(view.webContents.session,id);
-      view.webContents.on('will-navigate', (event, url) => { if (!isAllowedSessionNavigation(url)) event.preventDefault(); });
-      view.webContents.on('will-redirect', (event, url) => { if (!isAllowedSessionNavigation(url)) event.preventDefault(); });
+      // durante o controle remoto a conta só navega em pokeidle.io (nada de login do Google/Discord pelo celular)
+      view.webContents.on('will-navigate', (event, url) => { if (!isAllowedSessionNavigation(url) || (remote?.controlling(id) && !isAllowedGameUrl(url))) event.preventDefault(); });
+      view.webContents.on('will-redirect', (event, url) => { if (!isAllowedSessionNavigation(url) || (remote?.controlling(id) && !isAllowedGameUrl(url))) event.preventDefault(); });
       view.webContents.once('destroyed', () => clearTimeout(retry));
       view.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => { if (isMainFrame && !isInPlace) huntDocuments.set(view.webContents, {}); });
       view.webContents.on('did-start-loading', () => { if (isMainFrameLoading(view.webContents.isLoadingMainFrame())) reportCurrent('loading'); }); // subframe não reabre o "carregando"
@@ -394,6 +399,7 @@ if (process.platform === 'win32') app.setAppUserModelId('local.pokehub.desktop')
 // Bandeja: a janela some, as sessões continuam vivas (views intactas); só o ícone fica nos ícones ocultos.
 function showWindow() {
   if (!window || window.isDestroyed()) return;
+  ghost?.reveal(); // se a janela estava "fantasma" (alguém assistindo), volta a ser a janela de verdade
   if (window.isMinimized()) window.restore();
   window.show(); window.focus();
 }
@@ -412,7 +418,7 @@ function updateTray() {
   remote?.updatePower();
   try {
     const profiles = store.list();
-    tray.setToolTip(trayTooltip(runningCount(profiles,states)));
+    tray.setToolTip(trayTooltip(runningCount(profiles,states)) + (remote?.screenTooltip() ?? '')); // + "tela remota: celular em conta" enquanto alguém vê/controla
     tray.setContextMenu(Menu.buildFromTemplate(trayMenuItems({
       profiles, states, lite:perf.lite, open:showWindow, quit:() => app.quit(),
       remote:remote ? {enabled:remote.enabled(), toggle:() => { void remote?.setEnabled(!remote.enabled()).catch(() => console.error('Falha ao alternar o acesso remoto.')).finally(() => { refreshTray.call(); if (!window.isDestroyed()) window.webContents.send('remote:changed'); }); }} : undefined,
@@ -646,12 +652,19 @@ if (primary) app.whenReady().then(() => {
   const trayEvent = (event: TrayEvent) => trayAction({event, platform:process.platform, prefs:trayPrefs, quitting, hasTray:tray !== null});
   window.on('close', event => { if (trayEvent('close') === 'hide') { event.preventDefault(); hideToTray(); } });
   window.on('minimize', () => { if (trayEvent('minimize') === 'hide') hideToTray(); });
-  remote = createRemoteHub({dbPath:databasePath, dir:join(app.getPath('userData'),'remote'), uiDir:join(__dirname,'../../dist-remote'), iconPath:join(__dirname,'../../build/icon.png'), api:remoteApi.api, alerts:{captures, profiles:() => store.list().map(profile => ({id:profile.id, label:profile.label, colorToken:profile.colorToken})), fetcher:(url,init) => net.fetch(url,init as RequestInit)}, running:() => runningCount(store.list(),states), blocker:powerSaveBlocker, onChange:() => refreshTray.call(), onPairRequest:showWindow, secretBox:(() => { try { return safeStorage.isEncryptionAvailable() ? {encrypt:(text:string) => safeStorage.encryptString(text), decrypt:(data:Buffer) => safeStorage.decryptString(data)} : undefined; } catch { return undefined; } })(), nativeConfirm:async o => (await dialog.showMessageBox(window,{type:'warning', title:o.title, message:o.message, detail:o.detail, buttons:['Recusar',o.confirmLabel], defaultId:0, cancelId:0, noLink:true})).response === 1});
+  ghost = createGhostWindow(window);
+  const syncControlShortcut = (active: number) => {
+    try {
+      if (active > 0 && !globalShortcut.isRegistered(CONTROL_SHORTCUT)) globalShortcut.register(CONTROL_SHORTCUT,() => { remote?.endControl(); });
+      else if (active === 0) globalShortcut.unregister(CONTROL_SHORTCUT);
+    } catch { console.error('Falha ao ajustar o atalho de encerrar controle.'); }
+  };
+  remote = createRemoteHub({dbPath:databasePath, dir:join(app.getPath('userData'),'remote'), uiDir:join(__dirname,'../../dist-remote'), iconPath:join(__dirname,'../../build/icon.png'), api:remoteApi.api, screen:{target:id => { const view = views.get(id); if (!view || view.webContents.isDestroyed() || resetting.has(id)) return null; let target = screenTargets.get(view); if (!target) { target = createScreenTarget(view,window.webContents,ghost!); screenTargets.set(view,target); } return target; }, forbidden:() => window.isDestroyed() ? [] : [window.webContents], onControl:syncControlShortcut}, alerts:{captures, profiles:() => store.list().map(profile => ({id:profile.id, label:profile.label, colorToken:profile.colorToken})), fetcher:(url,init) => net.fetch(url,init as RequestInit)}, running:() => runningCount(store.list(),states), blocker:powerSaveBlocker, onChange:() => refreshTray.call(), onPairRequest:showWindow, secretBox:(() => { try { return safeStorage.isEncryptionAvailable() ? {encrypt:(text:string) => safeStorage.encryptString(text), decrypt:(data:Buffer) => safeStorage.decryptString(data)} : undefined; } catch { return undefined; } })(), nativeConfirm:async o => (await dialog.showMessageBox(window,{type:'warning', title:o.title, message:o.message, detail:o.detail, buttons:['Recusar',o.confirmLabel], defaultId:0, cancelId:0, noLink:true})).response === 1});
   registerRemoteIpc(ipcMain,trusted,remote);
   void remote.boot().catch(() => console.error('Falha ao iniciar o acesso remoto.'));
   createTray();
   window.on('closed', () => {
-    refreshTray.cancel(); tray?.destroy(); tray = null;
+    refreshTray.cancel(); tray?.destroy(); tray = null; try { globalShortcut.unregister(CONTROL_SHORTCUT); } catch { /* saindo */ }
     clearTimeout(dragTimer); clearTimeout(resizeTimer); for (const timer of startupTimers) clearTimeout(timer); startupTimers.clear(); updater.dispose();
     for (const view of views.values()) { try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { console.error('Falha ao encerrar uma sessão.'); } }
     views.clear(); void remote?.close(); remote = null; preferences.close(); store.close();

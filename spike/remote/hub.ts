@@ -8,6 +8,7 @@ import { createRemoteServer, type PairInfo, type RemoteApi, type RemoteServer, t
 import { RemoteStore, validPort, type AuditRow } from './store';
 import { createAlertEngine, type AlertEngine, type AlertProfile, type CaptureSource } from './alerts';
 import { createPush, type Push, type PushFetch } from './push';
+import { createScreen, type Screen, type ScreenTarget, type ScreenTiming } from './screen';
 import type { RemoteAlert, RemoteDevice, RemoteStatus } from '../contracts/remote';
 
 /** Confirmação NATIVA do sistema (fora da página): quem controla a janela do app não aprova sozinho. */
@@ -19,6 +20,8 @@ export interface HubDeps {
   secretBox?: SecretBox; nativeConfirm?: NativeConfirm;
   /** R3: de onde vêm as capturas e as contas; sem isto não há alertas nem push. `fetcher` só para testes/Electron (`net.fetch`). */
   alerts?: {captures: CaptureSource; profiles(): readonly AlertProfile[]; fetcher?: PushFetch};
+  /** R5: tela ao vivo e Controlar. `target` entrega só o `webContents` da conta (nunca o do hub; `forbidden` lista o que jamais pode ser capturado). */
+  screen?: {target(profileId: string): ScreenTarget | null; forbidden?(): readonly unknown[]; onControl?(active: number): void; timing?: Partial<ScreenTiming>};
   /** Só para testes: troca a fábrica do servidor e os limites/tempos dele. */
   serverFactory?: (deps: ServerDeps) => RemoteServer; serverLimits?: ServerDeps['limits']; serverTiming?: ServerDeps['timing'];
 }
@@ -58,6 +61,8 @@ export function createRemoteHub(deps: HubDeps) {
     onDisable: () => { audit(null, 'acoes_desligadas', '10 erros de PIN no dia'); alertUser('Ações pelo celular desligadas: 10 erros de PIN em um dia. Religue em Acesso remoto quando quiser.'); },
   }, pinStore);
 
+  const screen: Screen | null = deps.screen ? createScreen({accounts: () => deps.api.accounts(), target: deps.screen.target, forbidden: deps.screen.forbidden, device: id => store.getDevice(id), pinSet: () => store.getPinHash() !== null, actionsDisabled: () => store.getActionsDisabled(), checkPin: (id, value) => pin.check(id, value), audit: (id, action, detail) => audit(id, action, detail), now, onChange: changed, onControl: deps.screen.onControl, timing: deps.screen.timing}) : null;
+
   /** Fila serial: ligar, desligar e reiniciar nunca se sobrepõem. */
   const serial = <T>(task: () => Promise<T>): Promise<T> => { const run = chain.then(task, task); chain = run.then(() => undefined, () => undefined); return run; };
   const baseUrl = () => addresses[0] ? `https://${addresses[0]}:${port}` : null;
@@ -83,7 +88,7 @@ export function createRemoteHub(deps: HubDeps) {
     const binds = [...sel.binds, ...(allowLoopback ? [LOOPBACK] : [])];
     let set: CertResult;
     try { set = ensureCerts(join(deps.dir), binds.map(b => b.address), {...deps.certOptions, box: deps.secretBox, subnets: sel.subnets}); } catch { error = MSG_START; changed(); throw new RemoteUserError(MSG_START); } // as chaves ficam só em disco (0600, cifradas quando possível)
-    const created = (deps.serverFactory ?? createRemoteServer)({store, certs: () => set, api: deps.api, pairing, confirmPair, onContested: () => { if (request) { request.contested = true; audit(null, 'pareamento_contestado', request.info.ip); changed(); } }, uiDir: deps.uiDir, iconPath: deps.iconPath, now, alerts: engine ?? undefined, onActivity: () => engine?.update(), limits: deps.serverLimits, timing: deps.serverTiming});
+    const created = (deps.serverFactory ?? createRemoteServer)({store, certs: () => set, api: deps.api, pairing, confirmPair, onContested: () => { if (request) { request.contested = true; audit(null, 'pareamento_contestado', request.info.ip); changed(); } }, uiDir: deps.uiDir, iconPath: deps.iconPath, now, alerts: engine ?? undefined, screen: screen ?? undefined, onActivity: () => engine?.update(), limits: deps.serverLimits, timing: deps.serverTiming});
     let listened: number;
     try { listened = await created.listen(binds, deps.portOverride ?? store.getPort()); } catch { error = MSG_START; changed(); throw new RemoteUserError(MSG_START); }
     if (!alive()) { await created.close(); return; } // desligaram (ou outra geração assumiu) enquanto abria a porta
@@ -149,6 +154,14 @@ export function createRemoteHub(deps: HubDeps) {
     },
     enabled: () => !closed && store.getEnabled(),
     streamCount: () => server?.streamCount() ?? 0,
+    /** R5: a conta está sob controle remoto (a navegação fica travada em pokeidle.io). */
+    controlling: (profileId: string): boolean => screen?.controlling(profileId) ?? false,
+    /** R5: botão "Encerrar controle" do PC e Ctrl+Shift+F12 (só o controle; a visualização continua). */
+    endControl: (): number => screen?.endControl('pc') ?? 0,
+    /** R5: "Encerrar tudo": corta visualização e controle. */
+    endScreen: (): void => { screen?.endAll('encerrado no PC'); },
+    /** Sufixo do tooltip da bandeja enquanto alguém vê/controla. */
+    screenTooltip(): string { const list = screen?.sessions() ?? []; return list.length ? ` — ${list.some(s => s.control) ? 'CONTROLE REMOTO' : 'tela remota'}: ${list.map(s => `${s.device} em ${s.account}`).join(', ')}`.slice(0, 120) : ''; },
     isListening: () => server?.listening() ?? false,
     status(): RemoteStatus {
       const info = pairing.info(), base = baseUrl(), fp = certs?.fingerprint ?? null, first = store.countDevices() === 0;
@@ -157,7 +170,7 @@ export function createRemoteHub(deps: HubDeps) {
         network: {state: netState, label: netLabel}, fingerprint: fp ? formatFingerprint(fp) : null, caNotice, aclOk, notice, actionsDisabled: store.getActionsDisabled(),
         pairing: info && base && fp ? {code: revealed ? formatCode(info.code) : '', codeHidden: !revealed, expiresAt: info.expiresAt, attemptsLeft: info.attemptsLeft, attemptsByIp: info.byIp, caUrl: `${base}/ca.crt`, iosUrl: `${base}/ca.mobileconfig`, bootstrapUrl: `${base}/#fp=${fp}`, fingerprint: formatFingerprint(fp)} : null,
         request: request ? {name: request.info.name, nickname: request.info.nickname, ua: request.info.ua, ip: request.info.ip, sas: request.info.sas, contested: request.contested, since: request.since, deciding: request.deciding} : null,
-        paired, pinSet: store.getPinHash() !== null, devices: store.countDevices(), firstPairing: first, dailyCapGold: store.getDailyCapGold(),
+        paired, pinSet: store.getPinHash() !== null, devices: store.countDevices(), firstPairing: first, dailyCapGold: store.getDailyCapGold(), screen: screen?.sessions() ?? [],
       };
     },
     startPairing(): RemoteStatus { if (!server) throw new RemoteUserError('Ligue o acesso remoto primeiro.'); pairing.start(); paired = null; revealed = store.countDevices() > 0; audit(null, 'pareamento_iniciado'); changed(); return this.status(); },
@@ -204,7 +217,7 @@ export function createRemoteHub(deps: HubDeps) {
     setPort(value: unknown): void { if (!validPort(value)) throw new RemoteUserError('Porta inválida.'); store.setPort(value); },
     publish: (event: string, data: unknown) => server?.publish(event, data),
     updatePower: () => !closed && power.update(server?.listening() ?? false, deps.running()), // o sono só é segurado com o servidor de fato escutando
-    async close(): Promise<void> { if (closed) return; closed = true; gen++; engine?.close(); clearPoll(); power.update(false, 0); const done = serial(stopServer); try { store.close(); } catch { /* já fechado */ } await done; }, // o banco fecha já; a porta fecha junto
+    async close(): Promise<void> { if (closed) return; closed = true; gen++; engine?.close(); screen?.closeAll('app encerrando'); clearPoll(); power.update(false, 0); const done = serial(stopServer); try { store.close(); } catch { /* já fechado */ } await done; }, // o banco fecha já; a porta fecha junto
   };
   return self;
 }

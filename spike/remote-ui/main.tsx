@@ -7,6 +7,7 @@ import { Ball } from '../src/icons';
 import { PixelIcon } from './pixel-icons';
 import { AlertsView } from './alerts-ui';
 import { CapturesView, LastCapture } from './captures-ui';
+import { GameView } from './screen-ui';
 import { resyncPush } from './push-client';
 import { downAccounts, resolveHash, isRemoteAlert, isRemoteCapture, mergeAlerts, mergeCaptures, PUSH_URL_RE } from './push-helpers';
 import type { RemoteAlert, RemoteCapture } from './r3-types';
@@ -120,7 +121,7 @@ function MarketView({accounts, id, onPick}: {accounts: Account[]; id: string | n
 /** Link direto (#conta, #mercado, #saude…): abre a aba certa; as notificações das próximas fases vão usar isto. */
 function Shell({me, onLogout}: {me: Me; onLogout: () => void}) {
   const [tab, setTab] = useState<Tab>(() => resolveHash(location.hash).tab), [accounts, setAccounts] = useState<Account[]>([]), [selected, setSelected] = useState<string | null>(() => resolveHash(location.hash).account ?? null);
-  const [sub, setSub] = useState<'hunt' | 'capturas'>('hunt'), [alerts, setAlerts] = useState<RemoteAlert[]>([]), [captures, setCaptures] = useState<RemoteCapture[]>([]);
+  const [sub, setSub] = useState<'hunt' | 'jogo' | 'capturas'>('hunt'), [alerts, setAlerts] = useState<RemoteAlert[]>([]), [captures, setCaptures] = useState<RemoteCapture[]>([]);
   const [updated, setUpdated] = useState<number | null>(null), [online, setOnline] = useState(true), [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const events = new EventSource('/api/events');
@@ -159,8 +160,8 @@ function Shell({me, onLogout}: {me: Me; onLogout: () => void}) {
         <Health accounts={accounts}/>
         <section className="card"><p className="muted">Pareado como {me.name}.</p><button onClick={() => { if (confirm('Sair deste aparelho? Para voltar, será preciso parear de novo.')) void post('/api/logout', {}).then(onLogout); }}>Sair deste aparelho</button></section></>}
       {tab === 'conta' && (current ? <><Pick accounts={accounts} value={current} onChange={setSelected}/>
-        <div className="seg subtabs" role="group" aria-label="Seções da conta"><button aria-pressed={sub === 'hunt'} onClick={() => setSub('hunt')}>Onde caçar</button><button disabled>Jogo <small>em breve</small></button><button aria-pressed={sub === 'capturas'} onClick={() => setSub('capturas')}>Capturas</button><button disabled>Equipe <small>em breve</small></button></div>
-        {sub === 'hunt' ? <HuntView id={current}/> : <CapturesView id={current} live={captures}/>}</> : <section className="card"><p className="muted">Nenhuma conta.</p></section>)}
+        <div className="seg subtabs" role="group" aria-label="Seções da conta"><button aria-pressed={sub === 'hunt'} onClick={() => setSub('hunt')}>Onde caçar</button><button aria-pressed={sub === 'jogo'} onClick={() => setSub('jogo')}>Jogo</button><button aria-pressed={sub === 'capturas'} onClick={() => setSub('capturas')}>Capturas</button><button disabled>Equipe <small>em breve</small></button></div>
+        {sub === 'jogo' ? <GameView key={current} id={current} label={accounts.find(a => a.id === current)?.label ?? ''}/> : sub === 'hunt' ? <HuntView id={current}/> : <CapturesView id={current} live={captures}/>}</> : <section className="card"><p className="muted">Nenhuma conta.</p></section>)}
       {tab === 'loja' && <Soon title="Loja"/>}
       {tab === 'mercado' && <MarketView accounts={accounts} id={current} onPick={setSelected}/>}
       {tab === 'alertas' && <AlertsView alerts={alerts} colors={colors} now={now} onRefresh={loadAlerts}/>}

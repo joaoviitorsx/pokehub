@@ -3,6 +3,7 @@
 import { createServer, type Server } from 'node:https';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
+import type { Duplex } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -12,6 +13,8 @@ import { Pairing, RateLimiter, generateSas, normalizeCode } from './guards';
 import { MAX_DEVICES, type DeviceRow, type RemoteStore } from './store';
 import { caFingerprint, mobileconfig, type CertSet } from './certs';
 import { parsePrefs } from './alerts';
+import type { Screen } from './screen';
+import { rejectUpgrade } from './ws';
 import type { AlertPrefs, RemoteAlert, RemoteCapture } from '../contracts/remote';
 
 export interface RemoteAccount { id: string; label: string; color: string; state: string; suspended: boolean }
@@ -37,6 +40,8 @@ export interface ServerDeps {
   /** O mesmo código certo chegou de novo enquanto o pedido está aberto: alguém mais o conhece. */
   onContested?(): void;
   uiDir: string; iconPath: string; now?: () => number; alerts?: AlertsApi;
+  /** R5: tela ao vivo (WebSocket `/api/screen/:id`). Sem isto o upgrade responde 404. */
+  screen?: Screen;
   /** Abriu/fechou um fluxo SSE ou um aparelho saiu (revogado/expirado): o motor decide se o leitor de capturas precisa ficar ligado. */
   onActivity?(): void;
   limits?: {general?: number; pair?: number; wait?: number; api?: number}; timing?: {waitMs?: number; abandonMs?: number; maxMs?: number};
@@ -111,7 +116,7 @@ export function createRemoteServer(deps: ServerDeps) {
    * Aparelho autenticado pelo cookie (hash em tempo constante). Vence por inatividade (30 dias) ou limite absoluto (180);
    * o token roda a cada 24 h (o anterior vale 5 min) e o cookie renova a cada uso (Max-Age 30 dias) pelo `Set-Cookie` da resposta.
    */
-  function authenticate(req: IncomingMessage, res: ServerResponse): DeviceRow | null {
+  function authenticate(req: IncomingMessage, res: ServerResponse | null): DeviceRow | null { // `res` nulo (upgrade de WebSocket): sem rotação/renovação (não há como entregar o Set-Cookie)
     const token = cookieToken(req);
     if (!token) return null;
     const row = deps.store.tokenRow(token.id);
@@ -124,7 +129,7 @@ export function createRemoteServer(deps: ServerDeps) {
     const why = deviceExpired(device, t);
     if (why) { expire(device, why === 'limite' ? 'limite de 180 dias' : 'sem uso por 30 dias'); return null; }
     if (t - (lastTouch.get(device.id) ?? 0) > 60_000) { lastTouch.set(device.id, t); try { deps.store.touch(device.id, new Date(t).toISOString()); } catch { /* só informativo */ } }
-    if (current && t - row.rotatedAt > ROTATE_MS) {
+    if (!res) { /* upgrade: nada de Set-Cookie */ } else if (current && t - row.rotatedAt > ROTATE_MS) {
       const secret = randomBytes(32).toString('base64url');
       deps.store.rotateToken(device.id, sha(secret), row.hash, t + PREV_VALID_MS, t);
       res.setHeader('Set-Cookie', cookieValue(device.id, secret)); lastRenew.set(device.id, t);
@@ -329,7 +334,26 @@ export function createRemoteServer(deps: ServerDeps) {
       await route(req, res, ip);
     } catch { try { fail(res, 500, MSG.fail); } catch { res.destroy(); } } // erro interno: nada do erro real sai
   }
-  function closeStreams(deviceId: string) { for (const [res, id] of streams) if (id === deviceId) { streams.delete(res); res.end(); } }
+  function closeStreams(deviceId: string) { deps.screen?.closeDevice(deviceId); for (const [res, id] of streams) if (id === deviceId) { streams.delete(res); res.end(); } }
+  /** Upgrade para WebSocket (só `/api/screen/:id`): mesmas conferências de rede e Host; Origin EXATO (Cross-Site WebSocket Hijacking), cookie de aparelho válido e subprotocolo `ph.v1`. */
+  function upgrade(req: IncomingMessage, raw: Duplex, head: Buffer) {
+    const socket = raw as Socket;
+    try {
+      const ip = unmapIPv4(socket.remoteAddress), local = unmapIPv4(socket.localAddress), mask = masks.get(local);
+      if (!isAllowedRemote(ip) || !mask || !sameSubnet(ip, local, mask)) { socket.destroy(); return; }
+      const host = hostOnly(req.headers.host);
+      if (!host || !allowedHosts.has(host)) return rejectUpgrade(socket, 421);
+      if (!general.hit(ip)) return rejectUpgrade(socket, 429);
+      const match = /^\/api\/screen\/([\w-]{1,64})$/.exec(new URL(req.url ?? '/', 'https://x').pathname);
+      if (!deps.screen || !match) return rejectUpgrade(socket, 404);
+      if (req.headers.origin !== `https://${req.headers.host}`) return rejectUpgrade(socket, 403); // sem Origin ou de outro site: recusa
+      const device = authenticate(req, null);
+      if (!device) return rejectUpgrade(socket, 401);
+      socket.setTimeout(0); // o soquete de 30 s do HTTP não vale para o WebSocket (a tela tem ping/pong e prazo próprios)
+      const status = deps.screen.accept({req, socket, head, device: {id: device.id, name: device.name}, profileId: match[1]!});
+      if (status !== null) rejectUpgrade(socket, status);
+    } catch { try { socket.destroy(); } catch { /* já fechado */ } }
+  }
   const drop = (res: ServerResponse) => { streams.delete(res); try { res.destroy(); } catch { /* já fechada */ } };
 
   return {
@@ -354,6 +378,7 @@ export function createRemoteServer(deps: ServerDeps) {
             socket.once('close', () => { sockets.delete(socket); const left = (perIp.get(ip) ?? 1) - 1; if (left <= 0) perIp.delete(ip); else perIp.set(ip, left); });
           });
           server.on('secureConnection', tls => { tls.setTimeout(SOCKET_TIMEOUT_MS); tls.on('timeout', () => tls.destroy()); });
+          server.on('upgrade', (req, socket, head) => upgrade(req, socket, head));
           server.on('tlsClientError', (_error, socket) => socket.destroy());
           await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(chosen, bind.address, () => { server.off('error', reject); resolve(); }); });
           servers.push(server);
@@ -373,6 +398,8 @@ export function createRemoteServer(deps: ServerDeps) {
     /** Fecha todos os listeners e conexões (a porta deixa de responder) e cancela os pedidos de pareamento abertos. */
     async close(): Promise<void> {
       clearInterval(heartbeat); heartbeat = undefined;
+      const watching = deps.screen?.count() ?? 0; deps.screen?.closeAll('desligado'); // WebSockets da tela: fecham com auditoria antes de derrubar os soquetes
+      if (watching) await new Promise<void>(resolve => { const t = setTimeout(resolve, 80); t.unref(); }); // dá tempo de o `bye` e o quadro de close saírem (o destroy abaixo descartaria)
       for (const res of streams.keys()) { try { res.end(); } catch { /* já fechada */ } }
       streams.clear();
       for (const p of pendings.values()) { clearTimeout(p.abandon); clearTimeout(p.max); if (!p.result) p.ctrl.abort(); }

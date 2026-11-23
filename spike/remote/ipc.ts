@@ -25,4 +25,5 @@ export function registerRemoteIpc(ipcMain: Pick<IpcMain, 'handle'>, trusted: (ev
   handle('remote:audit', () => hub.audit());
   handle('remote:push-test', id => hub.pushTest(id));
   handle('remote:alerts', () => hub.alerts(20));
+  handle('remote:screen-end', mode => { if (mode !== 'control' && mode !== 'all') throw new Error(); if (mode === 'control') hub.endControl(); else hub.endScreen(); return hub.status(); });
 }

@@ -150,6 +150,55 @@ Na primeira vez o Windows pergunta se o PokéHub pode receber conexões: marque 
 - No iPhone o push só funciona com o app instalado na tela inicial (PWA) e a CA instalada; a Apple recusa assuntos VAPID com `localhost`, por isso o assunto genérico é `example.com`.
 - Não há envio por Discord/ntfy (fica para depois).
 
+## Implementado (R5, tela ao vivo e Controlar)
+
+No celular: **Conta → Jogo**. O hub transmite a conta como JPEG por **WebSocket** e, com o PIN, o celular passa a **controlar** a conta.
+
+**Protocolo** (tipos em `spike/contracts/screen.ts`; servidor em `spike/remote/screen.ts`, entrada em `screen-input.ts`, WebSocket em `ws.ts`)
+- `GET /api/screen/:profileId` com `Upgrade: websocket` no mesmo servidor HTTPS, subprotocolo **`ph.v1`** (o navegador não consegue enviar `X-PH` num WebSocket, então o subprotocolo faz esse papel). **Sem dependência nova:** o `ws.ts` é um RFC 6455 mínimo só de servidor (sem extensões nem fragmentação; payload máximo de **64 KB** conferido antes de acumular; cliente sem máscara, bits reservados, fragmento, binário e UTF-8 inválido fecham o soquete). `bun audit --prod` segue sem vulnerabilidades (nada foi adicionado ao `package.json`).
+- **Upgrade, na ordem:** IP na mesma sub-rede → `Host` é um IP vinculado (421) → limite geral → **`Origin` idêntico a `https://<Host>` (403; sem `Origin` também recusa: Cross-Site WebSocket Hijacking)** → cookie de aparelho válido, não revogado nem vencido (401; o upgrade **não rotaciona** o cookie) → conta conhecida (404) e **não suspensa** (409) → subprotocolo `ph.v1` (400) → limites (429): **1 espectador por conta e 2 no total** (o mesmo aparelho reconectando substitui a conexão velha) → alvo de captura que não seja o hub (403).
+- Do celular só entra JSON de texto ≤ 4 KB: `ack`, `pause`/`resume`, `control` (PIN), `end-control` e `in` (entrada). Do PC saem `hello`, `status`, `stats`, `control`, `denied`, `limit`, `bye` e os **quadros** (mensagem binária: 4 bytes com o tamanho do cabeçalho, cabeçalho `{seq,w,h,at}` e o JPEG). Nenhuma mensagem leva `emailLabel`, URL nem token do jogo (há teste que varre tudo).
+- Vida da conexão: ping do servidor a cada 20 s (o navegador responde sozinho); sem nenhuma mensagem por 60 s, fecha; pausada por mais de 10 min, fecha. Fecham na hora: **revogar** o aparelho, sair (`/api/logout`), aparelho vencido, **desligar o acesso remoto**, **mudar de rede** (o servidor para) e **sair do app**. Tudo isso passa por `closeStreams`/`close()` do servidor.
+
+**Ver**
+- Captura **só** de `webContents.capturePage()` da **view da conta** (`spike/electron/screen-target.ts`); nunca `desktopCapturer`, nunca a janela do hub (o hub passa `forbidden: [window.webContents]` e a captura de um alvo proibido é recusada, com teste) e nunca outra janela.
+- Só transmite com a URL **exatamente** em `https://pokeidle.io`. Qualquer outra origem (login do Google/Discord, `pokeidle.io.evil.com`, `http:`, outra porta, `about:blank`) manda o estado **"conteúdo protegido"** e **não captura**. A origem é conferida antes e depois de cada captura (o quadro é descartado se mudou no meio).
+- **Campo de senha com foco pausa** a captura (script constante em mundo isolado: o `activeElement` é `input[type=password]`; atravessa shadow DOM; iframe que não dá para inspecionar ou erro na verificação contam como senha). Também confere antes e depois da captura. Durante o controle, **teclas e texto não passam** se há senha com foco.
+- 1–2 quadros/s (500 ms; cai para 1/s depois de 3 quadros iguais), JPEG qualidade 60, largura máxima 1280 (`nativeImage.resize`), só envia se o quadro **mudou** (MD5 do bitmap, antes de codificar o JPEG). No máximo 2 quadros sem `ack`; **sem `ack` por 10 s pausa** (`sem-ack`); o `visibilitychange` do celular manda `pause` (`oculto`) e `resume`.
+- **Indicador no PC:** faixa na barra do hub ("Celular X está vendo/controlando Y") com **Encerrar controle** e **Cortar**, e o tooltip da bandeja ("tela remota: …" / "CONTROLE REMOTO: …").
+
+**Visão oculta (medido no Electron 44, Windows)**
+
+| Situação | `capturePage` |
+|---|---|
+| view visível | funciona |
+| view com `setVisible(false)` (outra conta em foco, grade) e janela visível | **funciona**, quadros novos |
+| view fora da tela com `setVisible(true)` (janela visível) | funciona |
+| janela **escondida na bandeja** (`window.hide()`) | **nunca responde** (a promessa fica pendurada), com ou sem view visível |
+| janela minimizada | funciona |
+| `beginFrameSubscription` com a janela escondida | 0 quadros |
+
+- Decisão: `capturePage` + **"janela fantasma"** só enquanto alguém assiste. Com a janela na bandeja o hub a mostra com `showInactive()`, **opacidade 0, sem botão na barra de tarefas e sem receber o mouse** (`setOpacity(0)`, `setSkipTaskbar(true)`, `setIgnoreMouseEvents(true)`); ao parar de assistir ela volta exatamente ao que era (`hide()`, opacidade 1, mouse e barra de tarefas normais). Se você abrir a janela de verdade nesse meio tempo (bandeja ou atalho), ela é devolvida ao normal sem esconder de novo; se voltar para a bandeja com alguém assistindo, o truque é reaplicado. Uma view que nunca recebeu área (modo Foco desde o início) ganha 1280×720 só enquanto a assistem, continua oculta e só é desfeita se ninguém mexeu nos limites. O `capturePage` tem prazo de 2,5 s: se não responder, o celular vê "sem imagem agora".
+- Não usamos `beginFrameSubscription`: não entregou quadros com a janela escondida, e o `capturePage` a 2 qps é barato.
+
+**Controlar**
+- Exige o aparelho com **"pode agir"** (reconferido durante a sessão; remover encerra o controle), o PIN definido e as ações não desligadas. O PIN é verificado **no servidor** pela mesma `PinGuard` (mesmos bloqueios escalonados: 5 erros → 15 min, 1 h, 24 h, revoga; 10 erros/dia desligam as ações) e é **dedicado ao controle**: gera um **token de controle de 128 bits ligado a esta conexão**, válido **10 min**, **não renovável sem digitar o PIN de novo**, com **2 min de ociosidade** (só entrada aceita conta). **Um controlador por conta.** Pausada, protegida ou fora de `pokeidle.io`, a entrada é ignorada. Não reaproveita nenhuma "elevação" de compras (R4).
+- **Entrada sanitizada** (`screen-input.ts`): lista fechada `md`/`mu`/`mm`/`wh`/`kd`/`ku`/`ch`, campos estritos (qualquer campo extra recusa); só o **botão esquerdo** (nada de clique direito/menu de contexto); coordenadas da imagem do celular **mapeadas** para os limites da view e **presas ao interior**; roda ±1200; `kd/ku` só Enter, Backspace, Esc, Tab, Delete, setas e letras/dígitos, e **qualquer Ctrl/Alt/Meta junto, F1–F24, Meta/Win/OS/ContextMenu, Control/Alt sozinhos** ficam **bloqueados** (F12, Ctrl+Shift+I/J/C, Ctrl+L/P/S/U/W/R/N/T, Alt+F4, F5, Alt+←/→); texto em blocos de ≤ 16 caracteres imprimíveis (sem controle nem bidi). **Taxa: 30 eventos/s (balde) e 500 caracteres/min.** O que chega ao `sendInputEvent` é montado no PC, nunca copiado do celular.
+- Durante o controle a conta **só navega em `pokeidle.io`** (o `will-navigate`/`will-redirect` do hub recusa até o login do Google/Discord); downloads e pop-ups seguem bloqueados.
+- **Encerrar:** botão **"Encerrar controle"** na faixa do PC, atalho global **Ctrl+Shift+F12** (registrado só enquanto alguém controla; encerra **todos** os controles e mantém a visão) e **"Cortar"** (encerra tudo). Também encerram: expirar (10 min), ociosidade (2 min), perder "pode agir", revogar, desligar, sair.
+- **Auditoria** (`remote_audit`, sem migração nova): `tela_inicio` (conta, aparelho), `tela_fim` (conta, **duração**, quadros, motivo), `controle_inicio`, `controle_fim` (duração e motivo: `encerrado`, `expirou`, `ocioso`, `pc`, `permissao`, `sessao`), `controle_pin_recusado`, `tela_recusada`.
+
+**No celular** (`spike/remote-ui/screen-ui.tsx`): imagem num `<canvas>` com **pinça e arrasto** (zoom até 5×, duplo toque alterna 2,5×), indicador de qps · latência (RTT medido pelo `ack`) · kbps, **Pausar/Retomar**, **Tela cheia** (retrato e paisagem) e **Controlar** → teclado de PIN (6 dígitos, envia no sexto). Controlando: faixa e borda vermelhas, contagem regressiva dos 10 min; **toque = clique**, **toque duplo = duplo clique**, **arrastar = arrastar** (mouse com botão), **dois dedos** = rolar (roda) ou pinça (zoom); toque longo é ignorado (nada de clique direito). Botões grandes: **Esc**, **Teclado** (campo que manda texto, Backspace e Enter), **Ajustar** e **Voltar ao jogo** (encerra o controle e volta a só ver). Pausa sozinha com o app em segundo plano e fecha ao sair da aba; respeita `prefers-reduced-motion`. Verificado em 390×844 e 800×360 com a prévia `spike/dev/remote-mock.ts` (WebSocket falso em `remote-mock-screen.ts`; PIN de teste 123456).
+
+**Limites honestos do R5**
+- **Largura de banda:** cada quadro tem em geral 40–150 KB (JPEG 60, ≤ 1280 px) a 1–2 qps, ou seja, **~50–250 KB/s** (0,4–2 Mbit/s) enquanto a imagem muda; parado, quase zero. Só Wi-Fi de casa; não há áudio.
+- **Latência:** é de "quadro a cada 0,5–1 s": serve para ver e para clicar/digitar com calma, **não** para jogo em tempo real. O toque só aparece na imagem depois do próximo quadro.
+- **A imagem é uma foto da view:** animações rápidas e WebGL podem sair com atraso; o `capturePage` custa CPU/GPU no PC enquanto alguém assiste (por isso 2 qps e hash).
+- **Janela na bandeja:** depende do truque da janela fantasma, medido no Windows. Em outros sistemas pode não funcionar (o celular vê "sem imagem agora"). Enquanto assistem, a janela do hub fica "mostrada" invisível: pode aparecer no Alt+Tab em algumas versões e pode receber o foco de teclado se algo a ativar; ao parar de assistir volta ao normal.
+- `sendInputEvent` numa view **sem foco** do SO: o mouse funciona; o teclado depende de o jogo aceitar eventos sem o foco da janela (o hub não rouba o foco do seu teclado). **A confirmar em jogo real** (P0-2 do `DESEMPENHO.md` segue valendo).
+- A verificação de senha enxerga `input[type=password]`; **não** vê um campo de texto comum onde alguém digite uma senha, nem o conteúdo de iframes de outra origem (esses contam como senha, ou seja, bloqueiam). Quem controla a conta fala com o jogo como você: **o PIN, os 10 min e a faixa do PC são a proteção**, não um isolamento forte.
+- Um celular pareado com "pode agir" e o PIN pode jogar a conta por 10 min por vez. O que o limita: PIN com bloqueios, 10 min, 2 min de ociosidade, um controlador, navegação travada, teclas bloqueadas e o botão/atalho no PC.
+
 ## SEGURANÇA (R1, o que é garantido de verdade)
 **Garantias reais (testadas):**
 - **Desligado por padrão**; ao desligar (chave, bandeja ou sair do app) todos os listeners fecham na hora. Ligar, desligar e reiniciar passam por **fila serial com contador de geração**: um *listen* lento nunca sobrevive a um "desligar" posterior.
@@ -175,16 +224,16 @@ Itens de R4/R5 ainda não existem; **não implemente R4/R5 sem cada item abaixo*
 - **Compras (R4):** *tokens de confirmação emitidos pelo servidor*, de uso único, ligados ao **hash do plano** (item, quantidade, conta, preço), com validade curta; reserva **atômica** do teto diário em SQLite (`remote_spend`, uma transação que confere e soma antes de agir). O celular nunca decide o valor.
 - **Elevação por PIN no servidor:** ação que muda algo exige o PIN verificado **no servidor** (mesmos bloqueios/escalonamento), gerando uma elevação curta e vinculada ao aparelho e à ação; nada de `pin/check` que só devolve "ok".
 - **Push (R3), implementado:** *allowlist* de endpoints de push (host/esquema/porta) para evitar **SSRF** ao enviar; chave **VAPID** guardada com `safeStorage` e nunca servida; payload sem dados sensíveis; assinaturas presas ao aparelho com cascata; no máximo 2 por aparelho; agrupamento/limite de taxa; sem cache de `/api` no service worker. Ver "Implementado (R3)".
-- **Tela ao vivo (R5):** capturar **somente** views de conta em `https://pokeidle.io`, **nunca** a janela do hub nem campos de senha; recusar se a URL da view mudou de origem.
-- **WebSocket/stream (R5):** conferir o cabeçalho `Origin` no *upgrade*; sem ele, fechar.
-- **Controlar (R5):** *allowlist* de tipos de evento de entrada (clique, tecla, rolagem) com limites de taxa e tamanho; **atalhos bloqueados** (fechar janela, DevTools, colar, Alt+F4 etc.).
-- **Indicador visível no PC** enquanto houver alguém vendo/controlando (barra ou ícone na bandeja), com botão de cortar.
+- **Tela ao vivo (R5), implementado (ver "Implementado (R5)"):** capturar **somente** views de conta em `https://pokeidle.io`, **nunca** a janela do hub nem campos de senha; recusar se a URL da view mudou de origem.
+- **WebSocket/stream (R5), implementado:** conferir o cabeçalho `Origin` no *upgrade*; sem ele, fechar.
+- **Controlar (R5), implementado:** *allowlist* de tipos de evento de entrada (clique, tecla, rolagem) com limites de taxa e tamanho; **atalhos bloqueados** (fechar janela, DevTools, colar, Alt+F4 etc.).
+- **Indicador visível no PC (R5, implementado)** enquanto houver alguém vendo/controlando (barra ou ícone na bandeja), com botão de cortar.
 - **Auditoria** de toda ação (aparelho, ação, parâmetros resumidos, resultado) e revisão de segurança antes de liberar cada fase.
 
 ## O que falta
 - **R3:** feito (servidor): leitor de capturas, feed, alertas e Web Push (VAPID local). Falta no app do celular a tela de Alertas/assinatura (feita à parte) e, mais tarde, Discord/ntfy.
 - **R4:** ações com PIN (repor kit, recarregar, suspender, Modo leve), teto diário de ouro e a Loja, **com os requisitos acima**.
-- **R5:** tela ao vivo (capturePage) e modo Controlar com PIN e expiração de 10 min, **com os requisitos acima**.
+- **R5:** feito (ver "Implementado (R5)"): tela ao vivo (capturePage), Controlar com PIN e expiração de 10 min. Falta validar em jogo real o teclado em view sem foco do SO e a janela fantasma fora do Windows.
 - **R6:** revisão de segurança (força bruta distribuída, replay, token roubado).
 - Limitações conhecidas: o ranking do Mercado no celular usa o que o PC já leu (o celular não clica nas páginas); a rede fixada usa o nome do perfil do Windows + sub-rede (sem o MAC do gateway).
 

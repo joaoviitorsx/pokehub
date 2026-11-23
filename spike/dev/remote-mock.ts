@@ -2,6 +2,8 @@
 // Finge /api/* do PC (me, eventos SSE, contas, capturas, alertas, preferências, push). GET /__mock/emit manda uma captura e um alerta ao vivo.
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { defineConfig, type Plugin } from 'vite';
+import type { ScreenState } from '../contracts/screen';
+import { mockScreenUpgrade, screenMock } from './remote-mock-screen';
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const accounts = [{id: id(1), label: 'Principal', color: '#e5484d', state: 'ready', suspended: false}, {id: id(2), label: 'Farm Kanto', color: '#3fa7d6', state: 'ready', suspended: false}, {id: id(3), label: 'Farm Johto', color: '#30a46c', state: 'offline', suspended: false}, {id: id(4), label: 'Reserva', color: '#f5a524', state: 'ready', suspended: true}];
@@ -26,9 +28,12 @@ const json = (res: ServerResponse, body: unknown, status = 200) => { res.statusC
 const body = (req: IncomingMessage) => new Promise<unknown>(done => { let s = ''; req.on('data', c => { s += String(c); }); req.on('end', () => { try { done(JSON.parse(s)); } catch { done(null); } }); });
 
 const plugin = (): Plugin => ({name: 'remote-mock', configureServer(server) {
+  server.httpServer?.on('upgrade', (req, socket, head) => { mockScreenUpgrade(req, socket, head); });
   server.middlewares.use((req, res, next) => {
     const url = new URL(req.url ?? '/', 'http://x'), p = url.pathname;
     if (p === '/__mock/emit') { send0(); return json(res, {ok: true}); }
+    if (p === '/__mock/screen') { screenMock.state = (url.searchParams.get('state') ?? 'streaming') as ScreenState; return json(res, {ok: true, state: screenMock.state}); }
+    if (p === '/__mock/screen-log') return json(res, screenMock.log);
     if (!p.startsWith('/api/')) return next();
     if (p === '/api/me') return json(res, {name: 'Celular de teste', canAct: false, pinSet: false});
     if (p === '/api/events') { res.writeHead(200, {'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store'}); send(res, 'state', {accounts}); clients.add(res); req.on('close', () => clients.delete(res)); return; }

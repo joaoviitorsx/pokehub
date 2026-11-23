@@ -46,6 +46,16 @@ Automação em jogo pode ser vista como violação dos termos: o risco da conta 
 
 Desligado por padrão; ver `docs/ACESSO-REMOTO.md`. Com ele ligado, o PC escuta só na rede doméstica; as únicas conexões de saída que ele cria são as notificações push descritas em “O que sai do seu computador”, e só para celulares que você pareou e que ativaram as notificações. O histórico de alertas (7 dias, até 1.000) e as assinaturas de push ficam no `pokehub.sqlite`; revogar ou expirar o aparelho apaga as assinaturas e as preferências dele.
 
+### Tela remota e controle (acesso remoto, R5)
+
+Com o acesso remoto ligado e um celular pareado, o hub pode **transmitir a imagem de uma conta** por WebSocket na rede de casa e, com **PIN**, deixar o celular **controlar** essa conta. Garantias, todas testadas:
+
+- **Só a view da conta, só o jogo.** A imagem vem de `webContents.capturePage()` da conta (nunca `desktopCapturer`, nunca a janela do hub, nunca outra janela) e só enquanto a URL é exatamente `https://pokeidle.io`; em login do Google/Discord ou qualquer outra origem nada é transmitido. **Campo de senha com foco pausa a imagem** e bloqueia teclas e texto do controle: a senha do jogo nunca passa pelo acesso remoto.
+- **WebSocket fechado:** o upgrade confere IP/sub-rede, `Host`, **`Origin` idêntico** (sem ele, recusa), cookie de aparelho válido, subprotocolo `ph.v1`, conta existente e não suspensa, 1 espectador por conta e 2 no total, payload ≤ 64 KB. Revogar, expirar, sair, desligar o acesso remoto, trocar de rede ou sair do app fecham as conexões na hora. Sem dependência nova: o WebSocket é um RFC 6455 mínimo do próprio projeto.
+- **Controlar é separado e curto:** exige “pode agir”, PIN verificado no servidor (mesmos bloqueios do PIN) e vale **10 min**, sem renovar sem o PIN, com 2 min de ociosidade e um controlador por conta. A entrada vem de uma lista fechada (clique esquerdo, rolagem, Enter/Backspace/Esc/setas/Tab/Delete, letras e texto), com coordenadas presas à view e 30 eventos/s e 500 caracteres/min; F1–F24, Ctrl/Alt/Meta, DevTools, fechar janela, recarregar, imprimir e navegação ficam **bloqueados**, e a conta só navega em `pokeidle.io` durante o controle.
+- **Você vê e corta.** Enquanto alguém vê ou controla, o hub mostra uma faixa (“Celular X está vendo/controlando Y”) e o tooltip da bandeja muda; **Ctrl+Shift+F12** (global, só enquanto há controle) ou o botão **Encerrar controle** cortam na hora. Início e fim (com duração) vão para a auditoria.
+- **Limites:** a imagem é uma foto da conta a 1–2 quadros/s; quem roubar a sessão do celular **e** souber o PIN controla a conta por 10 min. Com a janela na bandeja, o hub a mostra invisível (opacidade 0) enquanto alguém assiste, para o Chromium continuar gerando quadros. Detalhes em `docs/ACESSO-REMOTO.md`.
+
 ## Como apagar seus dados
 
 - **Uma conta**: Gerenciar → Contas → editar o perfil → apagar o perfil e os dados da sessão (irreversível; pode exigir novo login).
