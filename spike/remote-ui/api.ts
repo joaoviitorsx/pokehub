@@ -9,10 +9,10 @@ export async function get<T>(path: string): Promise<T> {
   if (!res.ok) throw new Error(String((await parse(res) as {error?: string} | null)?.error ?? 'Falha ao consultar o PC.'));
   return await res.json() as T;
 }
-export async function post(path: string, body: unknown): Promise<{ok: boolean; status: number; error?: string}> {
+export async function post(path: string, body: unknown): Promise<{ok: boolean; status: number; error?: string; data?: unknown}> {
   const res = await fetch(path, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   const data = await parse(res) as {error?: string} | null;
-  return {ok: res.ok, status: res.status, error: data?.error};
+  return {ok: res.ok, status: res.status, error: data?.error, data};
 }
 /** Impressão digital esperada, vinda do QR (`#fp=<sha256>`), em blocos de 4; null se ausente/inválida. O fragmento nunca vai para o servidor. */
 export function expectedFingerprint(hash: string): string | null {

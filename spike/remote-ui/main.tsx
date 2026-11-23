@@ -1,14 +1,19 @@
-// App do celular (PWA): pareamento, Contas, Conta (Onde caçar), Mercado e Saúde; Loja e Alertas chegam nas próximas fases.
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+// App do celular (PWA): pareamento, Contas, Conta (Onde caçar, Capturas), Mercado, Saúde e Alertas (histórico + push); a Loja chega numa próxima fase.
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { deviceNameFromUA } from '../remote/device-name';
 import { ago, compact, expectedFingerprint, get, mb, num, startPair, STATE_TEXT, Unauthorized, waitPair, post, type Account, type Me } from './api';
 import { Ball } from '../src/icons';
 import { PixelIcon } from './pixel-icons';
+import { AlertsView } from './alerts-ui';
+import { CapturesView, LastCapture } from './captures-ui';
+import { resyncPush } from './push-client';
+import { downAccounts, resolveHash, isRemoteAlert, isRemoteCapture, mergeAlerts, mergeCaptures, PUSH_URL_RE } from './push-helpers';
+import type { RemoteAlert, RemoteCapture } from './r3-types';
+import type { Tab } from './push-helpers';
 import './remote.css';
 
-type Tab = 'contas' | 'conta' | 'loja' | 'mercado' | 'alertas';
-const TABS: {id: Tab; label: string; soon?: boolean}[] = [{id: 'contas', label: 'Contas'}, {id: 'conta', label: 'Conta'}, {id: 'loja', label: 'Loja', soon: true}, {id: 'mercado', label: 'Mercado'}, {id: 'alertas', label: 'Alertas', soon: true}];
+const TABS: {id: Tab; label: string; soon?: boolean}[] = [{id: 'contas', label: 'Contas'}, {id: 'conta', label: 'Conta'}, {id: 'loja', label: 'Loja', soon: true}, {id: 'mercado', label: 'Mercado'}, {id: 'alertas', label: 'Alertas'}];
 
 function Pair({onDone}: {onDone: () => void}) {
   const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [sas, setSas] = useState<string | null>(null), [sw, setSw] = useState<'wait' | 'ok' | 'off'>('wait');
@@ -113,35 +118,54 @@ function MarketView({accounts, id, onPick}: {accounts: Account[]; id: string | n
 }
 
 /** Link direto (#conta, #mercado, #saude…): abre a aba certa; as notificações das próximas fases vão usar isto. */
-const tabFromHash = (): Tab => { const h = location.hash.slice(1); return h === 'saude' ? 'contas' : TABS.some(t => t.id === h && !t.soon) ? h as Tab : 'contas'; };
 function Shell({me, onLogout}: {me: Me; onLogout: () => void}) {
-  const [tab, setTab] = useState<Tab>(tabFromHash), [accounts, setAccounts] = useState<Account[]>([]), [selected, setSelected] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>(() => resolveHash(location.hash).tab), [accounts, setAccounts] = useState<Account[]>([]), [selected, setSelected] = useState<string | null>(() => resolveHash(location.hash).account ?? null);
+  const [sub, setSub] = useState<'hunt' | 'capturas'>('hunt'), [alerts, setAlerts] = useState<RemoteAlert[]>([]), [captures, setCaptures] = useState<RemoteCapture[]>([]);
   const [updated, setUpdated] = useState<number | null>(null), [online, setOnline] = useState(true), [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const events = new EventSource('/api/events');
     const apply = (event: MessageEvent<string>) => { try { const data = JSON.parse(event.data) as {accounts: Account[]}; setAccounts(data.accounts); setUpdated(Date.now()); setOnline(true); } catch { /* quadro inválido: ignora */ } };
     events.addEventListener('state', apply as EventListener);
+    events.addEventListener('capture', ((event: MessageEvent<string>) => { try { const d = JSON.parse(event.data) as {captures?: unknown}; const list = d.captures; if (Array.isArray(list)) setCaptures(old => mergeCaptures(list.filter(isRemoteCapture), old)); } catch { /* ignora */ } }) as EventListener);
+    events.addEventListener('alert', ((event: MessageEvent<string>) => { try { const a: unknown = JSON.parse(event.data); if (isRemoteAlert(a)) setAlerts(old => mergeAlerts([a], old)); } catch { /* ignora */ } }) as EventListener);
     events.onopen = () => setOnline(true);
     events.onerror = () => { setOnline(false); void get('/api/me').catch(e => { if (e instanceof Unauthorized) onLogout(); }); };
     const clock = window.setInterval(() => setNow(Date.now()), 10_000);
     return () => { events.close(); clearInterval(clock); };
   }, [onLogout]);
+  const loadAlerts = useCallback(async () => { try { const r = await get<{alerts: unknown[]}>('/api/alerts?limit=100'); if (Array.isArray(r.alerts)) setAlerts(old => mergeAlerts(r.alerts.filter(isRemoteAlert), old)); } catch { /* o histórico fica como está */ } }, []);
+  const loadCaptures = useCallback(async () => { try { const r = await get<{captures: unknown[]}>('/api/captures?limit=200'); if (Array.isArray(r.captures)) setCaptures(old => mergeCaptures(old, r.captures.filter(isRemoteCapture))); } catch { /* idem */ } }, []);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- carga assíncrona via API no mount
+    void loadAlerts(); void loadCaptures();
+  }, [loadAlerts, loadCaptures]);
+  useEffect(() => {
+    // links diretos: o endereço (#alertas, #contas, #conta/<id>) e as mensagens do service worker ao tocar numa notificação
+    const go = (hash: string) => { const t = resolveHash(hash); setTab(t.tab); if (t.account) { setSelected(t.account); setSub('hunt'); } if (t.tab === 'alertas') void loadAlerts(); };
+    const onHash = () => go(location.hash);
+    const onMessage = (event: MessageEvent) => { const d = event.data as {type?: string; url?: unknown} | null; if (d?.type === 'ph-nav' && typeof d.url === 'string' && PUSH_URL_RE.test(d.url)) { history.replaceState(null, '', d.url); go(d.url); } else if (d?.type === 'ph-resync') void resyncPush(); };
+    window.addEventListener('hashchange', onHash); navigator.serviceWorker?.addEventListener('message', onMessage);
+    if (window.isSecureContext) void navigator.serviceWorker?.register('/sw.js').catch(() => undefined);
+    return () => { window.removeEventListener('hashchange', onHash); navigator.serviceWorker?.removeEventListener('message', onMessage); };
+  }, [loadAlerts]);
+  const down = useMemo(() => downAccounts(alerts), [alerts]), colors = useMemo(() => new Map(accounts.map(a => [a.id, a.color])), [accounts]);
+  const lastOf = useMemo(() => { const m = new Map<string, RemoteCapture>(); for (const c of captures) if (!m.has(c.profileId)) m.set(c.profileId, c); return m; }, [captures]);
   const current = selected && accounts.some(a => a.id === selected) ? selected : accounts[0]?.id ?? null;
-  const open = (id: string) => { setSelected(id); setTab('conta'); };
+  const open = (id: string) => { setSelected(id); setSub('hunt'); setTab('conta'); };
   return <>
     <header className="top"><Ball/><strong>PokéHub</strong><span className={online ? 'stamp' : 'stamp off'} role="status">{online ? `Atualizado ${ago(updated, now)}` : `Sem conexão com o PC · atualizado ${ago(updated, now)}`}</span></header>
     <main>
-      {tab === 'contas' && <>{accounts.length === 0 ? <section className="card"><p className="muted" role="status">{online ? 'Nenhuma conta ainda.' : 'Aguardando o PC…'}</p></section> : <ul className="accounts">{accounts.map(a => <li key={a.id}><button className="acc" onClick={() => open(a.id)}><i className="gem" style={{background: a.color}}/><strong>{a.label}</strong><StateTag account={a}/></button></li>)}</ul>}
+      {tab === 'contas' && <>{accounts.length === 0 ? <section className="card"><p className="muted" role="status">{online ? 'Nenhuma conta ainda.' : 'Aguardando o PC…'}</p></section> : <ul className="accounts">{accounts.map(a => <li key={a.id}><button className="acc" onClick={() => open(a.id)}><i className="gem" style={{background: a.color}}/><span className="acc-body"><strong>{a.label}{down.has(a.id) && <i className="down-dot" role="img" aria-label="Conta caiu" title="Conta caiu"/>}</strong>{lastOf.get(a.id) && <LastCapture c={lastOf.get(a.id)!}/>}</span><StateTag account={a}/></button></li>)}</ul>}
         <Health accounts={accounts}/>
         <section className="card"><p className="muted">Pareado como {me.name}.</p><button onClick={() => { if (confirm('Sair deste aparelho? Para voltar, será preciso parear de novo.')) void post('/api/logout', {}).then(onLogout); }}>Sair deste aparelho</button></section></>}
       {tab === 'conta' && (current ? <><Pick accounts={accounts} value={current} onChange={setSelected}/>
-        <div className="seg subtabs" role="group" aria-label="Seções da conta"><button aria-pressed>Onde caçar</button><button disabled>Jogo <small>em breve</small></button><button disabled>Capturas <small>em breve</small></button><button disabled>Equipe <small>em breve</small></button></div>
-        <HuntView id={current}/></> : <section className="card"><p className="muted">Nenhuma conta.</p></section>)}
+        <div className="seg subtabs" role="group" aria-label="Seções da conta"><button aria-pressed={sub === 'hunt'} onClick={() => setSub('hunt')}>Onde caçar</button><button disabled>Jogo <small>em breve</small></button><button aria-pressed={sub === 'capturas'} onClick={() => setSub('capturas')}>Capturas</button><button disabled>Equipe <small>em breve</small></button></div>
+        {sub === 'hunt' ? <HuntView id={current}/> : <CapturesView id={current} live={captures}/>}</> : <section className="card"><p className="muted">Nenhuma conta.</p></section>)}
       {tab === 'loja' && <Soon title="Loja"/>}
       {tab === 'mercado' && <MarketView accounts={accounts} id={current} onPick={setSelected}/>}
-      {tab === 'alertas' && <Soon title="Alertas"/>}
+      {tab === 'alertas' && <AlertsView alerts={alerts} colors={colors} now={now} onRefresh={loadAlerts}/>}
     </main>
-    <nav className="tabs" aria-label="Seções">{TABS.map(t => <button key={t.id} aria-current={tab === t.id ? 'page' : undefined} disabled={t.soon} onClick={() => setTab(t.id)}><PixelIcon name={t.id}/>{t.label}{t.soon && <small>em breve</small>}</button>)}</nav>
+    <nav className="tabs" aria-label="Seções">{TABS.map(t => <button key={t.id} aria-current={tab === t.id ? 'page' : undefined} disabled={t.soon} onClick={() => { setTab(t.id); if (t.id === 'alertas') void loadAlerts(); }}><PixelIcon name={t.id}/>{t.label}{t.soon && <small>em breve</small>}</button>)}</nav>
   </>;
 }
 
