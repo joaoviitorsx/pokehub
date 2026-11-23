@@ -12,7 +12,8 @@ import { createCaptureService, parseQuery } from './captures';
 import { alertsOf, alertText } from '../domain/captures';
 import type { ShopProgress } from '../domain/shop';
 import { isAllowedGameUrl, isAllowedSessionNavigation, isOAuthProviderUrl } from './navigation';
-import { createGhostWindow, createScreenTarget, type GhostWindow } from './screen-target';
+import { createControlShortcut, createGhostWindow, createScreenTarget, installNavigationLock, type GhostWindow } from './screen-target';
+import { createChangeNotifier, screenNotice } from './screen-notify';
 import { ProfileStore } from './profile-store';
 import { partitionFor } from './partition';
 import { PreferencesStore } from './preferences-store';
@@ -330,8 +331,7 @@ function addView(id: string) {
       lockSession(view.webContents.session); // sem downloads e sem permissões
       installNetworkPolicy(view.webContents.session,id);
       // durante o controle remoto a conta só navega em pokeidle.io (nada de login do Google/Discord pelo celular)
-      view.webContents.on('will-navigate', (event, url) => { if (!isAllowedSessionNavigation(url) || (remote?.controlling(id) && !isAllowedGameUrl(url))) event.preventDefault(); });
-      view.webContents.on('will-redirect', (event, url) => { if (!isAllowedSessionNavigation(url) || (remote?.controlling(id) && !isAllowedGameUrl(url))) event.preventDefault(); });
+      installNavigationLock(view.webContents,{id, controlling:key => remote?.controlling(key) ?? false, allowedSession:isAllowedSessionNavigation, allowedGame:isAllowedGameUrl, gameUrl, onViolation:key => { remote?.endControlOf(key,'navegacao'); }}); // will-navigate/redirect/frame-navigate + volta ao jogo se a página sair dele durante o controle
       view.webContents.once('destroyed', () => clearTimeout(retry));
       view.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => { if (isMainFrame && !isInPlace) huntDocuments.set(view.webContents, {}); });
       view.webContents.on('did-start-loading', () => { if (isMainFrameLoading(view.webContents.isLoadingMainFrame())) reportCurrent('loading'); }); // subframe não reabre o "carregando"
@@ -664,23 +664,25 @@ if (primary) app.whenReady().then(() => {
   window.on('close', event => { if (trayEvent('close') === 'hide') { event.preventDefault(); hideToTray(); } });
   window.on('minimize', () => { if (trayEvent('minimize') === 'hide') hideToTray(); });
   ghost = createGhostWindow(window);
-  const syncControlShortcut = (active: number) => {
-    try {
-      if (active > 0 && !globalShortcut.isRegistered(CONTROL_SHORTCUT)) globalShortcut.register(CONTROL_SHORTCUT,() => { remote?.endControl(); });
-      else if (active === 0) globalShortcut.unregister(CONTROL_SHORTCUT);
-    } catch { console.error('Falha ao ajustar o atalho de encerrar controle.'); }
+  const syncControlShortcut = createControlShortcut({register:(key,cb) => globalShortcut.register(key,cb), unregister:key => globalShortcut.unregister(key)},CONTROL_SHORTCUT,() => { remote?.endControl(); },down => { remote?.setShortcutDown(down); }); // register falso (atalho de outro app) vira aviso na faixa + auditoria
+  const changeNotifier = createChangeNotifier({send:() => { if (!window.isDestroyed()) window.webContents.send('remote:changed'); }, refresh:() => refreshTray.call()}); // o hub avisa em rajada: a faixa e o painel recarregam 1 vez
+  window.on('focus',() => { try { window.flashFrame(false); } catch { /* janela fechando */ } });
+  const screenNotify = (kind:'tela'|'controle',device:string,account:string) => {
+    const notice = screenNotice(kind,device,account);
+    try { if (kind === 'controle' && !window.isDestroyed() && !window.isFocused()) window.flashFrame(true); } catch { /* sem barra de tarefas */ }
+    try { if (process.platform === 'win32' && tray && !tray.isDestroyed()) tray.displayBalloon({title:notice.title,content:notice.body,iconType:'info'}); else if (Notification.isSupported()) new Notification({title:notice.title,body:notice.body}).show(); } catch { console.error('Falha ao avisar a tela remota no PC.'); }
   };
-  remote = createRemoteHub({dbPath:databasePath, dir:join(app.getPath('userData'),'remote'), uiDir:join(__dirname,'../../dist-remote'), iconPath:join(__dirname,'../../build/icon.png'), api:remoteApi.api, screen:{target:id => { const view = views.get(id); if (!view || view.webContents.isDestroyed() || resetting.has(id)) return null; let target = screenTargets.get(view); if (!target) { target = createScreenTarget(view,window.webContents,ghost!); screenTargets.set(view,target); } return target; }, forbidden:() => window.isDestroyed() ? [] : [window.webContents], onControl:syncControlShortcut}, alerts:{captures, profiles:() => store.list().map(profile => ({id:profile.id, label:profile.label, colorToken:profile.colorToken})), fetcher:(url,init) => net.fetch(url,init as RequestInit)}, actions:{
+  remote = createRemoteHub({dbPath:databasePath, dir:join(app.getPath('userData'),'remote'), uiDir:join(__dirname,'../../dist-remote'), iconPath:join(__dirname,'../../build/icon.png'), api:remoteApi.api, screen:{target:id => { const view = views.get(id); if (!view || view.webContents.isDestroyed() || resetting.has(id)) return null; let target = screenTargets.get(view); if (!target) { target = createScreenTarget(view,window.webContents,ghost!); screenTargets.set(view,target); } return target; }, forbidden:() => window.isDestroyed() ? [] : [window.webContents], onControl:syncControlShortcut, notify:screenNotify}, alerts:{captures, profiles:() => store.list().map(profile => ({id:profile.id, label:profile.label, colorToken:profile.colorToken})), fetcher:(url,init) => net.fetch(url,init as RequestInit)}, actions:{
     shop:{read:id => shop.read(id), run:async (plan,onProgress) => { if (shop.isRunning()) return {ok:false as const,error:'Já existe uma operação da Loja em andamento.'}; remoteShopProgress = onProgress; try { return await shop.run(plan); } finally { remoteShopProgress = null; } }},
     account:{reload:async id => { try { reloadAccount(id); return {ok:true}; } catch { return {ok:false,error:'Não foi possível recarregar a conta.'}; } }, suspend:async id => { const r = await suspendAccount(id); return r.ok ? {ok:true} : {ok:false,error:r.error}; },
       resume:async id => { try { resumeAccount(id); return {ok:true}; } catch { return {ok:false,error:'Não foi possível retomar a conta.'}; } }, setLite:on => setLiteMode(on) ? {ok:true} : {ok:false,error:'Não foi possível mudar o Modo leve.'}, lite:() => perf.lite},
     notify:(title,body) => { try { if (process.platform === 'win32' && tray && !tray.isDestroyed()) tray.displayBalloon({title,content:body,iconType:'info'}); else if (Notification.isSupported()) new Notification({title,body}).show(); } catch { console.error('Falha ao avisar no PC.'); } }},
-  running:() => runningCount(store.list(),states), blocker:powerSaveBlocker, onChange:() => refreshTray.call(), onPairRequest:showWindow, secretBox:(() => { try { return safeStorage.isEncryptionAvailable() ? {encrypt:(text:string) => safeStorage.encryptString(text), decrypt:(data:Buffer) => safeStorage.decryptString(data)} : undefined; } catch { return undefined; } })(), nativeConfirm:async o => (await dialog.showMessageBox(window,{type:'warning', title:o.title, message:o.message, detail:o.detail, buttons:['Recusar',o.confirmLabel], defaultId:0, cancelId:0, noLink:true})).response === 1});
+  running:() => runningCount(store.list(),states), blocker:powerSaveBlocker, onChange:() => changeNotifier.notify(), onPairRequest:showWindow, secretBox:(() => { try { return safeStorage.isEncryptionAvailable() ? {encrypt:(text:string) => safeStorage.encryptString(text), decrypt:(data:Buffer) => safeStorage.decryptString(data)} : undefined; } catch { return undefined; } })(), nativeConfirm:async o => (await dialog.showMessageBox(window,{type:'warning', title:o.title, message:o.message, detail:o.detail, buttons:['Recusar',o.confirmLabel], defaultId:0, cancelId:0, noLink:true})).response === 1});
   registerRemoteIpc(ipcMain,trusted,remote);
   void remote.boot().catch(() => console.error('Falha ao iniciar o acesso remoto.'));
   createTray();
   window.on('closed', () => {
-    refreshTray.cancel(); tray?.destroy(); tray = null; try { globalShortcut.unregister(CONTROL_SHORTCUT); } catch { /* saindo */ }
+    refreshTray.cancel(); changeNotifier.cancel(); tray?.destroy(); tray = null; try { globalShortcut.unregister(CONTROL_SHORTCUT); } catch { /* saindo */ }
     clearTimeout(dragTimer); clearTimeout(resizeTimer); for (const timer of startupTimers) clearTimeout(timer); startupTimers.clear(); updater.dispose();
     for (const view of views.values()) { try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { console.error('Falha ao encerrar uma sessão.'); } }
     views.clear(); void remote?.close(); remote = null; preferences.close(); store.close();

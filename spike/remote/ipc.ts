@@ -21,6 +21,7 @@ export function registerRemoteIpc(ipcMain: Pick<IpcMain, 'handle'>, trusted: (ev
   handle('remote:dismiss-notice', () => { hub.dismissNotice(); return hub.status(); });
   handle('remote:devices', () => hub.devices());
   handle('remote:set-can-act', (id, value) => hub.setCanAct(id, value));
+  handle('remote:set-can-control', (id, value) => hub.setCanControl(id, value)); // R5: permissão SEPARADA de controlar (diálogo nativo no PC)
   handle('remote:revoke', id => { if (!hub.revoke(id)) throw new RemoteUserError('Aparelho não encontrado.'); return hub.devices(); });
   handle('remote:audit', () => hub.audit());
   handle('remote:push-test', id => hub.pushTest(id));

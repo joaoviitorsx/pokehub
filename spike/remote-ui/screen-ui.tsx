@@ -146,7 +146,7 @@ export function GameView({id, label}: {id: string; label: string}) {
   const live = phase === 'open', controlling = ctl !== null;
   const remaining = ctl ? ctl.until - now : 0;
   const togglePause = () => { if (userPaused) { setUserPaused(false); send({t: 'resume'}); } else { setUserPaused(true); send({t: 'pause', why: 'usuario'}); } };
-  const blocked = !hello ? 'Conectando…' : !hello.canAct ? DENIED_TEXT['sem-permissao']! : !hello.pinSet ? DENIED_TEXT['sem-pin']! : state !== 'streaming' ? DENIED_TEXT.indisponivel! : '';
+  const blocked = !hello ? 'Conectando…' : !hello.canControl ? DENIED_TEXT['sem-permissao']! : !hello.pinSet ? DENIED_TEXT['sem-pin']! : state !== 'streaming' ? DENIED_TEXT.indisponivel! : '';
   const overlay = !live ? (phase === 'connecting' ? 'Conectando…' : 'Desconectado') : state === 'streaming' ? '' : state === 'paused' ? (userPaused ? 'Pausado' : 'Pausado (sem confirmação ou app em segundo plano)') : STATE_LABEL[state] ?? '';
   const submitPin = (pin: string) => { setPadBusy(true); setPadError(''); send({t: 'control', pin}); };
 

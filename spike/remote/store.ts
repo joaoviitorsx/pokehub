@@ -3,7 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from '../electron/database';
 import type { AlertKind, AlertPrefs, RemoteAlert } from '../contracts/remote';
 
-export interface DeviceRow { id: string; name: string; createdAt: string; lastSeen: string | null; canAct: boolean }
+export interface DeviceRow { id: string; name: string; createdAt: string; lastSeen: string | null; canAct: boolean; canControl: boolean }
 export interface TokenRow { hash: string; prevHash: string | null; prevUntil: number; rotatedAt: number }
 export interface PinStateRow { fails: number; level: number; lockedUntil: number; day: string | null }
 export interface AuditRow { id: number; at: string; deviceId: string | null; action: string; detail: string | null }
@@ -37,6 +37,7 @@ export class RemoteStore {
     this.db.prepare('INSERT INTO remote_devices (id, name, token_hash, created_at, last_seen, can_act, rotated_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(device.id, device.name.slice(0, 60), device.tokenHash, device.now, device.now, device.nowMs ?? (Date.parse(device.now) || 0));
   }
   setCanAct(id: string, value: boolean): boolean { return this.db.prepare('UPDATE remote_devices SET can_act=? WHERE id=?').run(value ? 1 : 0, id).changes === 1; }
+  setCanControl(id: string, value: boolean): boolean { return this.db.prepare('UPDATE remote_devices SET can_control=? WHERE id=?').run(value ? 1 : 0, id).changes === 1; }
   /** Hash guardado do token do aparelho (para comparação em tempo constante); null se não existe. */
   tokenHashOf(id: string): string | null { return this.tokenRow(id)?.hash ?? null; }
   tokenRow(id: string): TokenRow | null {
@@ -45,8 +46,8 @@ export class RemoteStore {
   }
   /** Rotação do token: o hash atual vira o anterior (vale até `prevUntil`) e entra o novo. */
   rotateToken(id: string, hash: string, prevHash: string, prevUntil: number, nowMs: number): void { this.db.prepare('UPDATE remote_devices SET token_hash=?, prev_token_hash=?, prev_valid_until=?, rotated_at=? WHERE id=?').run(hash, prevHash, prevUntil, nowMs, id); }
-  getDevice(id: string): DeviceRow | null { const row = this.db.prepare('SELECT id, name, created_at, last_seen, can_act FROM remote_devices WHERE id=?').get(id); return row ? this.toDevice(row) : null; }
-  listDevices(): DeviceRow[] { return this.db.prepare('SELECT id, name, created_at, last_seen, can_act FROM remote_devices ORDER BY created_at').all().map(row => this.toDevice(row)); }
+  getDevice(id: string): DeviceRow | null { const row = this.db.prepare('SELECT id, name, created_at, last_seen, can_act, can_control FROM remote_devices WHERE id=?').get(id); return row ? this.toDevice(row) : null; }
+  listDevices(): DeviceRow[] { return this.db.prepare('SELECT id, name, created_at, last_seen, can_act, can_control FROM remote_devices ORDER BY created_at').all().map(row => this.toDevice(row)); }
   countDevices(): number { return Number(this.db.prepare('SELECT COUNT(*) AS n FROM remote_devices').get()?.n ?? 0); }
   touch(id: string, now: string): void { this.db.prepare('UPDATE remote_devices SET last_seen=? WHERE id=?').run(now, id); }
   /** Apaga o aparelho e, junto, o que está ligado a ele (assinaturas de push e preferências de alerta; a FK em cascata também faz isso, aqui é explícito). */
@@ -136,5 +137,5 @@ export class RemoteStore {
   }
   countPurchases(): number { return Number(this.db.prepare('SELECT COUNT(*) AS n FROM remote_purchases').get()?.n ?? 0); }
   close(): void { this.db.close(); }
-  private toDevice(row: Record<string, unknown>): DeviceRow { return {id: String(row.id), name: String(row.name), createdAt: String(row.created_at), lastSeen: row.last_seen == null ? null : String(row.last_seen), canAct: Number(row.can_act) !== 0}; }
+  private toDevice(row: Record<string, unknown>): DeviceRow { return {id: String(row.id), name: String(row.name), createdAt: String(row.created_at), lastSeen: row.last_seen == null ? null : String(row.last_seen), canAct: Number(row.can_act) !== 0, canControl: Number(row.can_control) !== 0}; }
 }

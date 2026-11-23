@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { qrMatrix, qrPath } from '../domain/qr';
 import { cleanCapInput, parseCapInput } from './cap-input';
+import { RemoteControlPerm } from './remote-control-perm';
 import type { RemoteAlert, RemoteAuditEntry, RemoteDevice, RemotePurchase, RemoteRequest, RemoteSpend, RemoteStatus } from '../contracts/remote';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
@@ -90,6 +91,7 @@ export function RemoteSection({onPair}: {onPair: () => void}) {
       <small>Notificações: {(device.push ?? 0) > 0 ? `ativas (${device.push})` : 'desativadas'}</small>
       {(device.push ?? 0) > 0 && <div className="actions"><button disabled={busy} onClick={() => void run(async () => { const r = await client().pushTest(device.id); if (r.ok) setMessage(r.data.sent > 0 ? 'Teste enviado. Veja se chegou no celular.' : 'O serviço de notificações não aceitou o teste agora.'); return r; })}>Enviar teste</button></div>}
       <label className="switch"><span>Pode agir: {device.canAct ? 'sim' : 'não'} (compras, recarregar, suspender e Modo leve, sempre com PIN)</span><input type="checkbox" role="switch" checked={device.canAct} disabled={busy} onChange={event => void run(() => client().setCanAct(device.id, event.target.checked))}/></label>
+      <RemoteControlPerm device={device} busy={busy} run={run}/>
       <div className="actions"><button className="danger" disabled={busy} onClick={() => { if (window.confirm(`Revogar “${device.name}”? Ele perde o acesso na hora.`)) void run(() => client().revoke(device.id)); }}>Revogar</button></div></li>)}</ul>}
     <h2>Compras pelo celular</h2>
     <p className="note">Só no Market (ouro, itens do catálogo da Loja). Nunca no Mercado da Comunidade. Cada compra pede a confirmação do servidor, relê o preço no jogo e aparece aqui, no registro e numa notificação. O teto abaixo só pode ser mudado neste PC.</p>

@@ -16,9 +16,9 @@ export interface RemoteStatus {
   pairing: RemotePairing | null; request: RemoteRequest | null; paired: string | null;
   pinSet: boolean; devices: number; firstPairing: boolean; dailyCapGold: number;
   /** R5: quem está vendo/controlando uma conta agora (banner do PC). */
-  screen?: RemoteScreenSession[];
+  screen?: RemoteScreenSession[]; /** R5: o atalho global Ctrl+Shift+F12 não pôde ser registrado (outro app o usa): use o botão Encerrar controle. */ shortcutDown?: boolean;
 }
-export interface RemoteDevice { id: string; name: string; createdAt: string; lastSeen: string | null; canAct: boolean; /** Assinaturas de push ativas deste aparelho (0–2) */ push?: number }
+export interface RemoteDevice { id: string; name: string; createdAt: string; lastSeen: string | null; canAct: boolean; /** R5: pode CONTROLAR a tela (controle total da conta; liberado só no PC) */ canControl?: boolean; /** Assinaturas de push ativas deste aparelho (0–2) */ push?: number }
 export interface RemoteAuditEntry { id: number; at: string; deviceId: string | null; action: string; detail: string | null }
 
 // --- R3: capturas, alertas e Web Push (contrato com o app do celular) ---

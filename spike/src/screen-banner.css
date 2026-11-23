@@ -7,3 +7,4 @@
 .screen-banner button { flex: none; height: 24px; padding: 0 var(--sp-2); font-size: 11px; }
 @media (prefers-reduced-motion: no-preference) { .screen-banner .dot { animation: screen-blink 1.6s steps(2, jump-none) infinite; } }
 @keyframes screen-blink { 50% { opacity: .35; } }
+.screen-banner span.warn { flex: 0 1 auto; font-size: 11px; }

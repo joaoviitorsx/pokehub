@@ -269,7 +269,7 @@ describe('alertas: leitor de capturas, SSE e push de ponta a ponta', () => {
 describe('alertas: banco (v13)', () => {
   it('migração cria as tabelas, aceita 0–13 e as chaves estrangeiras apagam em cascata', () => {
     const path = join(root, `m${++n}.sqlite`); openDatabase(path).close();
-    const db = openDatabase(path); expect(db.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 14}); expect(db.prepare('PRAGMA foreign_keys').get()).toMatchObject({foreign_keys: 1});
+    const db = openDatabase(path); expect(db.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 15}); expect(db.prepare('PRAGMA foreign_keys').get()).toMatchObject({foreign_keys: 1});
     db.exec("INSERT INTO remote_devices (id, name, token_hash, created_at) VALUES ('d','N','h','t'); INSERT INTO remote_push (id, device_id, endpoint, p256dh, auth, created_at) VALUES ('p','d','https://fcm.googleapis.com/x','a','b','t'); INSERT INTO remote_alert_prefs VALUES ('d','{}')");
     expect(() => db.exec("INSERT INTO remote_push (id, device_id, endpoint, p256dh, auth, created_at) VALUES ('q','nao','https://fcm.googleapis.com/y','a','b','t')")).toThrow(); // FK
     expect(() => db.exec("INSERT INTO remote_push (id, device_id, endpoint, p256dh, auth, created_at) VALUES ('r','d','https://fcm.googleapis.com/x','a','b','t')")).toThrow(); // endpoint UNIQUE
@@ -280,7 +280,7 @@ describe('alertas: banco (v13)', () => {
   it('v12 → v13 não apaga nada', () => {
     const path = join(root, `m${++n}.sqlite`); openDatabase(path).close();
     const raw = new DatabaseSync(path); raw.exec("INSERT INTO profiles VALUES ('p1','Conta','e','c','#fff','t','t'); INSERT INTO remote_devices (id, name, token_hash, created_at) VALUES ('d','N','h','t'); DROP TABLE remote_push; DROP TABLE remote_alert_prefs; DROP TABLE remote_alerts; PRAGMA user_version=12"); raw.close();
-    openDatabase(path).close(); const check = new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 14});
+    openDatabase(path).close(); const check = new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 15});
     expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label: 'Conta'}); expect(check.prepare('SELECT id FROM remote_devices').get()).toMatchObject({id: 'd'}); expect(check.prepare('SELECT COUNT(*) AS n FROM remote_alerts').get()).toMatchObject({n: 0}); check.close();
   });
   it('histórico: 7 dias e no máximo 1000 linhas, mais novas primeiro', () => {

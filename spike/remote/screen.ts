@@ -1,6 +1,7 @@
 // Tela ao vivo e modo Controlar (R5), sem Electron: tudo entra por `deps` (alvo de captura falso nos testes).
 // Regras: só captura o `webContents` da conta (nunca a janela do hub: `forbidden`), só com a URL em https://pokeidle.io e sem campo de senha com foco;
-// 1 espectador por conta e 2 no total; Controlar exige "pode agir" + PIN DEDICADO (não é a elevação de compras) e vale 10 min, sem renovar sem o PIN, 2 min de ociosidade.
+// 1 espectador por conta e 2 no total; ver exige "pode agir" OU "pode controlar" (1 sessão por aparelho; ≤ 6 novas por minuto).
+// Controlar = controle TOTAL da conta (sem teto, Market, venda/troca): exige a permissão SEPARADA "pode controlar" (só liberada no PC) + PIN DEDICADO (não é a elevação de compras), vale 10 min, sem renovar sem o PIN, 2 min de ociosidade.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -27,16 +28,22 @@ export interface ScreenDeps {
   target(profileId: string): ScreenTarget | null;
   /** Alvos que NUNCA podem ser capturados (a janela do hub). */
   forbidden?(): readonly unknown[];
-  device(id: string): {id: string; name: string; canAct: boolean} | null;
+  device(id: string): {id: string; name: string; canAct: boolean; canControl: boolean} | null;
   pinSet(): boolean; actionsDisabled(): boolean;
   checkPin(deviceId: string, pin: unknown): Promise<PinCheck>;
   audit(deviceId: string | null, action: string, detail: string): void;
+  /** Aviso no PC (notificação nativa + piscar a janela) quando um celular começa a ver/controlar. */ notify?(kind: 'tela' | 'controle', device: string, account: string): void;
   now?(): number; onChange?(): void; /** nº de sessões em controle mudou (atalho global do PC). */ onControl?(active: number): void;
   timing?: Partial<ScreenTiming>;
 }
 export interface ScreenTiming { frameMs: number; idleFrameMs: number; ackTimeoutMs: number; controlTtlMs: number; controlIdleMs: number; pingMs: number; deadMs: number; pausedMaxMs: number; tickMs: number; captureTimeoutMs: number; statsMs: number; maxWidth: number; quality: number; inFlight: number }
 export const DEFAULT_TIMING: ScreenTiming = {frameMs: 500, idleFrameMs: 1000, ackTimeoutMs: 10_000, controlTtlMs: CONTROL_TTL_MS, controlIdleMs: CONTROL_IDLE_MS, pingMs: 20_000, deadMs: 60_000, pausedMaxMs: 10 * 60_000, tickMs: 1000, captureTimeoutMs: 2500, statsMs: 2000, maxWidth: 1280, quality: 60, inFlight: 2};
-export const MAX_VIEWERS_TOTAL = 2, MAX_JSON = 4096, BACKLOG = 256 * 1024;
+export const MAX_VIEWERS_TOTAL = 2, MAX_JSON = 4096, BACKLOG = 256 * 1024, MAX_STARTS_PER_MIN = 6, COALESCE_MS = 60_000;
+/** Texto para o celular: se o soquete não escoa (celular parado), derruba a conexão em vez de acumular memória. */
+export function guardedSend(ws: Pick<WsConnection, 'buffered' | 'sendText' | 'terminate'>, text: string): boolean {
+  if (ws.buffered() > BACKLOG * 2) { ws.terminate(); return false; }
+  return ws.sendText(text);
+}
 
 export const isGameOrigin = (url: string): boolean => { try { const u = new URL(url); return u.protocol === 'https:' && u.origin === SCREEN_ORIGIN; } catch { return false; } };
 const same = (a: string, b: string) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
@@ -46,9 +53,9 @@ interface Control { token: string; startedAt: number; expiresAt: number; lastInp
 interface Session {
   id: number; ws: WsConnection; deviceId: string; deviceName: string; profileId: string; label: string; startedAt: number;
   paused: PauseReason | null; state: ScreenState; seq: number; pending: Map<number, number>; lastHash: string | null; unchanged: number; frame: {w: number; h: number} | null;
-  timer: ReturnType<typeof setTimeout> | undefined; stepping: boolean; closed: boolean; release: (() => void) | null;
+  timer: ReturnType<typeof setTimeout> | undefined; stepping: boolean; closed: boolean; release: (() => void) | null; heldKey: unknown;
   lastInbound: number; pausedAt: number; lastPing: number; statsAt: number; frames: number; bytes: number; window: {frames: number; bytes: number}; rtt: number | null; bad: number; limitAt: number;
-  control: Control | null; pinBusy: boolean; limiter: InputLimiter; pw: {at: number; on: boolean} | null;
+  control: Control | null; pinBusy: boolean; limiter: InputLimiter; pw: {at: number; on: boolean} | null; pwFlight: Promise<boolean> | null;
 }
 
 export function createScreen(deps: ScreenDeps) {
@@ -58,7 +65,15 @@ export function createScreen(deps: ScreenDeps) {
   const audit = (deviceId: string | null, action: string, detail: string) => { try { deps.audit(deviceId, action, detail); } catch { /* auditoria não derruba a sessão */ } };
   const controlCount = () => [...sessions].filter(s => s.control).length;
   const syncControl = () => { const n = controlCount(); if (n !== lastControlCount) { lastControlCount = n; try { deps.onControl?.(n); } catch { /* ouvinte */ } } };
-  const send = (s: Session, msg: ServerMsg) => { if (!s.closed) s.ws.sendText(JSON.stringify(msg)); };
+  const send = (s: Session, msg: ServerMsg) => { if (!s.closed) guardedSend(s.ws, JSON.stringify(msg)); };
+  const notify = (kind: 'tela' | 'controle', s: Session) => { try { deps.notify?.(kind, s.deviceName, s.label); } catch { /* aviso é opcional */ } };
+  /** Novas sessões por aparelho (janela de 60 s) e linhas de auditoria repetidas (mesmo aparelho+conta em 60 s) viram UMA linha com contagem. */
+  const starts = new Map<string, number[]>(), repeats = new Map<string, {at: number; n: number; deviceId: string; action: string; detail: string}>();
+  const startAllowed = (deviceId: string) => { const t = now(), list = (starts.get(deviceId) ?? []).filter(x => t - x < 60_000); if (list.length >= MAX_STARTS_PER_MIN) { starts.set(deviceId, list); return false; } list.push(t); starts.set(deviceId, list); return true; };
+  const flushRepeats = (all = false) => { const t = now(); for (const [k, e] of [...repeats]) if (all || t - e.at >= COALESCE_MS) { if (e.n > 0) audit(e.deviceId, `${e.action}_repetido`, `${e.detail}; +${e.n} em ${COALESCE_MS / 1000} s`); repeats.delete(k); } };
+  const auditOnce = (deviceId: string, action: string, who: string, detail: string) => { flushRepeats(); const k = `${action}|${deviceId}|${who}`, e = repeats.get(k); if (e) { e.n++; return; } repeats.set(k, {at: now(), n: 0, deviceId, action, detail}); audit(deviceId, action, detail); };
+  /** Dá a ESTA sessão a janela mantida viva (alvo que aparece depois do aceite ou que foi trocado também entra). */
+  const ensureHold = (s: Session, t: ScreenTarget) => { if (s.release && s.heldKey === t.key) return; if (!t.hold) return; try { s.release?.(); } catch { /* restaurar não derruba */ } s.release = null; try { s.release = t.hold(); s.heldKey = t.key; } catch { s.release = null; } };
   const forbiddenTarget = (t: ScreenTarget) => (deps.forbidden?.() ?? []).includes(t.key);
   const secs = (from: number) => Math.max(0, Math.round((now() - from) / 1000));
 
@@ -73,7 +88,7 @@ export function createScreen(deps: ScreenDeps) {
     endControl(s, 'sessao');
     send(s, {t: 'bye', reason}); s.closed = true; clearTimeout(s.timer); sessions.delete(s);
     try { s.release?.(); } catch { /* restaurar não pode derrubar o resto */ } s.release = null;
-    audit(s.deviceId, 'tela_fim', `${s.label}; ${secs(s.startedAt)} s; ${s.frames} quadros; ${reason}`);
+    auditOnce(s.deviceId, 'tela_fim', s.label, `${s.label}; ${secs(s.startedAt)} s; ${s.frames} quadros; ${reason}`);
     s.ws.close(code); if (!sessions.size) { clearInterval(sweeper); sweeper = undefined; }
     syncControl(); changed();
   }
@@ -81,6 +96,7 @@ export function createScreen(deps: ScreenDeps) {
   async function capture(s: Session): Promise<number> {
     const t = deps.target(s.profileId);
     if (!t || !t.alive() || forbiddenTarget(t)) { setState(s, 'unavailable'); return 2000; }
+    ensureHold(s, t);
     if (s.paused) return T.frameMs;
     if (!isGameOrigin(t.url())) { s.lastHash = null; s.frame = null; setState(s, 'protected'); return T.idleFrameMs; } // login do Google/Discord, página de erro, qualquer outra origem
     if (s.pending.size >= T.inFlight) return 100; // espera os `ack` (sem eles em 10 s o sweep pausa)
@@ -120,7 +136,7 @@ export function createScreen(deps: ScreenDeps) {
     if (s.pinBusy) return; // uma tentativa de PIN por vez nesta conexão
     const dev = deps.device(s.deviceId);
     if (!dev) return end(s, 'revogado', 1008);
-    if (!dev.canAct) return denied(s, 'sem-permissao');
+    if (!dev.canControl) return denied(s, 'sem-permissao'); // "pode agir" (compras) NÃO basta: Controlar é controle total, com permissão própria
     if (!deps.pinSet()) return denied(s, 'sem-pin');
     if (deps.actionsDisabled()) return denied(s, 'desligado');
     if ([...sessions].some(o => o !== s && o.profileId === s.profileId && o.control)) return denied(s, 'ocupado'); // um controlador por conta
@@ -134,29 +150,48 @@ export function createScreen(deps: ScreenDeps) {
         return denied(s, r.reason === 'wrong' ? 'pin' : r.reason === 'locked' ? 'bloqueado' : r.reason === 'revoked' ? 'revogado' : r.reason === 'no-pin' ? 'sem-pin' : 'desligado', {...(r.ok === false && r.attemptsLeft !== undefined ? {attemptsLeft: r.attemptsLeft} : {}), ...(r.ok === false && r.retryAfterMs !== undefined ? {retryAfterMs: r.retryAfterMs} : {})});
       }
       const again = deps.device(s.deviceId); // o PIN é assíncrono: reconfere a permissão no fim
-      if (!again?.canAct || deps.actionsDisabled()) return denied(s, 'sem-permissao');
+      if (!again?.canControl || deps.actionsDisabled() || !deps.pinSet()) return denied(s, 'sem-permissao');
       if (s.control) endControl(s, 'encerrado'); // renovar = novo PIN e novo token (o antigo morre)
       const t = now(); s.control = {token: randomBytes(16).toString('hex'), startedAt: t, expiresAt: t + T.controlTtlMs, lastInput: t}; s.limiter = new InputLimiter(now);
       audit(s.deviceId, 'controle_inicio', `${s.label}; ${Math.round(T.controlTtlMs / 60_000)} min`);
-      send(s, {t: 'control', on: true, token: s.control.token, expiresAt: s.control.expiresAt, idleMs: T.controlIdleMs}); syncControl(); changed();
+      send(s, {t: 'control', on: true, token: s.control.token, expiresAt: s.control.expiresAt, idleMs: T.controlIdleMs}); syncControl(); notify('controle', s); changed();
     } finally { s.pinBusy = false; }
   }
 
+  /** Por que o controle não vale mais (permissão, PIN, ações desligadas, 10 min, 2 min parado)? Conferido em CADA entrada e no sweep de 1 s. */
+  function controlProblem(s: Session, c: Control): ControlEndReason | null {
+    const dev = deps.device(s.deviceId), t = now();
+    if (!dev?.canControl || deps.actionsDisabled() || !deps.pinSet()) return 'permissao';
+    if (t >= c.expiresAt) return 'expirou';
+    if (t - c.lastInput >= T.controlIdleMs) return 'ocioso';
+    return null;
+  }
+  /** Há campo de senha com foco? `fresh` (texto) = sempre confere de novo; só UMA conferência por vez na sessão (`'busy'` = descarta o texto). */
+  async function passwordCheck(s: Session, t: ScreenTarget, fresh: boolean): Promise<boolean | 'busy'> {
+    if (s.pwFlight) return fresh ? 'busy' : s.pwFlight;
+    if (!fresh && s.pw && now() - s.pw.at <= 250) return s.pw.on;
+    const p = t.passwordFocused().catch(() => true); s.pwFlight = p;
+    try { const on = await p; s.pw = {at: now(), on}; return on; } finally { s.pwFlight = null; }
+  }
   async function handleInput(s: Session, token: unknown, raw: unknown) {
     const c = s.control;
     if (!c || typeof token !== 'string' || !same(token, c.token)) return; // sem token de controle válido a entrada é ignorada
+    const bad = controlProblem(s, c); if (bad) { endControl(s, bad); return; } // não espera o sweep de 1 s
     const t = deps.target(s.profileId);
     if (s.paused || s.state !== 'streaming' || !t || !t.alive() || forbiddenTarget(t) || !isGameOrigin(t.url())) return; // pausado, protegido ou fora do jogo: nada entra
     const r = sanitizeInput(raw, s.frame, t.size());
     if (!r.ok) return;
     if (r.text) { // teclado e texto: nunca dentro de campo de senha (a senha do jogo não passa por aqui)
-      if (!s.pw || now() - s.pw.at > 250) s.pw = {at: now(), on: await t.passwordFocused().catch(() => true)};
-      if (s.pw.on) { setState(s, 'password'); return; }
+      const pw = await passwordCheck(s, t, r.events[0]?.type === 'char');
+      if (pw === 'busy') return; // sem conferência pronta, nenhum caractere sai
+      if (pw) { setState(s, 'password'); return; }
     }
     if (s.closed || s.control !== c) return;
+    if (controlProblem(s, c)) return;
     if (!s.limiter.allow(r.chars)) { if (now() - s.limitAt > 1000) { s.limitAt = now(); send(s, {t: 'limit'}); } return; }
     c.lastInput = now();
     for (const e of r.events) { try { t.input(e); } catch { /* alvo fechando */ } }
+    if (r.events.some(e => e.type === 'mouseDown' || e.type === 'mouseUp' || e.type === 'keyDown')) s.pw = null; // clique/Tab mudam o foco: o resultado guardado não vale mais
   }
 
   function onMessage(s: Session, data: string | Buffer, binary: boolean) {
@@ -179,19 +214,14 @@ export function createScreen(deps: ScreenDeps) {
 
   /** Confere tudo o que vence com o tempo: sem resposta, ack, controle (10 min / 2 min / permissão), ping e estatísticas. */
   function sweep() {
-    const t = now();
+    const t = now(); flushRepeats();
     for (const s of [...sessions]) {
       if (!deps.device(s.deviceId)) { end(s, 'revogado', 1008); continue; }
       if (t - s.lastInbound > T.deadMs) { end(s, 'sem resposta', 1001); continue; } // ping/pong mantém vivo; ninguém respondendo = fecha
       if (s.paused && t - s.pausedAt > T.pausedMaxMs) { end(s, 'ocioso', 1000); continue; }
       if (!s.paused && s.pending.size) { const oldest = Math.min(...s.pending.values()); if (t - oldest > T.ackTimeoutMs) pause(s, 'sem-ack'); } // o celular parou de confirmar quadros
       const c = s.control;
-      if (c) {
-        const dev = deps.device(s.deviceId);
-        if (!dev?.canAct || deps.actionsDisabled() || !deps.pinSet()) endControl(s, 'permissao');
-        else if (t >= c.expiresAt) endControl(s, 'expirou'); // 10 min; para continuar, PIN de novo
-        else if (t - c.lastInput >= T.controlIdleMs) endControl(s, 'ocioso');
-      }
+      if (c) { const bad = controlProblem(s, c); if (bad) endControl(s, bad); } // 10 min (PIN de novo), 2 min parado, permissão/PIN/ações
       if (t - s.lastPing >= T.pingMs) { s.lastPing = t; s.ws.ping(); }
       if (t - s.statsAt >= T.statsMs && s.state === 'streaming') {
         const dt = Math.max(1, t - s.statsAt) / 1000; s.statsAt = t;
@@ -208,23 +238,25 @@ export function createScreen(deps: ScreenDeps) {
       const acc = deps.accounts().find(a => a.id === profileId);
       if (!acc) return 404;
       if (acc.suspended) return 409;
-      const old = [...sessions].find(s => s.deviceId === device.id && s.profileId === profileId); // o mesmo aparelho reconectando substitui a conexão velha
-      if ([...sessions].some(s => s !== old && s.profileId === profileId)) return 429; // 1 espectador por conta
-      if (sessions.size - (old ? 1 : 0) >= MAX_VIEWERS_TOTAL) return 429;
+      const perm = deps.device(device.id); // ver a tela exige "pode agir" ou "pode controlar": um aparelho recém-pareado só vê o resumo
+      if (!perm || (!perm.canAct && !perm.canControl)) { auditOnce(device.id, 'tela_recusada', acc.label, `${acc.label}; sem permissão`); return 403; }
+      const olds = [...sessions].filter(s => s.deviceId === device.id), others = [...sessions].filter(s => s.deviceId !== device.id); // 1 sessão por aparelho: a nova substitui a velha
+      if (others.some(s => s.profileId === profileId)) return 429; // 1 espectador por conta
+      if (others.length >= MAX_VIEWERS_TOTAL) return 429;
       const target = deps.target(profileId);
-      if (target && forbiddenTarget(target)) { audit(device.id, 'tela_recusada', `${acc.label}; alvo proibido`); return 403; }
-      if (old) end(old, 'substituída', 1000);
+      if (target && forbiddenTarget(target)) { auditOnce(device.id, 'tela_recusada', acc.label, `${acc.label}; alvo proibido`); return 403; }
+      if (!startAllowed(device.id)) return 429; // no máximo 6 sessões novas por minuto por aparelho
+      for (const old of olds) end(old, 'substituída', 1000);
       const ws = acceptWebSocket(req, socket, head, SCREEN_PROTOCOL, SCREEN_MAX_INBOUND), t = now();
       const s: Session = {id: ++ids, ws, deviceId: device.id, deviceName: device.name, profileId, label: acc.label, startedAt: t, paused: null, state: 'starting', seq: 0, pending: new Map(), lastHash: null, unchanged: 0, frame: null, timer: undefined, stepping: false, closed: false, release: null,
-        lastInbound: t, pausedAt: t, lastPing: t, statsAt: t, frames: 0, bytes: 0, window: {frames: 0, bytes: 0}, rtt: null, bad: 0, limitAt: 0, control: null, pinBusy: false, limiter: new InputLimiter(now), pw: null};
+        lastInbound: t, pausedAt: t, lastPing: t, statsAt: t, frames: 0, bytes: 0, window: {frames: 0, bytes: 0}, rtt: null, bad: 0, limitAt: 0, control: null, pinBusy: false, limiter: new InputLimiter(now), pw: null, pwFlight: null, heldKey: undefined};
       sessions.add(s);
       ws.onMessage((data, binary) => onMessage(s, data, binary));
       ws.onPong(() => { s.lastInbound = now(); });
       ws.onClose(() => { if (!s.closed) end(s, 'conexão encerrada', 1006); });
-      try { s.release = target?.hold?.() ?? null; } catch { s.release = null; }
-      audit(device.id, 'tela_inicio', `${acc.label}; ${device.name}`);
-      const dev = deps.device(device.id);
-      send(s, {t: 'hello', v: 1, profileId, label: acc.label, canAct: dev?.canAct === true, pinSet: deps.pinSet(), maxWidth: T.maxWidth, ttlMs: T.controlTtlMs, idleMs: T.controlIdleMs});
+      if (target) ensureHold(s, target);
+      auditOnce(device.id, 'tela_inicio', acc.label, `${acc.label}; ${device.name}`); notify('tela', s);
+      send(s, {t: 'hello', v: 1, profileId, label: acc.label, canAct: perm.canAct, canControl: perm.canControl, pinSet: deps.pinSet(), maxWidth: T.maxWidth, ttlMs: T.controlTtlMs, idleMs: T.controlIdleMs});
       sweeper ??= (() => { const i = setInterval(sweep, T.tickMs); i.unref(); return i; })();
       wake(s, 0); syncControl(); changed();
       return null;
@@ -232,11 +264,13 @@ export function createScreen(deps: ScreenDeps) {
     /** Revogação, expiração ou saída do aparelho: fecha tudo dele. */
     closeDevice(deviceId: string, reason = 'revogado'): number { let n = 0; for (const s of [...sessions]) if (s.deviceId === deviceId) { end(s, reason, 1008); n++; } return n; },
     /** Acesso remoto desligado, rede mudou ou o app está saindo. */
-    closeAll(reason = 'desligado'): void { for (const s of [...sessions]) end(s, reason, 1001); },
+    closeAll(reason = 'desligado'): void { for (const s of [...sessions]) end(s, reason, 1001); flushRepeats(true); },
     /** PC: botão "Encerrar controle" e Ctrl+Shift+F12. Sem argumento, de todos. */
     endControl(reason: ControlEndReason = 'pc', profileId?: string): number { let n = 0; for (const s of [...sessions]) if (s.control && (!profileId || s.profileId === profileId)) { endControl(s, reason); n++; } return n; },
     /** PC: "Encerrar tudo" (corta a visualização também). */
-    endAll(reason = 'encerrado no PC'): void { for (const s of [...sessions]) end(s, reason, 1000); },
+    endAll(reason = 'encerrado no PC'): void { for (const s of [...sessions]) end(s, reason, 1000); flushRepeats(true); },
+    /** Permissão/PIN mudou para este aparelho: derruba só o controle dele (a visão continua se ele ainda pode ver). */
+    endDeviceControl(deviceId: string, reason: ControlEndReason = 'permissao'): number { let n = 0; for (const s of [...sessions]) if (s.deviceId === deviceId && s.control) { endControl(s, reason); n++; } return n; },
     /** A conta está em controle remoto agora? (trava a navegação em pokeidle.io) */
     controlling: (profileId: string): boolean => [...sessions].some(s => s.profileId === profileId && s.control !== null),
     watching: (profileId: string): boolean => [...sessions].some(s => s.profileId === profileId),
