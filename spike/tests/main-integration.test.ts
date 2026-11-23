@@ -523,7 +523,7 @@ describe('processo principal', () => {
   const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
   const call = (channel:string,...args:unknown[]) => handlers.get(channel)?.(sender,...args) as {ok:boolean;data?:unknown};
   const tray = trays[0]!; expect(trays).toHaveLength(1);
-  expect(tray.icon).toEqual({width:16}); expect(tray.tip).toMatch(/^PokéHub — \d conta/);
+  expect(tray.icon).toEqual({width:process.platform === 'linux' ? 24 : 16}); // trayIconSize: 24 px no Linux, 16 px nos demais expect(tray.tip).toMatch(/^PokéHub — \d conta/);
   expect(call('tray:get')).toEqual({ok:true,data:{onClose:true,onMinimize:true,hintShown:false}});
   for (const bad of ['x',null,{onClose:'sim'},{onMinimize:1}]) expect(call('tray:set',bad).ok).toBe(false);
   expect((handlers.get('tray:set')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame},{onClose:false}) as {ok:boolean}).ok).toBe(false);
