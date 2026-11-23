@@ -64,6 +64,7 @@
     "npmRebuild": false,
     "files": [
       "dist/**",
+      "dist-remote/**",
       "dist-electron/**",
       "build/icon.png",
       "package.json"

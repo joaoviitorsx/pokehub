@@ -1,8 +1,8 @@
 // App do celular (PWA): pareamento, Contas, Conta (Onde caçar), Mercado e Saúde; Loja e Alertas chegam nas próximas fases.
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { deviceNameFromUA } from '../remote/device-name';
-import { ago, compact, get, mb, num, post, STATE_TEXT, Unauthorized, type Account, type Me } from './api';
+import { ago, compact, expectedFingerprint, get, mb, num, startPair, STATE_TEXT, Unauthorized, waitPair, post, type Account, type Me } from './api';
 import { Ball } from '../src/icons';
 import { PixelIcon } from './pixel-icons';
 import './remote.css';
@@ -11,25 +11,42 @@ type Tab = 'contas' | 'conta' | 'loja' | 'mercado' | 'alertas';
 const TABS: {id: Tab; label: string; soon?: boolean}[] = [{id: 'contas', label: 'Contas'}, {id: 'conta', label: 'Conta'}, {id: 'loja', label: 'Loja', soon: true}, {id: 'mercado', label: 'Mercado'}, {id: 'alertas', label: 'Alertas', soon: true}];
 
 function Pair({onDone}: {onDone: () => void}) {
-  const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState('');
+  const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [sas, setSas] = useState<string | null>(null), [sw, setSw] = useState<'wait' | 'ok' | 'off'>('wait');
+  const fp = expectedFingerprint(location.hash), abort = useRef<AbortController | null>(null);
   const full = code.length === 8;
+  useEffect(() => () => abort.current?.abort(), []);
+  useEffect(() => {
+    // o pareamento só é aceito pelo service worker registrado: sem ele (certificado ainda não confiável) o botão fica desligado
+    let alive = true; const sync = () => { if (alive) setSw(navigator.serviceWorker?.controller ? 'ok' : 'wait'); };
+    if (!navigator.serviceWorker) { const t = setTimeout(() => setSw('off'), 0); return () => clearTimeout(t); }
+    void navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready).then(sync, () => { if (alive) setSw('off'); });
+    navigator.serviceWorker.addEventListener('controllerchange', sync); sync();
+    return () => { alive = false; navigator.serviceWorker.removeEventListener('controllerchange', sync); };
+  }, []);
   const submit = async (event: FormEvent) => {
-    event.preventDefault(); if (busy || !full) return;
-    setBusy(true); setMessage('');
+    event.preventDefault(); if (busy || !full || sw !== 'ok') return;
+    setBusy(true); setMessage(''); setSas(null); const ctrl = new AbortController(); abort.current = ctrl;
     try {
-      const result = await post('/api/pair', {code, deviceName: deviceNameFromUA(navigator.userAgent)});
-      if (result.ok) onDone(); else setMessage(result.error ?? 'Não foi possível parear.');
-    } catch { setMessage('Sem conexão com o PC. Confira o Wi-Fi e tente de novo.'); } finally { setBusy(false); }
+      const started = await startPair(code, deviceNameFromUA(navigator.userAgent));
+      if (!started.ok) { setMessage(started.error); return; }
+      setSas(started.start.sas);
+      const result = await waitPair(started.start.requestId, ctrl.signal);
+      if (result.ok) onDone(); else { setSas(null); setMessage(result.error ?? 'Não foi possível parear.'); }
+    } catch { if (!ctrl.signal.aborted) { setSas(null); setMessage('Sem conexão com o PC. Confira o Wi-Fi e tente de novo.'); } } finally { setBusy(false); }
   };
   return <main className="pair"><div className="wood"><form onSubmit={submit}>
     <div className="empty-art" aria-hidden="true"><Ball className="wobble"/><i className="stand"/><i className="shadow"/></div>
     <h1>Poké<em>Hub</em></h1>
     <p>Para ver suas contas aqui, pareie este celular com o PC. No PC: <strong>Gerenciar → Acesso remoto → Parear novo aparelho</strong>.</p>
+    <div className="well fp"><strong>Impressão digital do certificado</strong>
+      {fp ? <><p className="mono" aria-label="Impressão digital esperada">{fp}</p><p className="hint">É a que o PC mostra? Compare bloco a bloco com a tela do PC. Se o celular já instalou o certificado, confira também nos detalhes dele (SHA-256). <strong>Se algum bloco for diferente, pare: não instale nem digite o código.</strong></p></> : <p className="hint">Abra o endereço pelo QR do PC (ele leva a impressão digital) e compare com a que o PC mostra. Sem essa conferência, não continue.</p>}</div>
+    {sw === 'off' && <p role="alert" className="msg">Este navegador não ativou o app. Instale e confie no certificado do PokéHub (passo no PC) e abra o endereço de novo.</p>}
     <div className="well"><label htmlFor="pair-code">Digite o código que aparece no PC</label>
       <div className="code">{[0, 1, 2, 3].map(i => <span key={i} data-on={i === code.length ? '' : undefined}>{code[i] ?? ''}</span>)}<i aria-hidden="true"/>{[4, 5, 6, 7].map(i => <span key={i} data-on={i === code.length ? '' : undefined}>{code[i] ?? ''}</span>)}
         <input id="pair-code" value={code} onChange={event => setCode(event.target.value.toUpperCase().replace(/[IL]/g, '1').replace(/O/g, '0').replace(/[^0-9A-Z]/g, '').slice(0, 8))} inputMode="text" autoCapitalize="characters" autoComplete="off" autoCorrect="off" spellCheck={false} maxLength={9} aria-describedby="pair-msg" autoFocus/></div>
       <p className="hint">8 letras e números. O código vale 2 minutos.</p></div>
-    <button className="primary" disabled={busy || !full}>{busy ? 'Aguarde…' : 'Parear'}</button>
+    <button className="primary" disabled={busy || !full || sw !== 'ok'}>{busy ? 'Aguarde…' : sw === 'wait' ? 'Preparando…' : 'Parear'}</button>
+    {sas && <p className="sas" role="status">No PC deve aparecer o número <strong>{sas}</strong>. Se for outro, recuse no PC.</p>}
     <p id="pair-msg" role={message ? 'alert' : 'status'} className="msg">{busy ? 'Agora aceite o pedido na tela do PC.' : message}</p>
   </form></div></main>;
 }
@@ -135,7 +152,6 @@ function App() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- carga assíncrona via API no mount
     void check();
   }, [check]);
-  useEffect(() => { try { void navigator.serviceWorker?.register('/sw.js').catch(() => undefined); } catch { /* certificado ainda não confiável: sem service worker */ } }, []);
   const logout = useCallback(() => { setMe(null); setPhase('pair'); }, []);
   if (phase === 'loading') return <main className="loading" role="status"><Ball className="wobble"/><p className="muted">Carregando…</p></main>;
   return phase === 'app' && me ? <Shell me={me} onLogout={logout}/> : <Pair onDone={() => void check()}/>;

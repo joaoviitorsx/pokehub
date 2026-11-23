@@ -1,8 +1,10 @@
-// Persistência do acesso remoto (SQLite): preferências, aparelhos pareados (só o hash do token) e auditoria.
+// Persistência do acesso remoto (SQLite): preferências, aparelhos pareados (só o hash do token), auditoria, pino da rede e contadores do PIN.
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from '../electron/database';
 
 export interface DeviceRow { id: string; name: string; createdAt: string; lastSeen: string | null; canAct: boolean }
+export interface TokenRow { hash: string; prevHash: string | null; prevUntil: number; rotatedAt: number }
+export interface PinStateRow { fails: number; level: number; lockedUntil: number; day: string | null }
 export interface AuditRow { id: number; at: string; deviceId: string | null; action: string; detail: string | null }
 export const DEFAULT_PORT = 47321, MAX_DEVICES = 8, AUDIT_KEEP = 1000;
 export const validPort = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 1024 && value <= 65535;
@@ -18,16 +20,32 @@ export class RemoteStore {
   getPinHash(): string | null { const value = this.db.prepare('SELECT remote_pin_hash FROM workspace_settings WHERE id=1').get()?.remote_pin_hash; return typeof value === 'string' && value ? value : null; }
   setPinHash(hash: string | null): void { this.db.prepare('UPDATE workspace_settings SET remote_pin_hash=? WHERE id=1').run(hash); }
   getDailyCapGold(): number { return Number(this.db.prepare('SELECT remote_daily_cap_gold FROM workspace_settings WHERE id=1').get()?.remote_daily_cap_gold ?? 200000); }
-  addDevice(device: {id: string; name: string; tokenHash: string; now: string}): void {
-    this.db.prepare('INSERT INTO remote_devices (id, name, token_hash, created_at, last_seen, can_act) VALUES (?, ?, ?, ?, ?, 0)').run(device.id, device.name.slice(0, 60), device.tokenHash, device.now, device.now);
+  /** Pino da rede doméstica (hash do perfil + sub-rede) gravado ao ligar; null = ainda não fixada. */
+  getNetPin(): {pin: string; label: string} | null { const row = this.db.prepare('SELECT remote_net_pin, remote_net_label FROM workspace_settings WHERE id=1').get(); return typeof row?.remote_net_pin === 'string' && row.remote_net_pin ? {pin: row.remote_net_pin, label: String(row.remote_net_label ?? '')} : null; }
+  setNetPin(pin: string | null, label = ''): void { this.db.prepare('UPDATE workspace_settings SET remote_net_pin=?, remote_net_label=? WHERE id=1').run(pin, pin === null ? null : label.slice(0, 80)); }
+  /** Ações pelo celular desligadas (10 erros de PIN no dia) até o usuário religar no PC. */
+  getActionsDisabled(): boolean { return Number(this.db.prepare('SELECT remote_actions_disabled FROM workspace_settings WHERE id=1').get()?.remote_actions_disabled ?? 0) !== 0; }
+  setActionsDisabled(value: boolean): void { this.db.prepare('UPDATE workspace_settings SET remote_actions_disabled=? WHERE id=1').run(value ? 1 : 0); }
+  addDevice(device: {id: string; name: string; tokenHash: string; now: string; nowMs?: number}): void {
+    this.db.prepare('INSERT INTO remote_devices (id, name, token_hash, created_at, last_seen, can_act, rotated_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(device.id, device.name.slice(0, 60), device.tokenHash, device.now, device.now, device.nowMs ?? (Date.parse(device.now) || 0));
   }
+  setCanAct(id: string, value: boolean): boolean { return this.db.prepare('UPDATE remote_devices SET can_act=? WHERE id=?').run(value ? 1 : 0, id).changes === 1; }
   /** Hash guardado do token do aparelho (para comparação em tempo constante); null se não existe. */
-  tokenHashOf(id: string): string | null { const value = this.db.prepare('SELECT token_hash FROM remote_devices WHERE id=?').get(id)?.token_hash; return typeof value === 'string' ? value : null; }
+  tokenHashOf(id: string): string | null { return this.tokenRow(id)?.hash ?? null; }
+  tokenRow(id: string): TokenRow | null {
+    const row = this.db.prepare('SELECT token_hash, prev_token_hash, prev_valid_until, rotated_at FROM remote_devices WHERE id=?').get(id);
+    return row ? {hash: String(row.token_hash), prevHash: typeof row.prev_token_hash === 'string' ? row.prev_token_hash : null, prevUntil: Number(row.prev_valid_until), rotatedAt: Number(row.rotated_at)} : null;
+  }
+  /** Rotação do token: o hash atual vira o anterior (vale até `prevUntil`) e entra o novo. */
+  rotateToken(id: string, hash: string, prevHash: string, prevUntil: number, nowMs: number): void { this.db.prepare('UPDATE remote_devices SET token_hash=?, prev_token_hash=?, prev_valid_until=?, rotated_at=? WHERE id=?').run(hash, prevHash, prevUntil, nowMs, id); }
   getDevice(id: string): DeviceRow | null { const row = this.db.prepare('SELECT id, name, created_at, last_seen, can_act FROM remote_devices WHERE id=?').get(id); return row ? this.toDevice(row) : null; }
   listDevices(): DeviceRow[] { return this.db.prepare('SELECT id, name, created_at, last_seen, can_act FROM remote_devices ORDER BY created_at').all().map(row => this.toDevice(row)); }
   countDevices(): number { return Number(this.db.prepare('SELECT COUNT(*) AS n FROM remote_devices').get()?.n ?? 0); }
   touch(id: string, now: string): void { this.db.prepare('UPDATE remote_devices SET last_seen=? WHERE id=?').run(now, id); }
-  revokeDevice(id: string): boolean { return this.db.prepare('DELETE FROM remote_devices WHERE id=?').run(id).changes === 1; }
+  revokeDevice(id: string): boolean { this.db.prepare('DELETE FROM remote_pin_state WHERE key=?').run(id); return this.db.prepare('DELETE FROM remote_devices WHERE id=?').run(id).changes === 1; }
+  pinState(key: string): PinStateRow | null { const r = this.db.prepare('SELECT fails, level, locked_until, day FROM remote_pin_state WHERE key=?').get(key); return r ? {fails: Number(r.fails), level: Number(r.level), lockedUntil: Number(r.locked_until), day: r.day == null ? null : String(r.day)} : null; }
+  setPinState(key: string, s: PinStateRow): void { this.db.prepare('INSERT INTO remote_pin_state (key, fails, level, locked_until, day) VALUES (?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET fails=excluded.fails, level=excluded.level, locked_until=excluded.locked_until, day=excluded.day').run(key, s.fails, s.level, s.lockedUntil, s.day); }
+  clearPinState(key?: string): void { if (key) this.db.prepare('DELETE FROM remote_pin_state WHERE key=?').run(key); else this.db.exec('DELETE FROM remote_pin_state'); }
   audit(deviceId: string | null, action: string, detail: string | null, now: string): void {
     this.db.prepare('INSERT INTO remote_audit (at, device_id, action, detail) VALUES (?, ?, ?, ?)').run(now, clip(deviceId, 64), action.slice(0, 40), clip(detail, 200));
     this.db.prepare('DELETE FROM remote_audit WHERE id <= (SELECT MAX(id) FROM remote_audit) - ?').run(AUDIT_KEEP);

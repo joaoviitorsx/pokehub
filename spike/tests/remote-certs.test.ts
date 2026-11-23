@@ -13,7 +13,7 @@ const DAY = 86_400_000;
 
 describe('certificados locais', () => {
   it('a CA é uma CA de verdade, restrita a nomes privados, e a folha tem o IP da LAN no SAN', () => {
-    const ca = createCa(), leaf = createLeaf(ca.cert, ca.key, ['192.168.1.20', '10.0.0.5']);
+    const ca = createCa(Date.now(), ['192.168.1.0/24', '10.0.0.0/24']), leaf = createLeaf(ca.cert, ca.key, ['192.168.1.20', '10.0.0.5']);
     const caX = new X509Certificate(ca.cert), leafX = new X509Certificate(leaf.cert);
     expect(caX.ca).toBe(true);
     expect(leafX.ca).toBe(false);
@@ -33,7 +33,7 @@ describe('certificados locais', () => {
     expect(new Date(new X509Certificate(leaf.cert).validFrom).getTime()).toBeLessThanOrEqual(now);
   });
   it('um cliente que confia só na CA valida a folha por IP (handshake TLS real, inclusive a restrição de nomes)', async () => {
-    const ca = createCa(), leaf = createLeaf(ca.cert, ca.key, ['192.168.1.20']);
+    const ca = createCa(Date.now(), ['192.168.1.0/24']), leaf = createLeaf(ca.cert, ca.key, ['192.168.1.20']);
     const server = createServer({cert: leaf.cert, key: leaf.key}, (_req, res) => res.end('ok'));
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as {port: number}).port;
@@ -50,20 +50,20 @@ describe('certificados locais', () => {
     expect(a.created).toBe(true);
     const b = ensureCerts(dir, ['192.168.1.20'], {restrict: false});
     expect(b.created).toBe(false); expect(b.leafCert).toBe(a.leafCert);
-    const c = ensureCerts(dir, ['192.168.1.20', '10.1.1.1'], {restrict: false});
+    const c = ensureCerts(dir, ['192.168.1.20', '192.168.1.30'], {restrict: false});
     expect(c.caCert).toBe(a.caCert); expect(c.leafCert).not.toBe(a.leafCert);
-    expect(new X509Certificate(c.leafCert).subjectAltName).toContain('IP Address:10.1.1.1');
-    expect(leafUsable(c.leafCert, c.caCert, ['10.1.1.1'])).toBe(true);
+    expect(new X509Certificate(c.leafCert).subjectAltName).toContain('IP Address:192.168.1.30');
+    expect(leafUsable(c.leafCert, c.caCert, ['192.168.1.30'])).toBe(true);
     expect(leafUsable(c.leafCert, c.caCert, ['10.9.9.9'])).toBe(false);
     // perto de vencer: renova
-    const late = ensureCerts(dir, ['192.168.1.20', '10.1.1.1'], {restrict: false, now: Date.now() + 380 * DAY});
+    const late = ensureCerts(dir, ['192.168.1.20', '192.168.1.30'], {restrict: false, now: Date.now() + 380 * DAY});
     expect(late.leafCert).not.toBe(c.leafCert);
   });
   it('chaves privadas ficam em arquivo 0600 (POSIX) e o resultado público não carrega a chave da CA', () => {
     const dir = tmp(), set = ensureCerts(dir, ['192.168.1.20'], {restrict: false});
     if (process.platform !== 'win32') for (const f of ['ca.key.pem', 'leaf.key.pem']) expect(statSync(join(dir, f)).mode & 0o777).toBe(0o600);
     expect(readFileSync(join(dir, 'ca.key.pem'), 'utf8')).toContain('PRIVATE KEY');
-    expect(Object.keys(set).sort()).toEqual(['caCert', 'caDer', 'created', 'leafCert', 'leafKey']);
+    expect(Object.keys(set).sort()).toEqual(['aclOk', 'caCert', 'caDer', 'caRegenerated', 'created', 'fingerprint', 'leafCert', 'leafKey']);
     expect(set.caCert).not.toContain('PRIVATE KEY');
   });
   it('mobileconfig leva só o certificado público da CA', () => {
