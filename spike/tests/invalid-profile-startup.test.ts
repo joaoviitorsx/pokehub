@@ -2,7 +2,8 @@ import { afterAll, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { ProfileStore } from '../electron/profile-store';
 const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
 
@@ -11,7 +12,7 @@ const path=join(directory,'pokehub.sqlite');
 const handlers=new Map<string,(...args:unknown[])=>unknown>();
 const createView=vi.fn(); let shell: FakeWindow;
 class FakeContents extends EventEmitter {
- mainFrame={};
+ mainFrame={url:pathToFileURL(resolve('spike/electron','../../dist/index.html')).href};
  setWindowOpenHandler() {}
  send() {}
  loadFile() {return Promise.resolve();}
@@ -28,7 +29,7 @@ class FakeWindow extends EventEmitter {
  loadFile(){return Promise.resolve();}
 }
 const app=Object.assign(new EventEmitter(),{requestSingleInstanceLock:()=>true,commandLine:{getSwitchValue:()=>'',appendSwitch:vi.fn()},setAppUserModelId:vi.fn(),whenReady:()=>Promise.resolve(),getPath:()=>directory,quit:vi.fn()});
-vi.doMock('electron',()=>({app,BrowserWindow:FakeWindow,WebContentsView:createView,ipcMain:{handle:(name:string,handler:(...args:unknown[])=>unknown)=>handlers.set(name,handler)},dialog:{showErrorBox(){}}}));
+vi.doMock('electron',()=>({session:{defaultSession:{on(){},setPermissionRequestHandler(){},setPermissionCheckHandler(){}}},app,BrowserWindow:FakeWindow,WebContentsView:createView,ipcMain:{handle:(name:string,handler:(...args:unknown[])=>unknown)=>handlers.set(name,handler)},dialog:{showErrorBox(){}}}));
 afterAll(()=>{shell?.emit('closed');vi.doUnmock('electron');rmSync(directory,{recursive:true,force:true});});
 
 it('isola identificador inválido e permite remover o perfil sem abrir a view', async () => {

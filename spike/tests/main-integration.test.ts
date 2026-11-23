@@ -1,8 +1,9 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const directory = mkdtempSync(join(tmpdir(),'pokehub-main-'));
 type Handler = (...args: unknown[]) => unknown;
@@ -32,13 +33,18 @@ class FakeSession {
   clearCount = 0; cacheCount = 0; block?: Promise<void>;
   setPermissionRequestHandler() {}
   setPermissionCheckHandler() {}
+  on() { return this; }
+  async clearCodeCaches() {}
+  async clearAuthCache() {}
+  async clearHostResolverCache() {}
   async clearStorageData() { this.clearCount++; await this.block; }
   async clearCache() { this.cacheCount++; }
 }
 let nextPid = 5000;
 let richMetrics = false;
+const appUrl = pathToFileURL(resolve('spike/electron','../../dist/index.html')).href;
 class FakeContents extends EventEmitter {
-  mainFrame = {};
+  mainFrame = {url: appUrl};
   destroyed = false;
   deferClose = false;
   failClose = false;
@@ -119,7 +125,7 @@ const fakeApp = Object.assign(new EventEmitter(), {
     : [{pid:123,creationTime:100,memory:{workingSetSize:2048},cpu:{percentCPUUsage:3}}],
   quit: () => {},
 });
-vi.doMock('electron', () => ({Tray:FakeTray, Menu:{buildFromTemplate:(template: typeof menuTemplate) => { menuTemplate = template; return {}; }}, Notification:class { static isSupported() { return false; } }, nativeImage:{createFromPath:() => ({resize:(size:unknown) => size})}, app: fakeApp, BrowserWindow:FakeWindow, WebContentsView:FakeView, ipcMain:{handle: (name:string, handler:Handler) => handlers.set(name,handler)}, shell:{openExternal:async (url:string) => {openedExternal.push(url);}}, dialog:{showOpenDialog:async () => ({canceled:chosenFolder === null,filePaths:chosenFolder === null ? [] : [chosenFolder]}),showErrorBox() {},showMessageBoxSync:()=>confirmChoice,showMessageBox:async (_window:unknown, options:{message:string}) => {notices.push(options.message);return {response:noticeChoice};}}}));
+vi.doMock('electron', () => ({session:{defaultSession:new FakeSession()}, Tray:FakeTray, Menu:{buildFromTemplate:(template: typeof menuTemplate) => { menuTemplate = template; return {}; }}, Notification:class { static isSupported() { return false; } }, nativeImage:{createFromPath:() => ({resize:(size:unknown) => size})}, app: fakeApp, BrowserWindow:FakeWindow, WebContentsView:FakeView, ipcMain:{handle: (name:string, handler:Handler) => handlers.set(name,handler)}, shell:{openExternal:async (url:string) => {openedExternal.push(url);}}, dialog:{showOpenDialog:async () => ({canceled:chosenFolder === null,filePaths:chosenFolder === null ? [] : [chosenFolder]}),showErrorBox() {},showMessageBoxSync:()=>confirmChoice,showMessageBox:async (_window:unknown, options:{message:string}) => {notices.push(options.message);return {response:noticeChoice};}}}));
 afterAll(() => { shell?.emit('closed'); vi.doUnmock('electron'); rmSync(directory,{recursive:true,force:true}); });
 
 describe('processo principal', () => {
@@ -173,16 +179,14 @@ describe('processo principal', () => {
   expect(await invoke('market:stop',42)).toEqual({ok:true,data:false});
   // Loja rápida: canais exigem origem confiável, perfil conhecido e pedido válido; nada roda em sessão que ainda carrega
   const shopFail = {ok:false,error:'Não foi possível acessar o Market desta conta.'};
-  for (const channel of ['shop:read','shop:buy','shop:run','shop:stop']) expect(handlers.has(channel)).toBe(true);
+  for (const channel of ['shop:read','shop:run','shop:stop']) expect(handlers.has(channel)).toBe(true);
+  expect(handlers.has('shop:buy')).toBe(false); // a compra única não é mais exposta ao renderer
   expect(await handlers.get('shop:read')?.(foreign,saved.id)).toEqual(shopFail);
-  expect(await handlers.get('shop:buy')?.(foreign,saved.id,{})).toEqual(shopFail);
   expect(await handlers.get('shop:run')?.(foreign,[])).toEqual(shopFail);
   expect(await handlers.get('shop:stop')?.(foreign)).toEqual(shopFail);
   for (const id of ['nao-existe',null,42,{id:saved.id}]) expect(await invoke('shop:read',id)).toEqual(shopFail);
   expect(await invoke('shop:read',saved.id)).toEqual(shopFail); // sessão ainda carregando
   const shopOrder = {cat:'Pokebolas',name:'Ultra Ball',qty:1,unitPrice:130,total:130};
-  expect(await invoke('shop:buy',saved.id,shopOrder)).toEqual({ok:false,error:'Leia o estoque desta conta antes de comprar.'});
-  expect(await invoke('shop:buy',saved.id,{...shopOrder,cat:'Ovos'})).toEqual({ok:false,error:'Pedido inválido.'});
   expect(await invoke('shop:run',[{id:saved.id,lines:[{...shopOrder,total:1}]}])).toEqual({ok:false,error:'Pedido inválido.'});
   expect(await invoke('shop:stop')).toEqual({ok:true,data:false});
   expect(invoke('session:layout',null,false,'sim').ok).toBe(false);
@@ -306,6 +310,8 @@ describe('processo principal', () => {
   other.webContents.completeClose();
   expect((await pendingRemove).ok).toBe(true);
   expect((handlers.get('profiles:list')?.(sender) as {data:unknown[]}).data).toHaveLength(3);
+  expect(JSON.parse(readFileSync(join(directory,'pending-wipes.json'),'utf8'))).toEqual([ids[1]]); // login em disco apagado no próximo início
+  expect(handlers.get('profiles:orphans')?.(sender)).toEqual({ok:true,data:{count:0}});
   const third = created[2]; const thirdId = ids[2];
   if (!third || !thirdId) throw new Error('Sessão ausente');
   third.webContents.destroyBeforeThrow = true;
