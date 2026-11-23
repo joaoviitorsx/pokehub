@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COL_HEAD, COL_MIN, columns, effectiveFocus, gridShape, initialFocus, layout, MAX_PROFILES, SIDE_PANEL, sideMinWidth, sideWidth, TOP_BAR, type Bounds } from '../electron/layout';
+import { COL_HEAD, COL_MIN, columns, effectiveFocus, gridShape, initialFocus, layout, MAX_PROFILES, SIDE_MAX, SIDE_MIN, SIDE_PANEL, sideWidth, TOP_BAR, type Bounds } from '../electron/layout';
 
 const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
 // Sem lacunas nem sobreposição: as colunas cobrem exatamente a área (largura × altura abaixo da barra) e nenhuma se cruza.
@@ -64,11 +64,11 @@ describe('layout em colunas', () => {
     expect(rects.map(r => r.height)).toEqual([326,326,327,327]);
     expect(rects.map(r => r.y)).toEqual([48,48,374,374]);
   });
-  it('a lateral reduz a largura só na grade', () => {
+  it('a lateral reduz a largura da grade e da coluna focada', () => {
     expect(columns(1400, 800, 4, null, 340).map(b => b?.width)).toEqual([530,530,530,530]);
     expect(columns(1400, 800, 2, null, 340).map(b => b?.width)).toEqual([530,530]);
     expect(columns(1400, 800, 1, null, 340)).toEqual([{x:0,y:48,width:1060,height:752}]);
-    expect(columns(1400, 800, 2, 1, 340)).toEqual([null,{x:0,y:48,width:1400,height:752}]);
+
     expect(columns(1400, 800, 2, null, 0)).toEqual(columns(1400, 800, 2, null));
   });
   it('mostra somente a sessão focada sem destruir as demais, com cabeçalho', () => {
@@ -101,27 +101,45 @@ describe('layout em janela pequena', () => {
   });
 });
 
-describe('lateral "Onde caçar?"', () => {
-  it('só ocupa espaço na grade e quando a grade mínima cabe ao lado', () => {
-    expect(sideMinWidth(1)).toBe(COL_MIN + SIDE_PANEL);
-    expect(sideMinWidth(2)).toBe(2 * COL_MIN + SIDE_PANEL);
-    expect(sideMinWidth(4)).toBe(sideMinWidth(2));
-    expect(sideWidth(1400, true, null)).toBe(SIDE_PANEL);
-    expect(sideWidth(1020, true, null)).toBe(SIDE_PANEL);
-    expect(sideWidth(1019, true, null)).toBe(0);
-    expect(sideWidth(680, true, null, SIDE_PANEL, 1)).toBe(SIDE_PANEL);
-    expect(sideWidth(679, true, null, SIDE_PANEL, 1)).toBe(0);
-    expect(sideWidth(1400, false, null)).toBe(0);
-    expect(sideWidth(1400, true, 0)).toBe(0);
+describe('lateral "Onde caçar?" em todos os modos', () => {
+  it('abre em qualquer largura de janela útil (mínima 700) e sempre deixa ao menos uma coluna ao lado', () => {
+    expect(sideWidth(1400, true)).toBe(SIDE_PANEL);
+    expect(sideWidth(1400, false)).toBe(0);
+    expect(sideWidth(700, true)).toBe(SIDE_PANEL); // sobram 360 ≥ COL_MIN
+    expect(sideWidth(700, true, SIDE_MIN)).toBe(SIDE_MIN);
+    expect(sideWidth(700, true, SIDE_MAX)).toBe(360);
+    expect(sideWidth(620, true)).toBe(SIDE_MIN); // 620 - 340 = 280
+    expect(sideWidth(619, true)).toBe(0); // nem a lateral mínima cabe ao lado de uma coluna
+    for (const width of [700, 701, 900, 1280, 1920]) for (const panel of [SIDE_MIN, SIDE_PANEL, SIDE_MAX]) expect(width - sideWidth(width, true, panel)).toBeGreaterThanOrEqual(COL_MIN);
   });
-  it('a largura escolhida vale de 280 a 520 px e cede espaço para a grade', () => {
-    expect(sideWidth(1400, true, null, 280)).toBe(280);
-    expect(sideWidth(1400, true, null, 520)).toBe(520);
-    expect(sideWidth(1100, true, null, 520)).toBe(420); // 1100 - 680 da grade
-    expect(sideWidth(1020, true, null, 280)).toBe(280);
-    expect(sideWidth(1400, false, null, 520)).toBe(0);
-    for (const panel of [279, 521, 300.5, NaN, Infinity, -340]) expect(() => sideWidth(1400, true, null, panel)).toThrow();
-    expect(layout(1400, 800, 2, null, sideWidth(1400, true, null, 400))).toEqual([{x:0,y:78,width:500,height:722},{x:500,y:78,width:500,height:722}]);
+  it('a largura escolhida vale de 280 a 520 px e cede espaço para a coluna', () => {
+    expect(sideWidth(1400, true, 280)).toBe(280);
+    expect(sideWidth(1400, true, 520)).toBe(520);
+    expect(sideWidth(800, true, 520)).toBe(460); // 800 - 340
+    for (const panel of [279, 521, 300.5, NaN, Infinity, -340]) expect(() => sideWidth(1400, true, panel)).toThrow();
+    expect(layout(1400, 800, 2, null, sideWidth(1400, true, 400))).toEqual([{x:0,y:78,width:500,height:722},{x:500,y:78,width:500,height:722}]);
+  });
+  it('no foco/expandido a conta ocupa a largura menos a lateral', () => {
+    const side = sideWidth(1400, true);
+    expect(columns(1400, 800, 3, 1, side)).toEqual([null,{x:0,y:48,width:1400 - side,height:752},null]);
+    expect(layout(1400, 800, 3, 2, side)[2]).toEqual({x:0,y:78,width:1400 - side,height:722});
+  });
+  it('na grade a lateral quebra em menos colunas/linhas enquanto cada coluna tiver COL_MIN', () => {
+    expect(gridShape(1400, 4)).toEqual({cols:4,rows:1});
+    expect(gridShape(1400 - 340, 4)).toEqual({cols:2,rows:2}); // 1060: 3+1 vira 2×2
+    expect(columns(1100, 800, 4, null, 340).map(b => b?.width)).toEqual([380,380,380,380]);
+    expect(columns(1100, 800, 2, null, 340).map(b => b?.width)).toEqual([380,380]);
+    expect(columns(700, 800, 2, null, 360).map(b => [b?.width,b?.y])).toEqual([[340,48],[340,424]]); // 1 coluna por linha
+  });
+  it('se nem uma coluna cabe ao lado da lateral, ou as linhas ficam baixas, mostra só a conta da lateral (foco automático)', () => {
+    expect(effectiveFocus(700, 800, 3, null, 360)).toEqual({index:0,automatic:true}); // 340 de largura = 1 coluna × 3 linhas, baixo demais
+    expect(effectiveFocus(1000, 600, 4, null, 340, 2)).toEqual({index:2,automatic:true}); // 660 → 1 coluna × 4 linhas: não cabe na altura
+    expect(effectiveFocus(1000, 600, 4, null, 340)).toEqual({index:0,automatic:true});
+    expect(effectiveFocus(1000, 600, 4, null, 340, 9)).toEqual({index:0,automatic:true}); // conta inválida volta à primeira
+    expect(effectiveFocus(1000, 900, 2, null, 340, 1)).toEqual({index:null,automatic:false}); // 2 linhas de 1 coluna cabem em 852
+    expect(effectiveFocus(600, 900, 2, null, 280, 1)).toEqual({index:1,automatic:true}); // 320 < COL_MIN
+    expect(effectiveFocus(1400, 800, 4, 2, 340, 1)).toEqual({index:2,automatic:false}); // foco escolhido vence
+    expect(effectiveFocus(1400, 800, 4, null, 0)).toEqual({index:null,automatic:false});
   });
 });
 

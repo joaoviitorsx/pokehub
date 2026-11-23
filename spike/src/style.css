@@ -5,8 +5,8 @@
   --side: 340px;
   /* --col-head deve ser igual a COL_HEAD em spike/electron/layout.ts */
   --col-head: 30px;
-  /* grade mínima ao lado da lateral (COL_MIN × min(contas, 2)); main.tsx ajusta conforme o número de contas */
-  --grid-min: 680px;
+  /* coluna mínima que sobra ao lado da lateral; deve ser igual a COL_MIN em spike/electron/layout.ts */
+  --grid-min: 340px;
   --bg: #0f1218;
   --surface: #161a23;
   --raised: #1f2531;
@@ -353,3 +353,28 @@ button.link:not(:disabled):hover { background: transparent; border: 0; color: va
 .findings li[data-kind=click] b, .findings li[data-kind=dispatch] b, .findings li[data-kind=send] b { color: var(--accent); }
 .tools button.update { height: 28px; margin-right: 6px; padding: 0 12px; border-radius: 999px; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: transparent; font-size: 12px; font-weight: 600; }
 .tools button.update.ready { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+/* Gerenciar: navegação lateral + conteúdo */
+:root { --warn: #ff9f43; }
+.verdict[data-verdict=externa] { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); }
+.findings li[data-kind=network] b { color: var(--warn); }
+.ext-hosts { margin-top: 8px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); border-radius: var(--radius); background: color-mix(in srgb, var(--warn) 7%, var(--surface)); }
+.panel .ext-hosts p { margin: 0 0 6px; color: var(--text); }
+.ext-hosts ul { list-style: none; margin: 0 0 10px; padding: 0; display: grid; gap: 2px; font-size: 13px; }
+.ext-hosts small { color: var(--muted); }
+.ext-hosts code { color: var(--warn); }
+.panel.manage { width: min(100%, 880px); display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 28px; padding: 20px; }
+.manage-nav { display: flex; flex-direction: column; gap: 4px; align-self: start; position: sticky; top: 0; }
+.manage-nav .grow { flex: 1; min-height: 12px; }
+.panel .manage-nav button { justify-content: flex-start; text-align: left; border-color: transparent; background: transparent; color: var(--muted); }
+.panel .manage-nav button:not(:disabled):hover { color: var(--text); background: var(--raised); }
+.panel .manage-nav button[aria-pressed=true] { color: var(--text); background: var(--raised); border-color: var(--line); box-shadow: inset 2px 0 0 var(--accent); }
+.manage-body { min-width: 0; }
+.acc-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 10px; }
+.acc-row { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-left: 3px solid var(--c); border-radius: var(--radius); background: var(--surface); }
+.acc-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.acc-main strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.acc-row small { color: var(--muted); overflow-wrap: anywhere; }
+.acc-row .actions button { height: 30px; padding: 0 10px; font-size: 13px; }
+.panel .acc-row .pill { margin: 0; }
+@media (max-width: 760px) { .panel.manage { grid-template-columns: 1fr; gap: 14px; } .manage-nav { flex-direction: row; flex-wrap: wrap; position: static; } .manage-nav .grow { display: none; } }

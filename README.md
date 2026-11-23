@@ -49,3 +49,10 @@ Para publicar uma versão:
 3. O workflow `.github/workflows/release.yml` roda typecheck e testes, gera o instalador NSIS (Windows) e o AppImage (Linux) e os publica no release da tag junto com `latest.yml` e `latest-linux.yml`. Para publicar por fora do CI, use `GH_TOKEN=<token> bun run release:win` ou `release:linux`.
 
 A primeira instalação é manual (baixe o instalador do release); as seguintes se atualizam pelo próprio aplicativo. Sem assinatura de código, o Windows mostra o SmartScreen ("Windows protegeu o computador") só na primeira instalação: "Mais informações" → "Executar assim mesmo". No Linux a atualização automática só funciona quando o app roda como AppImage. Não altere `productName` na raiz do `package.json`: isso mudaria a pasta de dados do usuário.
+
+## Atalhos e gerenciamento
+
+- Ctrl+0 grade; Ctrl+1 a Ctrl+4 focam uma conta; Ctrl+H abre/fecha “Onde caçar?” (vale na grade, no foco e na conta expandida).
+- Expandir uma conta: botão no cabeçalho da coluna, duplo clique no cabeçalho ou Ctrl+Shift+Enter (funciona de qualquer lugar, inclusive com o foco dentro do jogo; usa a conta da página que recebeu a tecla, ou a coluna sob o ponteiro na barra). Esc ou Ctrl+Enter, na barra e nos cabeçalhos, e o mesmo botão voltam à grade. As sessões não recarregam.
+- O botão da engrenagem (“Gerenciar”) reúne Contas, Extensões, Atualizações, Layout e Diagnóstico.
+- Extensões que acessam outros sites (veredito “Acessa outros sites”) só carregam depois que você permite a lista exata de hosts; a /hunt já vem com pokeidleguide.io e pokeidle-gg.pages.dev aprovados.

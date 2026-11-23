@@ -14,3 +14,7 @@ export function shortcutFocus(input: ShortcutInput, profileIds: readonly string[
 export function isSideShortcut(input: ShortcutInput): boolean {
   return input.type === 'keyDown' && input.control && !input.alt && !input.shift && !input.meta && !input.isAutoRepeat && !input.isComposing && input.key.toLowerCase() === 'h';
 }
+/** Ctrl+Shift+Enter alterna "expandir esta conta" ↔ grade, de qualquer lugar (inclusive de dentro do jogo). */
+export function isExpandShortcut(input: ShortcutInput): boolean {
+  return input.type === 'keyDown' && input.control && input.shift && !input.alt && !input.meta && !input.isAutoRepeat && !input.isComposing && input.key === 'Enter';
+}

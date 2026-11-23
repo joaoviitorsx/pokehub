@@ -21,7 +21,7 @@ describe('preferências do workspace', () => {
    const path=join(dir,'app.sqlite'); const db=new DatabaseSync(path);
    db.exec("CREATE TABLE profiles (id TEXT PRIMARY KEY, label TEXT NOT NULL, emailLabel TEXT NOT NULL, characterName TEXT NOT NULL, colorToken TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); INSERT INTO profiles VALUES ('id','Conta','a@example.com','','#d4a65f','2026','2026'); PRAGMA user_version=1;"); db.close();
    const prefs=new PreferencesStore(path); expect(prefs.getStartupMode()).toBe('grid'); prefs.close();
-   const check=new DatabaseSync(path); expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'}); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:7}); check.close();
+   const check=new DatabaseSync(path); expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'}); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:8}); check.close();
   } finally {rmSync(dir,{recursive:true,force:true});}
  });
 });
@@ -47,7 +47,7 @@ describe('extensão /hunt (versão 4)', () => {
    const path=join(dir,'app.sqlite'); const db=new DatabaseSync(path); db.exec(`${V3} PRAGMA user_version=3;`); db.close();
    const first=new PreferencesStore(path);
    expect(first.getStartupMode()).toBe('focus-first'); expect(first.listExtensions()).toEqual([]); first.close();
-   const check=new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:7}); expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'}); check.close();
+   const check=new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:8}); expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'}); check.close();
   } finally {rmSync(dir,{recursive:true,force:true});}
  });
  it('mantém a versão 3 e os dados se a migração falhar', () => {

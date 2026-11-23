@@ -126,6 +126,7 @@ describe('processo principal', () => {
   expect(invoke('session:layout',null,false,true).ok).toBe(true);
   for (const panel of [279,521,300.5,'340',null,NaN]) expect(invoke('session:layout',null,false,true,panel).ok).toBe(false);
   expect(invoke('session:layout',null,false,true,520).ok).toBe(true);
+  expect(invoke('session:layout',null,false,true,520,null).ok).toBe(true); expect(invoke('session:layout',null,false,true,520,'qualquer').ok).toBe(true); for (const account of [5,{},false]) expect(invoke('session:layout',null,false,true,520,account).ok).toBe(false);
   expect(await invoke('hunt:snapshot',saved.id,'false')).toEqual(huntFail);
   expect(invoke('session:layout',null,false,false).ok).toBe(true);
   // arrasto da borda da lateral: esconde as sessões, restaura ao soltar e sozinho após 10 s sem aviso
@@ -252,7 +253,7 @@ describe('processo principal', () => {
   expect(created.at(-1)?.options.webPreferences.partition).toBe(third.options.webPreferences.partition);
  });
  it('carrega várias extensões antes do jogo, audita e nunca impede a sessão de abrir', async () => {
-  type Info = {id:string;catalogId:string|null;name:string;version:string|null;path:string;enabled:boolean;loaded:number;sessions:number;verdict:string|null;findings:{kind:string}[];error:string|null};
+  type Info = {id:string;catalogId:string|null;name:string;version:string|null;path:string;enabled:boolean;loaded:number;sessions:number;verdict:string|null;findings:{kind:string}[];hosts:string[];approvedHosts:string[];pending:boolean;error:string|null};
   const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
   const call = async (channel:string,...args:unknown[]) => await handlers.get(channel)?.(sender,...args) as {ok:boolean;data?:Info[];error?:string};
   const live = () => created.filter(view => !view.webContents.isDestroyed() && shell.children.has(view));
@@ -261,7 +262,7 @@ describe('processo principal', () => {
   const folder = (name:string, content:object, files: Record<string,string> = {}) => { const path=join(directory,name); mkdirSync(path,{recursive:true}); writeFileSync(join(path,'manifest.json'),JSON.stringify(content)); for (const [file,code] of Object.entries(files)) writeFileSync(join(path,file),code); return path; };
   expect((await call('extensions:list')).data).toEqual([]);
   const intruder = {sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame};
-  for (const channel of ['extensions:list','extensions:detect','extensions:add','extensions:toggle','extensions:remove','extensions:store']) expect((await handlers.get(channel)?.(intruder,'x',true) as {ok:boolean}).ok).toBe(false);
+  for (const channel of ['extensions:list','extensions:detect','extensions:add','extensions:toggle','extensions:remove','extensions:approve','extensions:store']) expect((await handlers.get(channel)?.(intruder,'x',true) as {ok:boolean}).ok).toBe(false);
   for (const channel of ['update:get','update:check','update:download','update:install','update:auto']) expect((await handlers.get(channel)?.(intruder,true) as {ok:boolean}).ok).toBe(false);
   expect((await call('extensions:toggle',1,true)).ok).toBe(false); expect((await call('extensions:toggle','x','sim')).ok).toBe(false); expect((await call('extensions:remove',{})).ok).toBe(false);
   // pasta recusada pelo validador (service worker): nada é salvo nem carregado
@@ -271,9 +272,9 @@ describe('processo principal', () => {
   chosenFolder = null;
   expect((await call('extensions:add')).data).toEqual([]);
   // pasta bloqueada pela auditoria entra na lista com o motivo, mas não é carregada
-  chosenFolder = folder('rede',manifest,{'a.js':"fetch('https://api.example.com/x')"});
+  chosenFolder = folder('rede',manifest,{'a.js':'eval(code)'});
   const blocked = (await call('extensions:add')).data?.[0];
-  expect(blocked).toMatchObject({verdict:'bloqueada',enabled:true,loaded:0,sessions:3,catalogId:null}); expect(blocked?.error).toContain('api.example.com');
+  expect(blocked).toMatchObject({verdict:'bloqueada',enabled:true,loaded:0,sessions:3,catalogId:null}); expect(blocked?.error).toContain('eval()');
   expect(live().every(view => view.webContents.session.extensions.items.length === 0)).toBe(true);
   expect((await call('extensions:add')).error).toContain('já está');
   // duas válidas: ambas carregadas em todas as sessões, sem acesso a arquivos
@@ -319,6 +320,45 @@ describe('processo principal', () => {
   expect((await call('extensions:store','https://evil.example')).ok).toBe(false);
   expect(openedExternal.length).toBe(before);
   expect((await call('extensions:store',SMART)).ok).toBe(true); expect(openedExternal.slice(before)).toEqual([`https://chromewebstore.google.com/detail/${SMART}`]);
+ });
+ it('extensão que acessa outros sites só carrega com os hosts aprovados; o catálogo pré-aprova, e um host novo pede de novo', async () => {
+  type Info = {id:string;catalogId:string|null;verdict:string|null;loaded:number;sessions:number;hosts:string[];approvedHosts:string[];pending:boolean;enabled:boolean;error:string|null};
+  const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
+  const call = async (channel:string,...args:unknown[]) => await handlers.get(channel)?.(sender,...args) as {ok:boolean;data?:Info[];error?:string};
+  const live = () => created.filter(view => !view.webContents.isDestroyed() && shell.children.has(view));
+  const HUNT = 'mhnplloljgchpfpcpbhmcokmnefodjnh';
+  const manifest = {manifest_version:3,name:'Ponte',version:'1.0.23',content_scripts:[{matches:['https://pokeidle.io/*'],js:['a.js']}]};
+  const folder = (name:string, files: Record<string,string>) => { const path=join(directory,name); mkdirSync(path,{recursive:true}); writeFileSync(join(path,'manifest.json'),JSON.stringify(manifest)); for (const [file,code] of Object.entries(files)) writeFileSync(join(path,file),code); return path; };
+  const bridge = "const U=['https://pokeidleguide.io/api/wishlist','https://pokeidle-gg.pages.dev/api/wishlist']; fetch(U[0],{credentials:'omit'})";
+  // catálogo: /hunt na pasta do navegador carrega sozinha porque os dois hosts já estão pré-aprovados
+  chosenFolder = folder(`Extensions/${HUNT}/1.0.23_0`,{'a.js':bridge});
+  const hunt = (await call('extensions:add')).data?.find(item => item.catalogId === HUNT);
+  expect(hunt).toMatchObject({catalogId:HUNT,verdict:'externa',pending:false,loaded:3,hosts:['pokeidle-gg.pages.dev','pokeidleguide.io'],error:null});
+  // a mesma extensão em pasta qualquer (id fora do catálogo) NÃO herda a pré-aprovação
+  chosenFolder = folder('ponte',{'a.js':bridge});
+  const added = (await call('extensions:add')).data?.find(item => item.catalogId === null && item.hosts.length > 0);
+  expect(added).toMatchObject({catalogId:null,verdict:'externa',pending:true,loaded:0,approvedHosts:[],error:null});
+  expect(live().map(view => view.webContents.session.extensions.items.length)).toEqual([1,1,1]);
+  const id = added?.id ?? '';
+  // aprovar: só o dono da interface, conjunto igual ao auditado, extensão que realmente é externa
+  const intruder = {sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame};
+  expect((await handlers.get('extensions:approve')?.(intruder,id) as {ok:boolean}).ok).toBe(false);
+  expect((await call('extensions:approve',1)).ok).toBe(false); expect((await call('extensions:approve',id,'x')).ok).toBe(false); expect((await call('extensions:approve','nada')).ok).toBe(false);
+  expect((await call('extensions:approve',id,['pokeidleguide.io'])).error).toContain('mudou'); // a tela mostrou outro conjunto
+  expect((await call('extensions:approve',HUNT)).data?.find(item => item.id === HUNT)?.pending).toBe(false);
+  const approved = (await call('extensions:approve',id,['pokeidleguide.io','pokeidle-gg.pages.dev'])).data?.find(item => item.id === id);
+  expect(approved).toMatchObject({pending:false,loaded:3,approvedHosts:['pokeidle-gg.pages.dev','pokeidleguide.io']});
+  expect(live().map(view => view.webContents.session.extensions.items.length)).toEqual([2,2,2]);
+  // a extensão passa a falar com um site novo: sai das sessões e pede aprovação de novo
+  writeFileSync(join(directory,'ponte','a.js'),bridge + "; fetch('https://novo.example.com/x')");
+  const grown = (await call('extensions:list')).data?.find(item => item.id === id);
+  expect(grown).toMatchObject({pending:true,loaded:0,hosts:['novo.example.com','pokeidle-gg.pages.dev','pokeidleguide.io']});
+  expect(live().map(view => view.webContents.session.extensions.items.length)).toEqual([1,1,1]);
+  expect((await call('extensions:approve',id)).data?.find(item => item.id === id)).toMatchObject({pending:false,loaded:3});
+  // extensão que não é externa não tem o que aprovar
+  expect((await call('extensions:approve',HUNT)).ok).toBe(true); // continua externa e coberta: aprovar de novo é inofensivo
+  writeFileSync(join(directory,'ponte','a.js'),'const x=1');
+  expect((await call('extensions:approve',id)).error).toContain('não precisa');
  });
  it('expõe a versão e a preferência de atualização; fora do app empacotado fica desativada', async () => {
   const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};

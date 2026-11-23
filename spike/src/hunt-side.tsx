@@ -85,8 +85,11 @@ const waiting: Record<string,[string,string]> = {
 };
 const skeleton = (label:string) => <div className="side-skel" role="status"><span className="sr">{label}</span><i data-k="poke"/><i data-k="seg"/><i data-k="card"/><i/><i/><i/><i/></div>;
 
-export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings}:{profiles:Profile[]; states:Record<string,string>; prefs:SidePrefs; onPrefs:Dispatch<SetStateAction<SidePrefs>>; onClose:() => void; onSettings:() => void}) {
- const [pick,setPick] = useState<string|null>(null);
+// focusId: conta em foco/expandida (a lateral a seleciona ao abrir e quando ela muda); onAccount: devolve a conta mostrada (o processo principal a usa no foco automático).
+export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focusId,onAccount}:{profiles:Profile[]; states:Record<string,string>; prefs:SidePrefs; onPrefs:Dispatch<SetStateAction<SidePrefs>>; onClose:() => void; onSettings:() => void; focusId:string|null; onAccount:(id:string|null) => void}) {
+ const [pick,setPick] = useState<string|null>(focusId);
+ const [seenFocus,setSeenFocus] = useState(focusId);
+ if (seenFocus !== focusId) { setSeenFocus(focusId); if (focusId) setPick(focusId); }
  const [mode,setMode] = useState<Mode>('xp');
  const [entries,setEntries] = useState<Record<string,Entry>>({});
  const [stamp,setStamp] = useState(0);
@@ -97,6 +100,7 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings}:{pro
  const stop = useRef<AbortController|null>(null);
  const account = profiles.find(profile => profile.id === pick) ?? profiles[0];
  const id = account?.id;
+ useEffect(() => { onAccount(id ?? null); },[id,onAccount]);
  const state = id ? states[id] ?? '' : '';
  const {liberadas} = prefs;
  const slot = `${id}|${liberadas}`;
@@ -178,7 +182,7 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings}:{pro
    {!entry && state !== 'ready' ? message(...(waiting[state] ?? waiting.loading!))
    : !entry ? skeleton('Lendo o jogo…')
    : 'error' in entry ? message('Dados indisponíveis',`${entry.error}. O jogo pode ainda estar conectando.`,retry)
-   : entry.data.estado === 'sem-extensao' ? message('Extensão /hunt inativa','Ative a extensão em Configurações e recarregue as sessões para ver o ranking aqui.',<button className="primary" onClick={onSettings}>Abrir Configurações</button>)
+   : entry.data.estado === 'sem-extensao' ? message('Extensão /hunt inativa','Ative a extensão em Gerenciar e recarregue as sessões para ver o ranking aqui.',<button className="primary" onClick={onSettings}>Abrir Gerenciar</button>)
    : entry.data.estado === 'sem-jogo' ? message('Conta deslogada','Entre no jogo nesta conta. O ranking aparece quando o jogo conectar.')
    : entry.data.estado === 'sem-pokemon' ? message('Nenhum Pokémon em campo','Coloque um Pokémon em campo nesta conta para ver onde caçar.')
    : ok && <>

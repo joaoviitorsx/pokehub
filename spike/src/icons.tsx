@@ -23,6 +23,9 @@ export const icons = {
  coin:'M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11M8 5.6a2.4 2.4 0 1 0 0 4.8a2.4 2.4 0 1 0 0-4.8',
  spark:'M9 1.8 3.8 9h3.6l-.9 5.2L12.2 7H8.6z',
  minus:'M5 8h6',
+ expand:'M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9',
+ collapse:'M13.5 6.5h-4v-4M9.5 6.5L14 2M2.5 9.5h4v4M6.5 9.5L2 14',
+ gear:'M8 5.2a2.8 2.8 0 1 0 0 5.6a2.8 2.8 0 1 0 0-5.6M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1',
 };
 export const Icon = ({d}:{d:string}) => <svg className="ic" viewBox="0 0 16 16" aria-hidden="true"><path d={d}/></svg>;
 // Grade 2×2 animada por CSS (.vi): em "focus" o 1º quadrado cresce até o quadro inteiro e os outros somem.

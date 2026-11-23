@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isSideShortcut, shortcutFocus, shortcutIndex } from '../electron/workspace-shortcuts';
+import { isExpandShortcut, isSideShortcut, shortcutFocus, shortcutIndex } from '../electron/workspace-shortcuts';
 const key = {type:'keyDown',key:'1',control:true,alt:false,shift:false,meta:false,isAutoRepeat:false,isComposing:false};
 describe('atalhos do workspace', () => {
  it('seleciona a sessão disponível e a grade', () => {
@@ -14,6 +14,12 @@ describe('atalhos do workspace', () => {
    expect(shortcutIndex(input)).toBeUndefined();
    expect(shortcutFocus(input,['a'])).toBeUndefined();
   }
+ });
+ it('Ctrl+Shift+Enter expande/volta de qualquer lugar; Ctrl+Enter e Esc ficam para o renderer', () => {
+  const enter = {...key,key:'Enter',shift:true};
+  expect(isExpandShortcut(enter)).toBe(true);
+  for (const input of [{...enter,shift:false},{...enter,control:false},{...enter,alt:true},{...enter,meta:true},{...enter,isAutoRepeat:true},{...enter,isComposing:true},{...enter,type:'keyUp'},{...enter,key:'Escape'},{...enter,key:'1'}]) expect(isExpandShortcut(input)).toBe(false);
+  expect(shortcutIndex(enter)).toBeUndefined();
  });
  it('Ctrl+H alterna a lateral e não colide com os atalhos de sessão', () => {
   expect(isSideShortcut({...key,key:'h'})).toBe(true);

@@ -11,10 +11,10 @@ import { PreferencesStore } from './preferences-store';
 import { closeContents } from './close-contents';
 import { summarizeMetrics, type DiagnosticsBaseline } from './diagnostics';
 import { canReadHunt, classifyLoadFailure, classifyLoadRejection, offlineRetryDelay } from './session-status';
-import { isSideShortcut, shortcutFocus, shortcutIndex } from './workspace-shortcuts';
+import { isExpandShortcut, isSideShortcut, shortcutFocus, shortcutIndex } from './workspace-shortcuts';
 import { acquireSingleInstance } from './single-instance';
 import { resetSession, restartSession, openSessionSafely, mountSessionView } from './session-recovery';
-import { auditExtension, catalogIdOf, CATALOG, checkExtension, findInstalled, HUNT_ID, resolveExtensionPath } from './extension-check';
+import { approvedHostsOf, auditExtension, catalogIdOf, CATALOG, checkExtension, findInstalled, HUNT_ID, hostsCovered, resolveExtensionPath } from './extension-check';
 import type { AuditFinding, AuditVerdict, ExtensionInfo } from '../contracts/extensions';
 import { createUpdater, type Updater } from './updater';
 import type { UpdateInfo } from '../contracts/update';
@@ -36,12 +36,13 @@ let dragTimer: ReturnType<typeof setTimeout> | undefined;
 const DRAG_FAILSAFE_MS = 10_000;
 let sideOpen = false;
 let sidePanel = SIDE_PANEL;
+let sideAccount: string | null = null; // conta escolhida na lateral: é a mostrada quando a grade não cabe ao lado dela
 let autoFocused: string | null = null;
 let diagnosticsBaseline: DiagnosticsBaseline | null = null;
 let externalNoticeOpen = false;
 const gameUrl = 'https://pokeidle.io/app';
 // Extensões de terceiros (/hunt, Smart Market...): carregadas da pasta do navegador do usuário, nunca copiadas.
-interface ExtState {id: string; catalogId: string | null; name: string; version: string | null; path: string; enabled: boolean; verdict: AuditVerdict | null; findings: AuditFinding[]; error: string | null; loadable: boolean}
+interface ExtState {id: string; catalogId: string | null; name: string; version: string | null; path: string; enabled: boolean; verdict: AuditVerdict | null; findings: AuditFinding[]; hosts: string[]; approvedHosts: string[]; pending: boolean; error: string | null; loadable: boolean}
 let extensions: ExtState[] = [];
 const extErrors = new Map<string, string>(); // falhas de carga por extensão; as sessões seguem abertas sem ela
 let extBusy = false;
@@ -54,12 +55,15 @@ function refreshExtensions() {
     const catalogId = CATALOG.some(entry => entry.id === row.id) ? row.id : null;
     const path = catalogId ? resolveExtensionPath(row.path) : row.path; // o Chrome troca a pasta da versão ao atualizar
     if (path !== row.path) { try { preferences.setExtensionPath(row.id,path); } catch { /* caminho já usado por outra linha: segue com o antigo na lista */ } }
-    const base = {id:row.id, catalogId, path, enabled:row.enabled, findings:[] as AuditFinding[]};
+    // a pré-aprovação do catálogo só vale quando o id e a pasta (…/Extensions/<id>/<versão>) batem com a entrada
+    const approvedHosts = approvedHostsOf(catalogId && catalogIdOf(path) === catalogId ? catalogId : '',row.approvedHosts);
+    const base = {id:row.id, catalogId, path, enabled:row.enabled, findings:[] as AuditFinding[], hosts:[] as string[], approvedHosts, pending:false};
     const check = checkExtension(path);
     if (!check.ok) return {...base, name:catalogName(catalogId) ?? (path.split(/[\\/]/).filter(Boolean).pop() ?? 'Extensão'), version:null, verdict:'bloqueada' as const, error:check.error, loadable:false};
     const audit = auditExtension(path);
-    const reasons = [...new Set(audit.findings.filter(finding => finding.kind === 'network' || finding.kind === 'eval' || finding.kind === 'skipped').map(findingText))].slice(0,3);
-    return {...base, name:check.name, version:check.version, findings:audit.findings, verdict:audit.verdict, error:audit.verdict === 'bloqueada' ? `${BLOCKED_PREFIX}${reasons.join('; ')}.` : null, loadable:audit.verdict !== 'bloqueada'};
+    const reasons = [...new Set(audit.findings.filter(finding => finding.kind === 'eval' || finding.kind === 'skipped').map(findingText))].slice(0,3);
+    const pending = audit.verdict === 'externa' && !hostsCovered(audit.hosts,approvedHosts); // host novo ou ainda não aprovado: não carrega
+    return {...base, name:check.name, version:check.version, findings:audit.findings, hosts:audit.hosts, pending, verdict:audit.verdict, error:audit.verdict === 'bloqueada' ? `${BLOCKED_PREFIX}${reasons.join('; ')}.` : null, loadable:audit.verdict !== 'bloqueada' && !pending};
   });
   for (const id of [...extErrors.keys()]) if (!extensions.some(extension => extension.id === id)) extErrors.delete(id);
 }
@@ -96,7 +100,7 @@ function extensionList(): ExtensionInfo[] {
   return extensions.map(extension => {
     let loaded = 0;
     for (const view of contents) { try { if (loadedIn(view.webContents.session,extension)) loaded++; } catch { /* sessão encerrando */ } }
-    return {id:extension.id, catalogId:extension.catalogId, name:extension.name, version:extension.version, path:extension.path, enabled:extension.enabled, loaded, sessions:contents.length, verdict:extension.verdict, findings:extension.findings, error:extension.error ?? extErrors.get(extension.id) ?? null};
+    return {id:extension.id, catalogId:extension.catalogId, name:extension.name, version:extension.version, path:extension.path, enabled:extension.enabled, loaded, sessions:contents.length, verdict:extension.verdict, findings:extension.findings, hosts:extension.hosts, approvedHosts:extension.approvedHosts, pending:extension.pending, error:extension.error ?? extErrors.get(extension.id) ?? null};
   });
 }
 async function applyExtensions(): Promise<ExtensionInfo[]> {
@@ -171,10 +175,12 @@ function arrange() {
   }
   const [width = 0, height = TOP_BAR] = window.getContentSize();
   const index = focused === null ? null : profiles.findIndex(p => p.id === focused);
-  const effective = effectiveFocus(width, height, profiles.length, index !== null && index >= 0 ? index : null);
+  const side = sideWidth(width, sideOpen, sidePanel);
+  const preferred = sideOpen && sideAccount ? profiles.findIndex(p => p.id === sideAccount) : -1;
+  const effective = effectiveFocus(width, height, profiles.length, index !== null && index >= 0 ? index : null, side, Math.max(preferred,0));
   const nextAuto = effective.automatic ? profiles[effective.index ?? 0]?.id ?? null : null;
   if (nextAuto !== autoFocused) { autoFocused = nextAuto; if (!window.isDestroyed()) window.webContents.send('workspace:auto-focus', nextAuto); }
-  const bounds = layout(width, Math.max(height,TOP_BAR), profiles.length, effective.index, sideWidth(width, sideOpen, effective.index, sidePanel, profiles.length));
+  const bounds = layout(width, Math.max(height,TOP_BAR), profiles.length, effective.index, side);
   profiles.forEach((profile,i) => { const view = views.get(profile.id); const b = bounds[i]; if (view) { view.setVisible(!editing && !dragging && Boolean(b)); if (b) view.setBounds(b); } });
 }
 function setDrag(active: boolean) {
@@ -185,8 +191,10 @@ function setDrag(active: boolean) {
   dragTimer = setTimeout(() => { try { if (!window.isDestroyed()) setDrag(false); } catch { console.error('Falha ao restaurar as sessões após o arrasto.'); } }, DRAG_FAILSAFE_MS);
   for (const view of views.values()) { try { view.setVisible(false); } catch { /* sessão encerrando */ } }
 }
-function registerShortcuts(contents: Electron.WebContents) {
+function registerShortcuts(contents: Electron.WebContents, profileId: string | null = null) {
   contents.on('before-input-event', (event, input) => {
+    // Ctrl+Shift+Enter: expande a conta (a da view que recebeu a tecla) ou volta à grade; a interface decide
+    if (isExpandShortcut(input)) { event.preventDefault(); if (!window.isDestroyed()) window.webContents.send('workspace:toggle-expand',profileId); return; }
     if (isSideShortcut(input)) { event.preventDefault(); if (!window.isDestroyed()) window.webContents.send('workspace:toggle-side'); return; } // a interface decide se a lateral pode abrir
     if (editing || resetting.size > 0 || shortcutIndex(input) === undefined) return;
     try {
@@ -217,7 +225,7 @@ function addView(id: string) {
   };
   mountSessionView({
     configure: () => {
-      registerShortcuts(view.webContents);
+      registerShortcuts(view.webContents,id);
       view.webContents.setWindowOpenHandler(() => { void explainBlockedPopup(); return {action:'deny'}; });
       view.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
       view.webContents.session.setPermissionCheckHandler(() => false);
@@ -289,7 +297,7 @@ if (primary) app.whenReady().then(() => {
   preferences = new PreferencesStore(databasePath);
   try { refreshExtensions(); } catch { console.error('Não foi possível ler a configuração das extensões.'); }
   focused = initialFocus(preferences.getStartupMode(), store.list().map(profile => profile.id));
-  window = new BrowserWindow({title:'PokéHub',backgroundColor:'#0f1218',width:1280,height:800,minWidth:700,minHeight:480,webPreferences:{preload:join(__dirname,'preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
+  window = new BrowserWindow({title:'PokéHub',icon:join(__dirname,'../../build/icon.png'),backgroundColor:'#0f1218',width:1280,height:800,minWidth:700,minHeight:480,webPreferences:{preload:join(__dirname,'preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
   if (process.platform !== 'darwin') window.removeMenu(); // no macOS o menu fica na barra do sistema e mantém copiar/colar
   updater = createUpdater({autoCheck:() => preferences.getAutoUpdateCheck(), onStatus:status => { if (!window.isDestroyed()) window.webContents.send('update:status',status); }});
   registerShortcuts(window.webContents);
@@ -307,6 +315,17 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('extensions:add', event => invokeExtensions(event, addExtension));
   ipcMain.handle('extensions:toggle', (event,id: unknown,enabled: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error(); preferences.setExtensionEnabled(id,enabled); return applyExtensions(); }));
   ipcMain.handle('extensions:remove', (event,id: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string') throw new Error(); preferences.removeExtension(id); return applyExtensions(); }));
+  // aprova os hosts externos que a auditoria acha AGORA; `hosts` (o que a tela mostrou) precisa ser o mesmo conjunto
+  ipcMain.handle('extensions:approve', (event,id: unknown,hosts: unknown) => invokeExtensions(event, () => {
+    if (typeof id !== 'string' || (hosts !== undefined && (!Array.isArray(hosts) || hosts.some(host => typeof host !== 'string')))) throw new Error();
+    refreshExtensions();
+    const extension = extensions.find(item => item.id === id);
+    if (!extension || extension.verdict !== 'externa' || extension.hosts.length === 0) throw new ExtensionRefused('Esta extensão não precisa de aprovação.');
+    const shown = hosts as string[] | undefined;
+    if (shown && (shown.length !== extension.hosts.length || shown.some(host => !extension.hosts.includes(host)))) throw new ExtensionRefused('A extensão mudou desde a última leitura. Revise os sites e tente de novo.');
+    preferences.setApprovedHosts(id,extension.hosts);
+    return applyExtensions();
+  }));
   ipcMain.handle('extensions:store', async (event,id: unknown) => { // só as lojas do catálogo, por id: o renderer nunca envia URL
     const entry = CATALOG.find(item => item.id === id);
     if (!trusted(event) || !entry) return {ok:false,error:'Extensão desconhecida.'};
@@ -343,9 +362,9 @@ if (primary) app.whenReady().then(() => {
     if (!trusted(event)) return {ok:false,error:HUNT_UNAVAILABLE};
     return huntSnapshot(id, store.list().map(profile => profile.id), huntTarget, undefined, soLiberadas);
   });
-  ipcMain.handle('session:layout', (event,id: unknown,hide: unknown,side: unknown = false,panel: unknown = sidePanel) => invoke(event, () => {
-    if (typeof hide !== 'boolean' || typeof side !== 'boolean' || (id !== null && typeof id !== 'string') || typeof panel !== 'number' || !Number.isInteger(panel) || panel < SIDE_MIN || panel > SIDE_MAX) throw new Error();
-    sidePanel = panel;
+  ipcMain.handle('session:layout', (event,id: unknown,hide: unknown,side: unknown = false,panel: unknown = sidePanel,account: unknown = null) => invoke(event, () => {
+    if (typeof hide !== 'boolean' || typeof side !== 'boolean' || (id !== null && typeof id !== 'string') || (account !== null && typeof account !== 'string') || typeof panel !== 'number' || !Number.isInteger(panel) || panel < SIDE_MIN || panel > SIDE_MAX) throw new Error();
+    sidePanel = panel; sideAccount = account;
     if (hide) {
       editing = true; sideOpen = side;
       let failed = false;

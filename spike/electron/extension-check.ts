@@ -7,10 +7,19 @@ import type { AuditFinding, AuditResult, FindingKind } from '../contracts/extens
 export const HUNT_ID = 'mhnplloljgchpfpcpbhmcokmnefodjnh';
 export const SMART_MARKET_ID = 'lhfeijlnlbglakplddjgbaopgcdfkcmm';
 // Extensões conhecidas: aparecem em "Detectar no navegador". Qualquer outra entra por "Adicionar pasta…".
-export const CATALOG: {id: string; name: string; store: string}[] = [
-  {id:HUNT_ID, name:'/hunt for PokeIdle', store:`https://chromewebstore.google.com/detail/${HUNT_ID}`},
-  {id:SMART_MARKET_ID, name:'Smart Market', store:`https://chromewebstore.google.com/detail/${SMART_MARKET_ID}`},
+// approvedHosts: sites externos pré-aprovados (só valem quando o id do catálogo bate).
+export const CATALOG: {id: string; name: string; store: string; approvedHosts: string[]}[] = [
+  {id:HUNT_ID, name:'/hunt for PokeIdle', store:`https://chromewebstore.google.com/detail/${HUNT_ID}`, approvedHosts:['pokeidleguide.io','pokeidle-gg.pages.dev']},
+  {id:SMART_MARKET_ID, name:'Smart Market', store:`https://chromewebstore.google.com/detail/${SMART_MARKET_ID}`, approvedHosts:[]},
 ];
+/** Hosts aprovados de uma extensão: os do catálogo (se o id for do catálogo) mais os que o usuário aprovou. */
+export function approvedHostsOf(id: string, userApproved: readonly string[]): string[] {
+  return [...new Set([...(CATALOG.find(entry => entry.id === id)?.approvedHosts ?? []),...userApproved])].sort();
+}
+/** A extensão só carrega se todos os hosts auditados estiverem aprovados; um host novo pede aprovação de novo. */
+export function hostsCovered(hosts: readonly string[], approved: readonly string[]): boolean {
+  return hosts.every(host => approved.includes(host));
+}
 const GAME = 'https://pokeidle.io/';
 const MAX_MANIFEST_BYTES = 64 * 1024;
 // Chaves que dariam à extensão alcance além dos content scripts do jogo (lista vazia é aceita).
@@ -148,6 +157,9 @@ const AUDIT_DEPTH = 6;
 const LINK_HOSTS = ['chromewebstore.google.com','chrome.google.com','github.com','livepix.gg','www.w3.org','w3.org','developer.mozilla.org','ko-fi.com','buymeacoffee.com','discord.gg'];
 const URL_RE = /\b(?:https?|wss?):\/\/(\[[0-9a-f:]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)/gi;
 const CALL_BEFORE_RE = /(?:fetch|WebSocket|EventSource|sendBeacon|importScripts|\bopen|\bimport)\s*\(\s*[^()]*$/;
+// Chamada de rede cujo endereço não é um literal (fetch(url), new WebSocket(base + x)): os endereços escritos como texto no
+// mesmo arquivo (listas, constantes) passam a contar como rede, porque podem ser os usados na chamada.
+const DYNAMIC_CALL_RE = /(?:(?<![\w$.])fetch|new\s+WebSocket|new\s+EventSource|\bsendBeacon)\s*\(\s*(?!['"`\s])|\.open\s*\(\s*['"][A-Za-z]+['"]\s*,\s*(?!['"`\s])/;
 const PATTERNS: {kind: FindingKind; api: string; re: RegExp}[] = [
   {kind:'eval', api:'eval()', re:/(?<![\w$.])eval\s*\(/g},
   {kind:'eval', api:'new Function()', re:/new\s+Function\s*\(/g},
@@ -159,6 +171,29 @@ const PATTERNS: {kind: FindingKind; api: string; re: RegExp}[] = [
   {kind:'fetch', api:'new WebSocket()', re:/new\s+WebSocket\s*\(/g},
   {kind:'fetch', api:'navigator.sendBeacon()', re:/\bsendBeacon\s*\(/g},
 ];
+/**
+ * Remove comentários de linha e de bloco sem tocar no texto de strings ('...', "...", `...`): `https://` dentro de string fica.
+ * `//` só inicia comentário no começo do arquivo/linha ou depois de espaço, `;`, `{` ou `}`. Regex literais não são entendidos.
+ */
+export function stripComments(text: string): string {
+  let out = '', i = 0, quote = '';
+  while (i < text.length) {
+    const c = text[i] ?? '', next = text[i + 1];
+    if (quote) {
+      out += c;
+      if (c === '\\' && next !== undefined) { out += next; i += 2; continue; }
+      if (c === quote || (c === '\n' && quote !== '`')) quote = '';
+      i++; continue;
+    }
+    if (c === '"' || c === "'" || c === '`') { quote = c; out += c; i++; continue; }
+    if (c === '/' && next === '*') { const end = text.indexOf('*/',i + 2); out += ' '; i = end < 0 ? text.length : end + 2; continue; }
+    if (c === '/' && next === '/' && (i === 0 || /[\s;{}]/.test(text[i - 1] ?? ''))) { const end = text.indexOf('\n',i); i = end < 0 ? text.length : end; continue; }
+    out += c; i++;
+  }
+  return out;
+}
+const TEST_DIR_RE = /(?:^|\/)(?:tests?|__tests__)\//i;
+const TEST_FILE_RE = /\.(?:test|spec)\.(?:m?js|cjs)$/i;
 function jsFiles(dir: string, fs: ExtFs, depth = 0, out: string[] = []): string[] {
   if (depth > AUDIT_DEPTH) return out;
   let names: string[];
@@ -173,9 +208,10 @@ function jsFiles(dir: string, fs: ExtFs, depth = 0, out: string[] = []): string[
   return out;
 }
 /**
- * Veredito pelo que o código faz, sem executá-lo: 'bloqueada' se fala com hosts fora do pokeidle.io, usa eval/new Function
- * ou tem arquivo grande demais para auditar; 'interage' se clica, dispara eventos ou envia pelo socket; senão 'leitura'.
- * fetch/XMLHttpRequest/WebSocket sem host literal fora do jogo são só relatados.
+ * Veredito pelo que o código faz, sem executá-lo, em ordem crescente: 'leitura'; 'interage' (clica, dispara eventos ou
+ * envia pelo socket); 'externa' (chama a rede para hosts fora do pokeidle.io: precisa de aprovação dos hosts);
+ * 'bloqueada' (eval/new Function ou arquivo grande demais para auditar). Comentários, arquivos de teste e endereços
+ * escritos como texto fora de chamadas de rede só geram 'link'.
  */
 export function auditExtension(dir: string, fs: ExtFs = nodeFs): AuditResult {
   const found = new Map<string, {finding: AuditFinding; count: number}>();
@@ -186,21 +222,25 @@ export function auditExtension(dir: string, fs: ExtFs = nodeFs): AuditResult {
   let total = 0;
   for (const path of jsFiles(dir,fs)) {
     const file = path.slice(dir.length).replace(/^[\\/]+/,'').replace(/\\/g,'/');
-    let text: string;
+    if (TEST_DIR_RE.test(file) || TEST_FILE_RE.test(file)) continue;
+    let raw: string;
     try {
       const size = fs.statSync(path).size;
       if (size > AUDIT_FILE_BYTES || total + size > AUDIT_TOTAL_BYTES) { add('skipped',file,'arquivo grande demais para auditar'); continue; }
-      total += size; text = fs.readFileSync(path,'utf8');
+      total += size; raw = fs.readFileSync(path,'utf8');
     } catch { add('skipped',file,'arquivo ilegível'); continue; }
+    const text = stripComments(raw);
+    const dynamic = DYNAMIC_CALL_RE.test(text);
     for (const {kind,api,re} of PATTERNS) for (const _ of text.matchAll(re)) add(kind,file,api); // eslint-disable-line @typescript-eslint/no-unused-vars
     for (const match of text.matchAll(URL_RE)) {
       const host = (match[1] ?? '').toLowerCase();
       if (host === 'pokeidle.io') continue;
       const inCall = CALL_BEFORE_RE.test(text.slice(Math.max(0,match.index - 120),match.index));
-      add(LINK_HOSTS.includes(host) && !inCall ? 'link' : 'network',file,host);
+      add(inCall || (dynamic && !LINK_HOSTS.includes(host)) ? 'network' : 'link',file,host);
     }
   }
   const findings = [...found.values()].map(({finding,count}) => count > 1 && finding.kind !== 'network' && finding.kind !== 'link' ? {...finding,detail:`${finding.detail} (${count}×)`} : finding);
   const has = (...kinds: FindingKind[]) => findings.some(finding => kinds.includes(finding.kind));
-  return {verdict: has('network','eval','skipped') ? 'bloqueada' : has('click','dispatch','send') ? 'interage' : 'leitura', findings};
+  const hosts = [...new Set(findings.filter(finding => finding.kind === 'network').map(finding => finding.detail))].sort();
+  return {verdict: has('eval','skipped') ? 'bloqueada' : has('network') ? 'externa' : has('click','dispatch','send') ? 'interage' : 'leitura', findings, hosts};
 }

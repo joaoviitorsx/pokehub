@@ -14,15 +14,15 @@ function withDatabase(setup: string, test: (path: string) => void) {
   finally { rmSync(dir,{recursive:true,force:true}); }
 }
 
-describe('banco v7: extensões e atualização', () => {
+describe('banco v7/v8: extensões, atualização e hosts aprovados', () => {
   it('migra a v6 copiando a pasta /hunt salva como extensão habilitada e mantém a coluna antiga', () => {
     withDatabase(`${V6} INSERT INTO workspace_settings VALUES (1, 'focus-first', '/home/u/ext/1.0.17_0'); PRAGMA user_version=6;`, path => {
       const store = new PreferencesStore(path);
-      expect(store.listExtensions()).toEqual([{id:HUNT,path:'/home/u/ext/1.0.17_0',enabled:true}]);
+      expect(store.listExtensions()).toEqual([{id:HUNT,path:'/home/u/ext/1.0.17_0',enabled:true,approvedHosts:[]}]);
       expect(store.getStartupMode()).toBe('focus-first'); expect(store.getAutoUpdateCheck()).toBe(true);
       store.close();
       const check = new DatabaseSync(path);
-      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:7});
+      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:8});
       expect(check.prepare('SELECT hunt_extension_path FROM workspace_settings').get()).toMatchObject({hunt_extension_path:'/home/u/ext/1.0.17_0'});
       expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'});
       check.close();
@@ -34,13 +34,40 @@ describe('banco v7: extensões e atualização', () => {
       expect(store.listExtensions()).toEqual([]); store.close();
     });
   });
-  it('migra de versões antigas direto até a 7, uma vez só, e reabrir não repete a cópia', () => {
+  it('migra de versões antigas direto até a 8, uma vez só, e reabrir não repete a cópia', () => {
     withDatabase(`${V6.replace(', hunt_extension_path TEXT','')} PRAGMA user_version=3;`.replace('CREATE INDEX grindolino_measurements_account_time ON grindolino_measurements (account_id, recorded_at);',"INSERT INTO workspace_settings VALUES (1, 'grid');"), path => {
       new PreferencesStore(path).close();
       const again = new PreferencesStore(path);
       expect(again.listExtensions()).toEqual([]); again.close();
       const check = new DatabaseSync(path);
-      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:7}); check.close();
+      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:8}); check.close();
+    });
+  });
+  it('migra a v7 só acrescentando approved_hosts, sem perder as extensões', () => {
+    withDatabase(`${V6} INSERT INTO workspace_settings VALUES (1, 'grid', NULL); ALTER TABLE workspace_settings ADD COLUMN auto_update_check INTEGER NOT NULL DEFAULT 1; CREATE TABLE extensions (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL, added_at TEXT NOT NULL); INSERT INTO extensions VALUES ('a','/ext/a',1,'2026'); PRAGMA user_version=7;`, path => {
+      const store = new PreferencesStore(path);
+      expect(store.listExtensions()).toEqual([{id:'a',path:'/ext/a',enabled:true,approvedHosts:[]}]); store.close();
+      const check = new DatabaseSync(path);
+      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:8}); check.close();
+    });
+  });
+  it('uma v8 já migrada abre sem repetir a migração', () => {
+    withDatabase(`${V6} INSERT INTO workspace_settings VALUES (1, 'grid', NULL); PRAGMA user_version=6;`, path => {
+      const first = new PreferencesStore(path); first.addExtension({id:'a',path:'/ext/a',enabled:true}); first.setApprovedHosts('a',['x.example.com']); first.close();
+      const again = new PreferencesStore(path);
+      expect(again.listExtensions()).toEqual([{id:'a',path:'/ext/a',enabled:true,approvedHosts:['x.example.com']}]); again.close();
+    });
+  });
+  it('guarda, ordena e valida os hosts aprovados; JSON estragado vira lista vazia', () => {
+    withDatabase(`${V6} INSERT INTO workspace_settings VALUES (1, 'grid', NULL); PRAGMA user_version=6;`, path => {
+      const store = new PreferencesStore(path);
+      store.addExtension({id:'a',path:'/ext/a',enabled:true});
+      store.setApprovedHosts('a',['b.example.com','a.example.com','b.example.com']);
+      expect(store.listExtensions()[0]?.approvedHosts).toEqual(['a.example.com','b.example.com']);
+      expect(() => store.setApprovedHosts('nada',[])).toThrow(); expect(() => store.setApprovedHosts('a','x')).toThrow(); expect(() => store.setApprovedHosts('a',[1])).toThrow(); expect(() => store.setApprovedHosts('a',[''])).toThrow();
+      store.close();
+      const raw = new DatabaseSync(path); raw.exec("UPDATE extensions SET approved_hosts='{nao-json'"); raw.close();
+      const broken = new PreferencesStore(path); expect(broken.listExtensions()[0]?.approvedHosts).toEqual([]); broken.close();
     });
   });
   it('mantém a v6 e os dados se a migração falhar (rollback)', () => {
@@ -63,7 +90,7 @@ describe('banco v7: extensões e atualização', () => {
       expect(() => store.addExtension({id:'',path:'/ext/z',enabled:true})).toThrow();
       expect(() => store.addExtension({id:'d',path:'x'.repeat(4097),enabled:true})).toThrow();
       store.setExtensionEnabled('b',true); store.setExtensionPath('a','/ext/a2');
-      expect(store.listExtensions()).toEqual([{id:'a',path:'/ext/a2',enabled:true},{id:'b',path:'/ext/b',enabled:true}]);
+      expect(store.listExtensions()).toEqual([{id:'a',path:'/ext/a2',enabled:true,approvedHosts:[]},{id:'b',path:'/ext/b',enabled:true,approvedHosts:[]}]);
       expect(() => store.setExtensionEnabled('b','sim')).toThrow(); expect(() => store.setExtensionEnabled('nada',true)).toThrow();
       expect(() => store.setExtensionPath('a','/ext/b')).toThrow();
       store.removeExtension('a'); expect(() => store.removeExtension('a')).toThrow(); expect(() => store.removeExtension(1)).toThrow();

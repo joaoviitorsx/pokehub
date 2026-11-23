@@ -33,7 +33,7 @@ function check(width: number, height: number, count: number, focus: number | nul
 export function columns(width: number, height: number, count: number, focus: number | null, side = 0): (Bounds | null)[] {
   check(width,height,count,focus,side);
   const h = height - TOP_BAR;
-  if (focus !== null) return Array.from({length:count}, (_, i) => i === focus ? {x:0,y:TOP_BAR,width,height:h} : null); // a lateral só existe na grade
+  if (focus !== null) return Array.from({length:count}, (_, i) => i === focus ? {x:0,y:TOP_BAR,width:width - side,height:h} : null); // a lateral fica à direita, no foco também
   const avail = width - side, {cols,rows} = gridShape(avail,count), heights = split(h,rows);
   const result: Bounds[] = [];
   let y = TOP_BAR;
@@ -50,21 +50,26 @@ export function layout(width: number, height: number, count: number, focus: numb
   return columns(width,height,count,focus,side).map(b => b && {x:b.x,y:b.y + COL_HEAD,width:b.width,height:Math.max(0,b.height - COL_HEAD)});
 }
 
-export function effectiveFocus(width: number, height: number, count: number, requested: number | null): {index: number | null; automatic: boolean} {
+/**
+ * Foco automático: sem foco escolhido e sem espaço para a grade (nem uma coluna, ou linhas baixas demais), mostra uma conta só.
+ * `side` é a largura da lateral (a grade ocupa width - side); `prefer` é a conta mostrada (a escolhida na lateral; padrão a primeira).
+ */
+export function effectiveFocus(width: number, height: number, count: number, requested: number | null, side = 0, prefer = 0): {index: number | null; automatic: boolean} {
   if (requested !== null || count < 2) return {index:requested,automatic:false};
-  const {rows} = gridShape(width,count);
-  if (width < COL_MIN || height - TOP_BAR < rows * (ROW_MIN + COL_HEAD)) return {index:0,automatic:true};
+  const avail = width - side, {rows} = gridShape(avail,count);
+  if (avail < COL_MIN || height - TOP_BAR < rows * (ROW_MIN + COL_HEAD)) return {index:Number.isInteger(prefer) && prefer >= 0 && prefer < count ? prefer : 0,automatic:true};
   return {index:null,automatic:false};
 }
 
-/** Menor largura de janela em que a lateral abre: a grade mantém pelo menos uma coluna (ou duas, havendo 2+ contas) ao lado dela. */
-export function sideMinWidth(count: number, panel = SIDE_PANEL): number { return COL_MIN * Math.min(Math.max(count,1),2) + panel; }
-/** Largura ocupada pela lateral: só na grade (sem foco, nem o automático) e se a grade ainda couber ao lado. `panel` é a largura escolhida pelo usuário. */
-export function sideWidth(width: number, open: boolean, focus: number | null, panel = SIDE_PANEL, count = 2): number {
+/**
+ * Largura ocupada pela lateral, em qualquer modo (grade, foco ou expandido): a escolhida pelo usuário (`panel`, 280–520),
+ * reduzida para sobrar pelo menos uma coluna (COL_MIN) ao lado. A grade se ajusta sozinha (menos colunas, mais linhas) e,
+ * se nem assim couber, vira foco automático (effectiveFocus). Fechada, ou em janela estreita demais, vale 0.
+ */
+export function sideWidth(width: number, open: boolean, panel = SIDE_PANEL): number {
   if (!Number.isInteger(panel) || panel < SIDE_MIN || panel > SIDE_MAX) throw new Error('Largura da lateral inválida');
-  const grid = COL_MIN * Math.min(Math.max(count,1),2);
-  // some quando a janela não comporta lateral padrão + grade mínima; acima disso cede largura para a grade manter `grid` (o CSS faz a mesma conta)
-  return open && focus === null && width >= grid + SIDE_PANEL ? Math.min(panel, width - grid) : 0;
+  const room = width - COL_MIN;
+  return open && room >= SIDE_MIN ? Math.min(panel,room) : 0;
 }
 
 export function initialFocus(mode: StartupMode, profileIds: readonly string[]): string | null {
