@@ -1,5 +1,5 @@
 export type AuditVerdict = 'leitura' | 'interage' | 'externa' | 'bloqueada';
-export type FindingKind = 'network' | 'link' | 'fetch' | 'click' | 'dispatch' | 'send' | 'eval' | 'skipped';
+export type FindingKind = 'network' | 'link' | 'fetch' | 'click' | 'dispatch' | 'send' | 'eval' | 'obfuscation' | 'info' | 'skipped';
 export interface AuditFinding { kind: FindingKind; file: string; detail: string }
 export interface AuditResult { verdict: AuditVerdict; findings: AuditFinding[]; hosts: string[] }
 export interface ExtensionInfo {

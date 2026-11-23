@@ -5,6 +5,7 @@ import type { DiagnosticsSample, ProcessesSample } from '../contracts/diagnostic
 import type { PerformancePrefs, StartupMode, TrayPrefs } from '../contracts/preferences';
 import type { AuditFinding, AuditVerdict, ExtensionInfo } from '../contracts/extensions';
 import type { UpdateInfo, UpdateStatus } from '../contracts/update';
+import type { NetworkInfo, NetworkMode } from '../contracts/network';
 import './style.css';
 import { removeProfileAndData } from './remove-profile';
 import { profileFormChanged } from './profile-form';
@@ -30,6 +31,7 @@ declare global { interface Window { pokehub: {
  market: {scan(id:string):Promise<Result<MarketScan>>; readAll(id:string):Promise<Result<void>>; stop(id:string):Promise<Result<boolean>>; onProgress(callback:(progress:MarketProgress)=>void):()=>void};
  captures: {list(query?:{profileId?:string;onlyAlerts?:boolean;limit?:number;notaMin?:number|null}):Promise<Result<Capture[]>>; clear():Promise<Result<void>>; watch(open:boolean,notify?:boolean,notaMin?:number|null):Promise<Result<void>>; onNew(callback:(captures:Capture[])=>void):()=>void};
  shop: {read(id:string):Promise<Result<ShopRead>>; buy(id:string,order:ShopOrder):Promise<Result<{before:number;after:number;bought:number;spent:number|null}>>; run(plan:ShopPlanEntry[]):Promise<Result<ShopLineResult[]>>; stop():Promise<Result<boolean>>; onProgress(callback:(progress:ShopProgress)=>void):()=>void};
+ network: {get():Promise<Result<NetworkInfo>>; setMode(mode:NetworkMode):Promise<Result<NetworkInfo>>; allow(host:string):Promise<Result<NetworkInfo>>; disallow(host:string):Promise<Result<NetworkInfo>>};
  extensions: {list():Promise<Result<ExtensionInfo[]>>; detect():Promise<Result<ExtensionInfo[]>>; add():Promise<Result<ExtensionInfo[]>>; toggle(id:string,enabled:boolean):Promise<Result<ExtensionInfo[]>>; remove(id:string):Promise<Result<ExtensionInfo[]>>; approve(id:string,hosts:string[]):Promise<Result<ExtensionInfo[]>>; openStore(id:string):Promise<Result<void>>};
  updates: {get():Promise<Result<UpdateInfo>>; check():Promise<Result<UpdateInfo>>; download():Promise<Result<UpdateInfo>>; install():Promise<Result<void>>; setAuto(enabled:boolean):Promise<Result<UpdateInfo>>; onStatus(callback:(status:UpdateStatus)=>void):()=>void};
 } } }
@@ -75,7 +77,7 @@ function placeIndicator(el: HTMLElement | null) {
  el.style.setProperty('--c',tab.style.getPropertyValue('--c'));
 }
 const verdicts: Record<AuditVerdict,string> = {leitura:'Só leitura',interage:'Interage com a página',externa:'Acessa outros sites',bloqueada:'Bloqueada'};
-const findingLabels: Record<AuditFinding['kind'],string> = {network:'Rede fora do jogo',link:'Link',fetch:'Rede/socket',click:'Clique',dispatch:'Evento na página',send:'Envio por socket',eval:'Código dinâmico',skipped:'Não auditado'};
+const findingLabels: Record<AuditFinding['kind'],string> = {network:'Rede fora do jogo',link:'Link',fetch:'Rede/socket',click:'Clique',dispatch:'Evento na página',send:'Envio por socket',eval:'Código dinâmico',obfuscation:'Ofuscação',info:'Informação',skipped:'Não auditado'};
 const SMART_MARKET_ID = 'lhfeijlnlbglakplddjgbaopgcdfkcmm';
 const extSignature = (list: ExtensionInfo[]) => list.map(item => `${item.id}|${item.path}|${item.enabled}|${item.approvedHosts.join(';')}`).join(',');
 const fairUse = 'Use apenas suas contas e respeite o limite total do jogo.';
@@ -105,6 +107,7 @@ function App() {
  const [savedStartupMode,setSavedStartupMode] = useState<StartupMode | null>(null);
  const [settingsSaved,setSettingsSaved] = useState(false);
  const [ext,setExt] = useState<ExtensionInfo[] | null>(null);
+ const [net,setNet] = useState<NetworkInfo | null>(null);
  const [openFindings,setOpenFindings] = useState<string | null>(null);
  const [upd,setUpd] = useState<UpdateInfo | null>(null);
  const [extReload,setExtReload] = useState(false);
@@ -245,9 +248,10 @@ function App() {
  // Gerenciar: contas, extensões, atualizações, layout e diagnóstico numa tela só. Os dados são carregados ao abrir.
  async function openManage(target: Section = 'accounts') {
    if (editor !== 'manage' && !canLeaveEditor()) return;
-   setEditor('manage');setEditorFrom(null);setSection(target);setStartupMode(null);setSavedStartupMode(null);setSettingsSaved(false);setExt(null);setExtReload(false);setOpenFindings(null);setDiagnostics(null);setMessage('');setBusy(true);
+   setEditor('manage');setEditorFrom(null);setSection(target);setStartupMode(null);setSavedStartupMode(null);setSettingsSaved(false);setExt(null);setNet(null);setExtReload(false);setOpenFindings(null);setDiagnostics(null);setMessage('');setBusy(true);
    try {const result=await window.pokehub.getPreferences();if(result.ok) {setStartupMode(result.data);setSavedStartupMode(result.data);}else setMessage(result.error);
      const extensions=await window.pokehub.extensions.list();if(extensions.ok) setExt(extensions.data);
+     const network=await window.pokehub.network.get();if(network.ok) setNet(network.data);
      const info=await window.pokehub.updates.get();if(info.ok) setUpd(info.data);}
    catch {setMessage('Não foi possível carregar as configurações.');}
    finally {setBusy(false);}
@@ -270,6 +274,14 @@ function App() {
      if (ext && result.data.some(item => item.sessions > 0) && extSignature(result.data) !== extSignature(ext)) setExtReload(true);
      setExt(result.data);
    } catch {setMessage('Não foi possível atualizar as extensões.');}
+   finally {setBusy(false);}
+ }
+ // Rede das contas: aplica na hora, sem "Salvar".
+ async function changeNetwork(action: () => Promise<Result<NetworkInfo>>) {
+   if (busy) return;
+   setBusy(true);setMessage('');
+   try {const result=await action();if(result.ok) setNet(result.data);else setMessage(result.error);}
+   catch {setMessage('Não foi possível atualizar a rede das contas.');}
    finally {setBusy(false);}
  }
  async function removeExtension(item: ExtensionInfo) {
@@ -375,7 +387,15 @@ function App() {
    <p className="ext-path">{item.path}</p></li>)}</ul>
   {!ext.some(item => item.catalogId === SMART_MARKET_ID) && <p className="ext-state" data-on="false">Smart Market não detectada. Instale-a pela Chrome Web Store (chromewebstore.google.com, id {SMART_MARKET_ID}) e use “Detectar no navegador”. <button className="link" disabled={busy} onClick={() => void window.pokehub.extensions.openStore(SMART_MARKET_ID)}>Abrir a página da loja</button></p>}
   <div className="actions"><button disabled={busy} onClick={() => void changeExtensions(() => window.pokehub.extensions.detect())}>Detectar no navegador</button><button disabled={busy} onClick={() => void changeExtensions(() => window.pokehub.extensions.add())}>Adicionar pasta…</button>{extReload && <button className="primary" disabled={busy} onClick={() => void reloadSessions()}>Recarregar sessões para aplicar</button>}</div>
+  <p className="note">A auditoria é heurística: confira a origem da extensão.</p>
   <p className="note">/hunt e Smart Market são de terceiros e rodam dentro das suas sessões do jogo. O PokéHub não as copia nem as modifica. Cada pasta passa por uma auditoria estática (o código não é executado): extensões que compram, vendem ou clicam sozinhas (automação) não são suportadas. “Só leitura”, “Interage com a página” e “Acessa outros sites” são estimativas pelo que o código parece fazer, não garantia. Uma extensão que acessa outros sites só carrega depois que você permite aquela lista exata de sites.</p>
+ {net && <section className="ext-card net" aria-label="Rede das contas">
+   <div className="ext-head"><strong>Rede das contas</strong><span className="grow"/>
+    <div className="seg" role="group" aria-label="Modo da rede">{(['registrar','bloquear'] as NetworkMode[]).map(mode => <button key={mode} className="opt" aria-pressed={net.mode === mode} disabled={busy} onClick={() => void changeNetwork(() => window.pokehub.network.setMode(mode))}>{mode === 'registrar' ? 'Registrar' : 'Bloquear'}</button>)}</div></div>
+   <p className="note">As sessões só deveriam falar com o jogo, com o login (Google/Discord) e com os sites aprovados das extensões carregadas. Em “Registrar” (padrão) qualquer outro site é permitido, mas aparece na lista abaixo; em “Bloquear” as requisições para eles são canceladas, o que pode quebrar o jogo se ele usar um CDN que ainda não foi permitido. Libere um site com “Permitir” (vale para todas as contas).</p>
+   {net.unknown.length === 0 ? <p className="ext-state" data-on="false">Nenhum site desconhecido visto nesta execução.</p> : <ul className="ext-hosts">{net.unknown.map(row => <li key={row.host + row.account}><code>{row.host}</code> <small>· {row.count}× · {row.accountName} · desde {new Date(row.firstSeen).toLocaleTimeString()}</small> <button className="link" disabled={busy} onClick={() => void changeNetwork(() => window.pokehub.network.allow(row.host))}>Permitir</button></li>)}</ul>}
+   {net.allowlist.length > 0 && <p className="note">Permitidos por você: {net.allowlist.map(host => <span key={host}><code>{host}</code> <button className="link" disabled={busy} onClick={() => void changeNetwork(() => window.pokehub.network.disallow(host))}>remover</button> </span>)}</p>}
+  </section>}
  </section> : busy ? <p role="status">Carregando extensões…</p> : null)}
   {section === 'upd' && (upd ? <section className="ext" aria-label="Atualizações">
   <p className="ext-state" data-on="false">Versão atual: {upd.version}</p>

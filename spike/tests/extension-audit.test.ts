@@ -2,12 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { approvedHostsOf, auditExtension, catalogIdOf, checkExtension, findInstalled, HUNT_ID, hostsCovered, resolveExtensionPath, SMART_MARKET_ID, stripComments, type ExtFs } from '../electron/extension-check';
+import { browserRoots, approvedHostsOf, auditExtension, catalogIdOf, checkExtension, findInstalled, HUNT_ID, hostsCovered, resolveExtensionPath, SMART_MARKET_ID, stripComments, type ExtFs } from '../electron/extension-check';
 
 const base = {manifest_version:3, name:'Teste', version:'1.0.0', content_scripts:[{matches:['https://pokeidle.io/*'],js:['a.js']}]};
 const manifest = (changes: Record<string, unknown> = {}) => JSON.stringify({...base,...changes});
 // fs falso: só arquivos; as pastas são inferidas. Aceita "/" e "\" para simular Windows no Linux.
-function fakeFs(files: Record<string,string>): ExtFs {
+// `links`: caminho → destino real (realpath) e, para lstat, o caminho vira link simbólico.
+function fakeFs(files: Record<string,string>, links: Record<string,string> = {}): ExtFs {
   const paths = Object.keys(files);
   const children = (dir: string) => paths.filter(path => path.startsWith(dir) && /^[\\/]/.test(path.slice(dir.length)));
   return {
@@ -17,6 +18,8 @@ function fakeFs(files: Record<string,string>): ExtFs {
       if (children(path).length === 0) throw new Error('ENOENT');
       return {isDirectory:() => true, size:0};
     },
+    lstatSync(path) { const stat = this.statSync(path); return {isDirectory:() => stat.isDirectory(), size:stat.size, isSymbolicLink:() => path in links}; },
+    realpathSync(path) { for (const [from,to] of Object.entries(links)) if (path === from || path.startsWith(`${from}/`)) return to + path.slice(from.length); return path; },
     readFileSync(path) { const content = files[path]; if (content === undefined) throw new Error('ENOENT'); return content; },
     readdirSync(path) {
       const found = children(path); if (found.length === 0) throw new Error('ENOENT');
@@ -49,14 +52,22 @@ describe('catálogo e detecção de várias extensões', () => {
     const fs = fakeFs({[`${dir}/0.5.0_0/manifest.json`]:manifest({version:'0.5.0'})});
     expect(resolveExtensionPath(`${dir}/0.4.0_0`,fs)).toBe(`${dir}/0.5.0_0`);
     expect(resolveExtensionPath('/custom/gone',fs)).toBe('/custom/gone');
-    expect(catalogIdOf(`${dir}/0.4.0_0`)).toBe(SMART_MARKET_ID);
-    expect(catalogIdOf('/custom/ext')).toBeNull();
-    expect(catalogIdOf(`C:\\Users\\u\\Extensions\\${HUNT_ID}\\1.0.17_0`)).toBe(HUNT_ID);
+    const real = fakeFs({[`${dir}/0.4.0_0/manifest.json`]:manifest()});
+    expect(catalogIdOf(`${dir}/0.4.0_0`,linux,real)).toBe(SMART_MARKET_ID);
+    expect(catalogIdOf('/custom/ext',linux,real)).toBeNull();
+    const win = {platform:'win32',home:'C:\\Users\\u',localAppData:'C:\\Users\\u\\AppData\\Local'};
+    const winDir = `${browserRoots(win)[0]}\\Profile 2\\Extensions\\${HUNT_ID}\\1.0.17_0`;
+    expect(catalogIdOf(winDir,win,fakeFs({[`${winDir}\\manifest.json`]:manifest()}))).toBe(HUNT_ID);
   });
 });
 
 describe('auditoria estática', () => {
-  const audit = (files: Record<string,string>) => auditExtension('/ext',fakeFs({'/ext/manifest.json':manifest(),...Object.fromEntries(Object.entries(files).map(([name,code]) => [`/ext/${name}`,code]))}));
+  // o manifest cita todos os .js que não são de teste: arquivo citado e ilegível bloqueia a extensão
+  const TEST_PATH = /(^|[/])(tests?|__tests__)[/]|[.]test[.]js$/;
+  const isTest = (name: string) => TEST_PATH.test(name);
+  const manifestFor = (files: Record<string,string>, extra: Record<string,unknown> = {}) => manifest({content_scripts:[{matches:['https://pokeidle.io/*'],js:Object.keys(files).filter(name => /[.]js$/.test(name) && !isTest(name))}],...extra});
+  const auditWith = (files: Record<string,string>, extra: Record<string,unknown> = {}, links: Record<string,string> = {}) => auditExtension('/ext',fakeFs({'/ext/manifest.json':manifestFor(files,extra),...Object.fromEntries(Object.entries(files).map(([name,code]) => [`/ext/${name}`,code]))},links));
+  const audit = (files: Record<string,string>) => auditWith(files);
   it('é só leitura quando observa a página e não envia nada', () => {
     const result = audit({'a.js':"const el=document.querySelector('.x'); new MutationObserver(()=>{}).observe(el,{childList:true}); const u='https://pokeidle.io/tracker/api/x'; fetch('/tracker/api/y');"});
     expect(result).toEqual({verdict:'leitura',findings:[{kind:'fetch',file:'a.js',detail:'fetch()'}],hosts:[]});
@@ -114,6 +125,7 @@ describe('auditoria estática', () => {
       '/h/src/boot.js':'window.__x = 1;',
       '/h/src/game.js':"const r = await fetch('/tracker/api/sprites?lt=1'); const pix = new MutationObserver(() => {});",
       '/h/src/ui.js':"const g = 'https://pokeidleguide.io'; const pay = 'https://livepix.gg/x'; const ns = 'http://www.w3.org/2000/svg'; a.href = g;",
+      '/h/src/ui.css':'.x{color:red}',
       '/h/src/wishlist-ponte.js':"// ponte da WishList\n(function(){ const URLS_LISTA = ['https://pokeidleguide.io/api/wishlist', 'https://pokeidle-gg.pages.dev/api/wishlist'];\n const buscar = async (url) => { const r = await fetch(url, { credentials: 'omit' }); return r.json(); };\n})();",
     });
     expect(checkExtension('/h',fs)).toEqual({ok:true,name:'/hunt for PokeIdle',version:'1.0.23'});
@@ -151,7 +163,7 @@ describe('auditoria estática', () => {
     expect(result.hosts).toEqual([]);
   });
   it('Smart Market com pasta tests/ cheia de .send() e rede continua só "interage"', () => {
-    const fs = fakeFs({'/sm/manifest.json':manifest(),'/sm/page.js':"ws.send('q')",'/sm/tests/page.test.js':"fetch('https://mock.example.com'); ws.send(1)",'/sm/tests/helper.js':"ws.send(2)"});
+    const fs = fakeFs({'/sm/manifest.json':manifest({content_scripts:[{matches:['https://pokeidle.io/*'],js:['page.js']}]}),'/sm/page.js':"ws.send('q')",'/sm/tests/page.test.js':"fetch('https://mock.example.com'); ws.send(1)",'/sm/tests/helper.js':"ws.send(2)"});
     expect(auditExtension('/sm',fs)).toEqual({verdict:'interage',findings:[{kind:'send',file:'page.js',detail:'.send()'}],hosts:[]});
   });
   it('modelo de autopiloto: service worker é recusado já pelo validador', () => {
@@ -163,14 +175,14 @@ describe('auditoria estática', () => {
   it('respeita os limites de tamanho e de profundidade', () => {
     expect(audit({'big.js':'x'.repeat(2 * 1024 * 1024 + 1)})).toMatchObject({verdict:'bloqueada',findings:[{kind:'skipped',file:'big.js'}]});
     expect(audit({'a/b/c/d/e/f/deep.js':'btn.click()'}).verdict).toBe('interage');
-    expect(audit({'a/b/c/d/e/f/g/h/too-deep.js':'eval(1)'}).verdict).toBe('leitura');
+    expect(audit({'a/b/c/d/e/f/g/too-deep.js':'eval(1)'})).toMatchObject({verdict:'bloqueada',findings:expect.arrayContaining([{kind:'skipped',file:'a/b/c/d/e/f/g',detail:'pasta funda demais para auditar'}])}); // fundo demais: nunca mais ignorado em silêncio
     const many: Record<string,string> = {};
     for (let i = 0; i < 5; i++) many[`f${i}.js`] = 'a'.repeat(1_900_000);
     expect(audit(many).findings.some(finding => finding.kind === 'skipped')).toBe(true); // passou de 8 MB no total
   });
   it('lê arquivos reais com o fs padrão e ignora o que não é JavaScript', () => {
     const dir = mkdtempSync(join(tmpdir(),'pokehub-audit-'));
-    try { mkdirSync(join(dir,'sub')); writeFileSync(join(dir,'sub','a.js'),'x.click()'); writeFileSync(join(dir,'note.txt'),'eval(1)'); expect(auditExtension(dir)).toEqual({verdict:'interage',findings:[{kind:'click',file:'sub/a.js',detail:'.click()'}],hosts:[]}); }
+    try { mkdirSync(join(dir,'sub')); writeFileSync(join(dir,'manifest.json'),manifest({content_scripts:[{matches:['https://pokeidle.io/*'],js:['sub/a.js']}]})); writeFileSync(join(dir,'sub','a.js'),'x.click()'); writeFileSync(join(dir,'note.txt'),'eval(1)'); expect(auditExtension(dir)).toEqual({verdict:'interage',findings:[{kind:'click',file:'sub/a.js',detail:'.click()'}],hosts:[]}); }
     finally { rmSync(dir,{recursive:true,force:true}); }
   });
 });

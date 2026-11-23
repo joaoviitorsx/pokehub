@@ -1,10 +1,12 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const directory = mkdtempSync(join(tmpdir(),'pokehub-main-'));
+const chromeBase = process.platform === 'win32' ? 'Google/Chrome/User Data/Default' : '.config/google-chrome/Default'; // pasta de extensões do navegador (a pré-aprovação do catálogo exige o caminho real aqui)
+process.env.LOCALAPPDATA = directory;
 type Handler = (...args: unknown[]) => unknown;
 const handlers = new Map<string, Handler>();
 const created: FakeView[] = [];
@@ -27,11 +29,13 @@ class FakeExtensions {
     const item = {id:`ext-${path}`,path}; this.items.push(item); return item;
   }
 }
+type RequestListener = (details: {url: string}, callback: (response: {cancel?: boolean}) => void) => void;
 class FakeSession {
   extensions = new FakeExtensions();
   clearCount = 0; cacheCount = 0; block?: Promise<void>;
   setPermissionRequestHandler() {}
   setPermissionCheckHandler() {}
+  webRequest: {listener?: RequestListener; onBeforeRequest(listener: RequestListener): void} = {onBeforeRequest(listener) { this.listener = listener; }};
   async clearStorageData() { this.clearCount++; await this.block; }
   async clearCache() { this.cacheCount++; }
 }
@@ -346,8 +350,8 @@ describe('processo principal', () => {
   expect(live().every(view => view.webContents.session.extensions.items.length === 0)).toBe(true);
   expect((await call('extensions:add')).error).toContain('já está');
   // duas válidas: ambas carregadas em todas as sessões, sem acesso a arquivos
-  const hunt = folder(`Extensions/${HUNT}/1.0.17_0`,manifest,{'a.js':'const x=1'});
-  const smart = folder(`Extensions/${SMART}/0.10.0_0`,{...manifest,name:'Smart Market',version:'0.10.0',permissions:['storage']},{'a.js':"input.dispatchEvent(new Event('input')); ws.send('q')"});
+  const hunt = folder(`${chromeBase}/Extensions/${HUNT}/1.0.17_0`,manifest,{'a.js':'const x=1'});
+  const smart = folder(`${chromeBase}/Extensions/${SMART}/0.10.0_0`,{...manifest,name:'Smart Market',version:'0.10.0',permissions:['storage']},{'a.js':"input.dispatchEvent(new Event('input')); ws.send('q')"});
   chosenFolder = hunt; await call('extensions:add'); chosenFolder = smart;
   const listed = (await call('extensions:add')).data ?? [];
   expect(listed.map(item => [item.catalogId,item.verdict,item.loaded,item.enabled])).toEqual([[null,'bloqueada',0,true],[HUNT,'leitura',3,true],[SMART,'interage',3,true]]);
@@ -399,7 +403,7 @@ describe('processo principal', () => {
   const folder = (name:string, files: Record<string,string>) => { const path=join(directory,name); mkdirSync(path,{recursive:true}); writeFileSync(join(path,'manifest.json'),JSON.stringify(manifest)); for (const [file,code] of Object.entries(files)) writeFileSync(join(path,file),code); return path; };
   const bridge = "const U=['https://pokeidleguide.io/api/wishlist','https://pokeidle-gg.pages.dev/api/wishlist']; fetch(U[0],{credentials:'omit'})";
   // catálogo: /hunt na pasta do navegador carrega sozinha porque os dois hosts já estão pré-aprovados
-  chosenFolder = folder(`Extensions/${HUNT}/1.0.23_0`,{'a.js':bridge});
+  chosenFolder = folder(`${chromeBase}/Extensions/${HUNT}/1.0.23_0`,{'a.js':bridge});
   const hunt = (await call('extensions:add')).data?.find(item => item.catalogId === HUNT);
   expect(hunt).toMatchObject({catalogId:HUNT,verdict:'externa',pending:false,loaded:3,hosts:['pokeidle-gg.pages.dev','pokeidleguide.io'],error:null});
   // a mesma extensão em pasta qualquer (id fora do catálogo) NÃO herda a pré-aprovação
@@ -578,5 +582,33 @@ describe('processo principal', () => {
    shell.emit('resize'); expect(shell.sizeCalls - base).toBe(3);
    vi.advanceTimersByTime(100); expect(shell.sizeCalls - base).toBe(3);
   } finally { vi.useRealTimers(); }
+ });
+ it('rede das contas: política em cada sessão, modo e allowlist persistidos em network-policy.json', async () => {
+  type Net = {ok:boolean; error?:string; data?:{mode:string; allowlist:string[]; unknown:{host:string; count:number; accountName:string}[]}};
+  const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
+  const net = async (channel:string,...args:unknown[]) => await handlers.get(channel)?.(sender,...args) as Net;
+  const view = created.find(item => !item.webContents.isDestroyed() && shell.children.has(item));
+  const listener = view?.webContents.session.webRequest.listener;
+  if (!listener) throw new Error('Política de rede não instalada');
+  const cancelled = (url:string) => new Promise<boolean>(resolve => listener({url}, response => resolve(Boolean(response.cancel))));
+  expect((await net('network:get')).data).toMatchObject({mode:'registrar',allowlist:[],unknown:[]}); // padrão
+  expect(await cancelled('https://pokeidle.io/app')).toBe(false);
+  expect(await cancelled('wss://api.pokeidle.io/ws')).toBe(false);
+  expect(await cancelled('https://accounts.google.com/o/oauth2')).toBe(false);
+  expect(await cancelled('https://cdn.novo.example/x.js')).toBe(false); // registrar: passa, mas anota
+  expect(await cancelled('https://cdn.novo.example/y.js')).toBe(false);
+  expect((await net('network:get')).data?.unknown).toMatchObject([{host:'cdn.novo.example',count:2}]);
+  expect((await net('network:mode','bloquear')).data?.mode).toBe('bloquear');
+  expect(JSON.parse(readFileSync(join(directory,'network-policy.json'),'utf8'))).toMatchObject({mode:'bloquear'});
+  expect(await cancelled('https://cdn.novo.example/x.js')).toBe(true);
+  expect(await cancelled('ftp://pokeidle.io/x')).toBe(true);
+  expect(await cancelled('https://pokeidle.io/app')).toBe(false);
+  expect((await net('network:allow','CDN.Novo.Example')).data).toMatchObject({allowlist:['cdn.novo.example'],unknown:[]});
+  expect(await cancelled('https://cdn.novo.example/x.js')).toBe(false);
+  expect((await net('network:mode','tudo')).ok).toBe(false); expect((await net('network:allow','a b')).ok).toBe(false);
+  const intruder = {sender:view?.webContents,senderFrame:view?.webContents.mainFrame};
+  for (const channel of ['network:get','network:mode','network:allow','network:disallow']) expect((await handlers.get(channel)?.(intruder,'registrar') as Net).ok).toBe(false);
+  expect((await net('network:disallow','cdn.novo.example')).data?.allowlist).toEqual([]);
+  await net('network:mode','registrar');
  });
 });
