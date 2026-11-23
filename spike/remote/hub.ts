@@ -11,6 +11,7 @@ import { createPush, type Push, type PushFetch } from './push';
 import { createActions, type AccountPort, type Actions, type ShopPort } from './actions';
 import { MAX_CAP_GOLD } from './store';
 import type { RemoteAlert, RemoteDevice, RemotePurchase, RemoteSpend, RemoteStatus } from '../contracts/remote';
+import { controlDialog } from './control-dialog';
 import { createScreen, type Screen, type ScreenTarget, type ScreenTiming } from './screen';
 
 /** Confirmação NATIVA do sistema (fora da página): quem controla a janela do app não aprova sozinho. */
@@ -25,7 +26,7 @@ export interface HubDeps {
   /** R4: Loja rápida e ações de conta do hub + aviso no PC (notificação do sistema). Sem isto o celular não age. */
   actions?: {shop: ShopPort; account: AccountPort; notify(title: string, body: string): void; dayOf?(ms: number): string; tz?: string};
   /** R5: tela ao vivo e Controlar. `target` entrega só o `webContents` da conta (nunca o do hub; `forbidden` lista o que jamais pode ser capturado). */
-  screen?: {target(profileId: string): ScreenTarget | null; forbidden?(): readonly unknown[]; onControl?(active: number): void; timing?: Partial<ScreenTiming>};
+  screen?: {target(profileId: string): ScreenTarget | null; forbidden?(): readonly unknown[]; onControl?(active: number): void; /** aviso no PC quando um celular começa a ver/controlar */ notify?(kind: 'tela' | 'controle', device: string, account: string): void; timing?: Partial<ScreenTiming>};
   /** Só para testes: troca a fábrica do servidor e os limites/tempos dele. */
   serverFactory?: (deps: ServerDeps) => RemoteServer; serverLimits?: ServerDeps['limits']; serverTiming?: ServerDeps['timing'];
 }
@@ -34,6 +35,7 @@ const MSG_START = 'Não foi possível ligar o acesso remoto. Verifique se a port
 const MSG_NO_NET = 'Sem rede privada (Wi-Fi de casa) disponível. Conecte-se à rede de casa e marque-a como Privada.';
 const MSG_CONFIRM = 'Não foi possível abrir a confirmação do sistema.';
 export const APPROVE_DELAY_MS = 1500;
+export { controlDialog } from './control-dialog';
 const LOOPBACK: Bind = {address: '127.0.0.1', netmask: '255.0.0.0', name: 'loopback'};
 
 export function createRemoteHub(deps: HubDeps) {
@@ -43,6 +45,7 @@ export function createRemoteHub(deps: HubDeps) {
   const iso = () => new Date(now()).toISOString();
   const allowLoopback = deps.portOverride !== undefined; // 127.0.0.1 só em testes/porta de teste (B5)
   let server: RemoteServer | null = null, certs: CertResult | null = null, addresses: string[] = [], bound: Bind[] = [], port = 0, error: string | null = null;
+  let shortcutDown = false, screenTimer: ReturnType<typeof setTimeout> | undefined;
   let want = store.getEnabled(), gen = 0, chain: Promise<unknown> = Promise.resolve(), poll: ReturnType<typeof setInterval> | undefined;
   let netState: 'ok' | 'rede_nova' | 'sem_rede' = 'ok', netLabel = store.getNetPin()?.label ?? '', caNotice: string | null = null, aclOk = true, notice: string | null = null;
   type Request = {info: PairInfo; since: number; contested: boolean; deciding: boolean; settle: (allow: boolean) => void; timer: ReturnType<typeof setTimeout>};
@@ -69,7 +72,7 @@ export function createRemoteHub(deps: HubDeps) {
     const a = deps.actions;
     actions = createActions({store, pin, now, accounts: () => deps.api.accounts(), shop: a.shop, account: a.account, publish: (deviceId, event, data) => server?.publish(event, data, id => id === deviceId), notifyPc: a.notify, pushDevices: (label, text) => { void engine?.notifyAction(label, text); }, audit, dayOf: a.dayOf, tz: a.tz});
   }
-  const screen: Screen | null = deps.screen ? createScreen({accounts: () => deps.api.accounts(), target: deps.screen.target, forbidden: deps.screen.forbidden, device: id => store.getDevice(id), pinSet: () => store.getPinHash() !== null, actionsDisabled: () => store.getActionsDisabled(), checkPin: (id, value) => pin.check(id, value), audit: (id, action, detail) => audit(id, action, detail), now, onChange: changed, onControl: deps.screen.onControl, timing: deps.screen.timing}) : null;
+  const screen: Screen | null = deps.screen ? createScreen({accounts: () => deps.api.accounts(), target: deps.screen.target, forbidden: deps.screen.forbidden, device: id => store.getDevice(id), pinSet: () => store.getPinHash() !== null, actionsDisabled: () => store.getActionsDisabled(), checkPin: (id, value) => pin.check(id, value), audit: (id, action, detail) => audit(id, action, detail), now, onChange: () => { if (!screenTimer) { screenTimer = setTimeout(() => { screenTimer = undefined; changed(); }, 100); screenTimer.unref(); } }, onControl: deps.screen.onControl, notify: deps.screen.notify, timing: deps.screen.timing}) : null; // mudanças de estado da tela chegam em rajada: 1 aviso por 100 ms
 
   /** Fila serial: ligar, desligar e reiniciar nunca se sobrepõem. */
   const serial = <T>(task: () => Promise<T>): Promise<T> => { const run = chain.then(task, task); chain = run.then(() => undefined, () => undefined); return run; };
@@ -169,6 +172,10 @@ export function createRemoteHub(deps: HubDeps) {
     endControl: (): number => screen?.endControl('pc') ?? 0,
     /** R5: "Encerrar tudo": corta visualização e controle. */
     endScreen: (): void => { screen?.endAll('encerrado no PC'); },
+    /** R5: a navegação da conta saiu do jogo durante o controle: volta ao jogo (feito no main) e o controle termina. */
+    endControlOf: (profileId: string, reason: 'navegacao' | 'pc' = 'navegacao'): number => screen?.endControl(reason, profileId) ?? 0,
+    /** R5: o atalho global Ctrl+Shift+F12 não pôde ser registrado (ou voltou): vira aviso na faixa e linha de auditoria. */
+    setShortcutDown(down: boolean): void { if (down === shortcutDown) return; shortcutDown = down; if (down) audit(null, 'atalho_indisponivel', 'Ctrl+Shift+F12 em uso por outro app'); changed(); },
     /** Sufixo do tooltip da bandeja enquanto alguém vê/controla. */
     screenTooltip(): string { const list = screen?.sessions() ?? []; return list.length ? ` — ${list.some(s => s.control) ? 'CONTROLE REMOTO' : 'tela remota'}: ${list.map(s => `${s.device} em ${s.account}`).join(', ')}`.slice(0, 120) : ''; },
     isListening: () => server?.listening() ?? false,
@@ -179,7 +186,7 @@ export function createRemoteHub(deps: HubDeps) {
         network: {state: netState, label: netLabel}, fingerprint: fp ? formatFingerprint(fp) : null, caNotice, aclOk, notice, actionsDisabled: store.getActionsDisabled(),
         pairing: info && base && fp ? {code: revealed ? formatCode(info.code) : '', codeHidden: !revealed, expiresAt: info.expiresAt, attemptsLeft: info.attemptsLeft, attemptsByIp: info.byIp, caUrl: `${base}/ca.crt`, iosUrl: `${base}/ca.mobileconfig`, bootstrapUrl: `${base}/#fp=${fp}`, fingerprint: formatFingerprint(fp)} : null,
         request: request ? {name: request.info.name, nickname: request.info.nickname, ua: request.info.ua, ip: request.info.ip, sas: request.info.sas, contested: request.contested, since: request.since, deciding: request.deciding} : null,
-        paired, pinSet: store.getPinHash() !== null, devices: store.countDevices(), firstPairing: first, dailyCapGold: store.getDailyCapGold(), screen: screen?.sessions() ?? [],
+        paired, pinSet: store.getPinHash() !== null, devices: store.countDevices(), firstPairing: first, dailyCapGold: store.getDailyCapGold(), screen: screen?.sessions() ?? [], shortcutDown,
       };
     },
     startPairing(): RemoteStatus { if (!server) throw new RemoteUserError('Ligue o acesso remoto primeiro.'); pairing.start(); paired = null; revealed = store.countDevices() > 0; audit(null, 'pareamento_iniciado'); changed(); return this.status(); },
@@ -196,8 +203,8 @@ export function createRemoteHub(deps: HubDeps) {
         if (request === r) r.settle(ok);
       } catch (e) { if (request === r) { r.deciding = false; changed(); } throw e; }
     },
-    async setPin(value: unknown): Promise<void> { if (!validPin(value)) throw new RemoteUserError('O PIN precisa ter 6 dígitos.'); store.setPinHash(await hashPin(value)); pin.reset(); actions?.clearElevations(); audit(null, 'pin_definido'); changed(); },
-    clearPin(): void { store.setPinHash(null); pin.reset(); actions?.clearElevations(); audit(null, 'pin_removido'); changed(); },
+    async setPin(value: unknown): Promise<void> { if (!validPin(value)) throw new RemoteUserError('O PIN precisa ter 6 dígitos.'); store.setPinHash(await hashPin(value)); pin.reset(); actions?.clearElevations(); screen?.endControl('permissao'); audit(null, 'pin_definido'); changed(); },
+    clearPin(): void { store.setPinHash(null); pin.reset(); actions?.clearElevations(); screen?.endControl('permissao'); audit(null, 'pin_removido'); changed(); },
     /** Religa as ações pelo celular depois dos 10 erros de PIN no dia (e zera os contadores). */
     reenableActions(): void { pin.reset(); audit(null, 'acoes_religadas'); notice = null; changed(); },
     dismissNotice(): void { notice = null; changed(); },
@@ -207,6 +214,14 @@ export function createRemoteHub(deps: HubDeps) {
       const device = store.getDevice(id); if (!device) throw new RemoteUserError('Aparelho não encontrado.');
       if (!await confirmNative({title: 'PokéHub — permissão de ações', message: `${value ? 'Permitir' : 'Bloquear'} ações de “${device.name}”?`, detail: value ? 'Com “pode agir” o celular poderá comprar na Loja (dentro do teto diário), recarregar, suspender e retomar contas e ligar o Modo leve, sempre com PIN. Só permita para um aparelho seu.' : 'O celular volta a só ver.', confirmLabel: value ? 'Permitir' : 'Bloquear'})) return self.devices();
       store.setCanAct(id, value); if (!value) actions?.clearElevations(id); audit(id, value ? 'pode_agir_ligado' : 'pode_agir_desligado', device.name); changed(); return self.devices();
+    },
+    /** "Pode controlar a tela" = controle TOTAL da conta (sem teto, Market, venda/troca): só se liga aqui, no PC, depois de uma confirmação nativa que diz isso. Desligar não pede confirmação extra além do aviso. */
+    async setCanControl(id: unknown, value: unknown): Promise<RemoteDevice[]> {
+      if (typeof id !== 'string' || typeof value !== 'boolean') throw new RemoteUserError('Pedido inválido.');
+      const device = store.getDevice(id); if (!device) throw new RemoteUserError('Aparelho não encontrado.');
+      if (!await confirmNative(controlDialog(device.name, value))) return self.devices();
+      store.setCanControl(id, value); if (!value) screen?.endDeviceControl(id, 'permissao');
+      audit(id, value ? 'pode_controlar_ligado' : 'pode_controlar_desligado', device.name); changed(); return self.devices();
     },
     devices: (): RemoteDevice[] => store.listDevices().map(d => ({...d, push: store.pushCount(d.id)})),
     /** Últimos alertas (histórico do banco), para o painel do PC. */
@@ -238,7 +253,7 @@ export function createRemoteHub(deps: HubDeps) {
     setPort(value: unknown): void { if (!validPort(value)) throw new RemoteUserError('Porta inválida.'); store.setPort(value); },
     publish: (event: string, data: unknown) => server?.publish(event, data),
     updatePower: () => !closed && power.update(server?.listening() ?? false, deps.running()), // o sono só é segurado com o servidor de fato escutando
-    async close(): Promise<void> { if (closed) return; closed = true; gen++; engine?.close(); screen?.closeAll('app encerrando'); clearPoll(); power.update(false, 0); const done = serial(stopServer); try { store.close(); } catch { /* já fechado */ } await done; }, // o banco fecha já; a porta fecha junto
+    async close(): Promise<void> { if (closed) return; closed = true; gen++; engine?.close(); screen?.closeAll('app encerrando'); clearTimeout(screenTimer); clearPoll(); power.update(false, 0); const done = serial(stopServer); try { store.close(); } catch { /* já fechado */ } await done; }, // o banco fecha já; a porta fecha junto
   };
   return self;
 }

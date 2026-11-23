@@ -30,7 +30,7 @@ export function mockScreenUpgrade(req: IncomingMessage, socket: Duplex, head: Bu
   if (!validHandshake(req) || !offeredProtocols(req).includes(SCREEN_PROTOCOL)) { socket.destroy(); return true; }
   const ws: WsConnection = acceptWebSocket(req, socket, head, SCREEN_PROTOCOL, SCREEN_MAX_INBOUND), out = (msg: ServerMsg) => ws.sendText(JSON.stringify(msg));
   let seq = 0, tick = 0, token = '', shown: ScreenState | null = null, wrong = 0, pausedBy = false; const sentAt = new Map<number, number>(); let rtt: number | null = null;
-  out({t: 'hello', v: 1, profileId: m[1]!, label: 'Principal', canAct: true, pinSet: true, maxWidth: W, ttlMs: CONTROL_TTL_MS, idleMs: CONTROL_IDLE_MS});
+  out({t: 'hello', v: 1, profileId: m[1]!, label: 'Principal', canAct: true, canControl: true, pinSet: true, maxWidth: W, ttlMs: CONTROL_TTL_MS, idleMs: CONTROL_IDLE_MS});
   const timer = setInterval(() => {
     if (pausedBy) return;
     if (shown !== screenMock.state) { shown = screenMock.state; out({t: 'status', state: shown}); }

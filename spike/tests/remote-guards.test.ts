@@ -57,7 +57,7 @@ describe('banco do acesso remoto (migração v11 e store)', () => {
     const path = join(dir, 'new.sqlite'); const s = new RemoteStore(path);
     expect(s.getEnabled()).toBe(false); expect(s.getPort()).toBe(47321); expect(s.getPinHash()).toBeNull(); expect(s.getDailyCapGold()).toBe(200000);
     s.close();
-    const db = new DatabaseSync(path); expect(db.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 14});
+    const db = new DatabaseSync(path); expect(db.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 15});
     expect(db.prepare("SELECT name FROM sqlite_master WHERE name IN ('remote_devices','remote_audit','remote_spend') ORDER BY name").all().map(r => r.name)).toEqual(['remote_audit', 'remote_devices', 'remote_spend']);
     db.close();
   });
@@ -69,7 +69,7 @@ describe('banco do acesso remoto (migração v11 e store)', () => {
     db.close();
     openDatabase(path).close();
     const check = new DatabaseSync(path);
-    expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 14});
+    expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 15});
     expect(check.prepare('SELECT startup_mode, tray_on_close, remote_enabled, remote_port FROM workspace_settings').get()).toMatchObject({startup_mode: 'focus-first', tray_on_close: 0, remote_enabled: 0, remote_port: 47321});
     expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label: 'Conta'}); check.close();
   });

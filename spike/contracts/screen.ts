@@ -8,7 +8,7 @@ export const CONTROL_TTL_MS = 10 * 60_000, CONTROL_IDLE_MS = 2 * 60_000;
 /** `streaming` = quadros chegando; `protected` = a conta não está em pokeidle.io (login do Google/Discord etc.); `password` = campo de senha com foco; `hidden` = o hub não conseguiu capturar. */
 export type ScreenState = 'starting' | 'streaming' | 'paused' | 'protected' | 'password' | 'hidden' | 'unavailable';
 export type PauseReason = 'usuario' | 'oculto' | 'sem-ack';
-export type ControlEndReason = 'encerrado' | 'expirou' | 'ocioso' | 'pc' | 'permissao' | 'sessao' | 'pausado';
+export type ControlEndReason = 'encerrado' | 'expirou' | 'ocioso' | 'pc' | 'permissao' | 'sessao' | 'pausado' | 'navegacao';
 export type ControlDenied = 'sem-permissao' | 'sem-pin' | 'desligado' | 'pin' | 'bloqueado' | 'revogado' | 'ocupado' | 'indisponivel';
 
 /** Entrada que o celular pode pedir. Tudo é revalidado no PC (lista fechada); coordenadas em pixels da imagem do último quadro. */
@@ -27,7 +27,7 @@ export type ClientMsg =
   | {t: 'end-control'}
   | {t: 'in'; token: string; e: InputEvent};
 
-export interface ScreenHello { t: 'hello'; v: 1; profileId: string; label: string; canAct: boolean; pinSet: boolean; maxWidth: number; ttlMs: number; idleMs: number }
+export interface ScreenHello { t: 'hello'; v: 1; profileId: string; label: string; canAct: boolean; /** R5: tem a permissão separada de controlar (PC) */ canControl: boolean; pinSet: boolean; maxWidth: number; ttlMs: number; idleMs: number }
 export type ServerMsg =
   | ScreenHello
   | {t: 'status'; state: ScreenState; reason?: PauseReason}

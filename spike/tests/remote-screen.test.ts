@@ -5,7 +5,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Duplex } from 'node:stream';
-import { createRemoteHub, type RemoteHub } from '../remote/hub';
+import { controlDialog, createRemoteHub, type NativeConfirm, type RemoteHub } from '../remote/hub';
+import { guardedSend } from '../remote/screen';
 import { COOKIE } from '../remote/server';
 import type { ScreenFrame, ScreenTarget, ScreenTiming } from '../remote/screen';
 import type { SendInput } from '../remote/screen-input';
@@ -68,25 +69,26 @@ class TestWs {
 }
 
 // ---------- hub de teste ----------
+let confirms: Parameters<NativeConfirm>[0][] = [], notices: string[] = [];
 let hub: RemoteHub, port = 0, skew = 0, targets = new Map<string, FakeTarget>(), forbiddenCalls: string[] = [], controlCounts: number[] = [], lastTarget = '';
 const open: TestWs[] = [], clockNow = () => Date.now() + skew; // relógio do hub = real + salto (os testes de 10 min/2 min avançam `skew`)
 const sel: NetSelection = {binds: [], subnets: [], pin: 'pin-casa', label: 'Casa', source: 'subnet'};
 const FAST: Partial<ScreenTiming> = {frameMs: 10, idleFrameMs: 20, ackTimeoutMs: 1e12, pingMs: 60_000, deadMs: 1e12, pausedMaxMs: 1e12, tickMs: 15, captureTimeoutMs: 100, statsMs: 40};
 async function setup(timing: Partial<ScreenTiming> = {}, o: {pin?: boolean} = {}) {
   const dir = join(root, `t${++n}`); mkdirSync(join(dir, 'ui'), {recursive: true}); writeFileSync(join(dir, 'ui', 'remote.html'), '<!doctype html>');
-  skew = 0; targets = new Map(accounts.map(a => [a.id, new FakeTarget()])); forbiddenCalls = []; controlCounts = []; for (const a of accounts) a.suspended = false;
+  skew = 0; confirms = []; notices = []; targets = new Map(accounts.map(a => [a.id, new FakeTarget()])); forbiddenCalls = []; controlCounts = []; for (const a of accounts) a.suspended = false;
   hub = createRemoteHub({
     dbPath: join(dir, 'p.sqlite'), dir: join(dir, 'remote'), uiDir: join(dir, 'ui'), iconPath: join(process.cwd(), 'build', 'icon.png'), net: async () => sel, portOverride: 0, certOptions: {restrict: false}, networkPollMs: 3_600_000, now: clockNow,
-    api: {accounts: () => accounts, hunt: async () => ({}), market: async () => ({}), diag: () => ({})}, running: () => 1, blocker: {start: () => 1, stop: () => undefined}, nativeConfirm: async () => true,
-    screen: {target: id => { lastTarget = id; forbiddenCalls.push(id); return targets.get(id) ?? null; }, forbidden: () => [HUB_KEY], onControl: c => { controlCounts.push(c); }, timing: {...FAST, ...timing}},
+    api: {accounts: () => accounts, hunt: async () => ({}), market: async () => ({}), diag: () => ({})}, running: () => 1, blocker: {start: () => 1, stop: () => undefined}, nativeConfirm: async o => { confirms.push(o); return true; },
+    screen: {target: id => { lastTarget = id; forbiddenCalls.push(id); return targets.get(id) ?? null; }, forbidden: () => [HUB_KEY], onControl: c => { controlCounts.push(c); }, notify: (kind, device, account) => { notices.push(`${kind}|${device}|${account}`); }, timing: {...FAST, ...timing}},
   });
   await hub.setEnabled(true); port = hub.status().port;
   if (o.pin !== false) await hub.setPin('123456');
 }
 afterEach(async () => { for (const w of open.splice(0)) w.close(); await hub?.close(); });
-function addDevice(name = 'Pixel · Chrome', canAct = true) {
+function addDevice(name = 'Pixel · Chrome', canAct = true, canControl = canAct) {
   const id = randomUUID(), secret = randomBytes(32).toString('base64url');
-  hub.store.addDevice({id, name, tokenHash: createHash('sha256').update(secret).digest('hex'), now: new Date(clockNow()).toISOString(), nowMs: clockNow()}); if (canAct) hub.store.setCanAct(id, true);
+  hub.store.addDevice({id, name, tokenHash: createHash('sha256').update(secret).digest('hex'), now: new Date(clockNow()).toISOString(), nowMs: clockNow()}); if (canAct) hub.store.setCanAct(id, true); if (canControl) hub.store.setCanControl(id, true);
   return {id, cookie: `${COOKIE}=${id}.${secret}`};
 }
 interface Conn { origin?: string | null; host?: string; cookie?: string | null; protocols?: string | null; path?: string }
@@ -220,13 +222,15 @@ describe('protocolo e limites do WebSocket', () => {
     await quiet.ws.closed; expect(hub.status().screen).toEqual([]); expect(audits().some(a => /sem resposta/.test(a))).toBe(true);
   });
   it('conexão parada por mais de 6 s (keep-alive do HTTP) não é derrubada pelo servidor', async () => {
-    await setup({pingMs: 1500}); const {ws} = await watch(); await sleep(6200); expect(ws.closeCode).toBeNull(); await ws.until(() => ws.pings >= 3); // continua viva e respondendo ping
+    await setup({pingMs: 1500}); targets.get('acc-1')!.changing = false; const {ws} = await watch(); await sleep(6200); expect(ws.closeCode).toBeNull(); await ws.until(() => ws.pings >= 3); // continua viva e respondendo ping
   }, 15_000);
 });
 
 describe('Controlar: PIN, token, permissão', () => {
-  it('exige "pode agir": sem ele, negado e nenhum PIN é gasto', async () => {
-    await setup(); const {ws} = await watch('acc-1', addDevice('Sem permissão', false)); await control(ws); expect(ws.of('denied')[0]!.code).toBe('sem-permissao'); expect(ws.of('control')).toHaveLength(0);
+  it('exige "pode controlar" (permissão SEPARADA): só "pode agir" não basta e nenhum PIN é gasto', async () => {
+    await setup(); const {ws} = await watch('acc-1', addDevice('Só agir', true, false)); await ws.until(() => ws.of('hello').length > 0); expect(ws.of('hello')[0]).toMatchObject({canAct: true, canControl: false});
+    await control(ws); expect(ws.of('denied')[0]!.code).toBe('sem-permissao'); expect(ws.of('control')).toHaveLength(0);
+    expect(audits().some(a => a.startsWith('controle_pin_recusado'))).toBe(false);
   });
   it('exige PIN definido no PC', async () => { await setup({}, {pin: false}); const {ws} = await watch(); await control(ws); expect(ws.of('denied')[0]!.code).toBe('sem-pin'); });
   it('PIN errado: nega com tentativas restantes; 5 erros bloqueiam (mesma trava do PIN do hub); PIN certo depois do bloqueio continua negado', async () => {
@@ -309,8 +313,8 @@ describe('Controlar: validade, ociosidade, encerramento', () => {
     skew += 100_000; ws.send({t: 'in', token, e: {k: 'mm', x: 1, y: 1}}); await ws.until(() => t.inputs.length === 1); skew += 100_000; await sleep(60); expect(hub.controlling('acc-1')).toBe(true); // 100 s desde a última entrada
     skew += 21_000; await ws.until(() => ws.of('control').some(m => !m.on)); expect(ws.of('control').at(-1)).toMatchObject({reason: 'ocioso'});
   });
-  it('"pode agir" removido no PC encerra o controle; a visualização continua', async () => {
-    await setup(); const {ws, device} = await watch(); await control(ws); hub.store.setCanAct(device.id, false);
+  it('"pode controlar" removido no PC encerra o controle; a visualização continua', async () => {
+    await setup(); const {ws, device} = await watch(); await control(ws); hub.store.setCanControl(device.id, false);
     await ws.until(() => ws.of('control').some(m => !m.on)); expect(ws.of('control').at(-1)).toMatchObject({reason: 'permissao'}); expect(ws.closeCode).toBeNull();
   });
   it('Ctrl+Shift+F12 / "Encerrar controle" do PC: termina TODOS os controles, mantém a visão, avisa o atalho global e audita a duração', async () => {
@@ -351,5 +355,35 @@ describe('revogação, expiração, desligar e auditoria', () => {
   });
   it('a captura só é pedida para alvos de CONTA (identidade conferida): `target` só recebe ids de perfil', async () => {
     await setup(); const {ws} = await watch('acc-2'); await ws.until(() => ws.frames.length > 0); expect(new Set(forbiddenCalls)).toEqual(new Set(['acc-2'])); expect(lastTarget).toBe('acc-2'); expect(targets.get('acc-2')!.captureCalls).toBeGreaterThan(0); expect(targets.get('acc-1')!.captureCalls).toBe(0);
+  });
+});
+
+describe('R5: correções da auditoria', () => {
+  it('aparelho sem permissão nenhuma → 403; com só "pode controlar" vê; 7ª sessão nova no minuto → 429', async () => {
+    await setup(); expect((await upgrade('acc-1', {cookie: addDevice('Nada', false).cookie})).status).toBe(403);
+    expect((await upgrade('acc-1', {cookie: addDevice('Ctl', false, true).cookie})).status).toBe(101);
+    const d = addDevice('Rápido'); for (let i = 0; i < 6; i++) expect((await upgrade('acc-2', {cookie: d.cookie})).status).toBe(101);
+    expect((await upgrade('acc-2', {cookie: d.cookie})).status).toBe(429);
+  });
+  it('500 mensagens num só pedaço fecham com 1008 (balde de fichas)', async () => {
+    await setup(); const {ws} = await watch(); const one = clientFrame(1, Buffer.from('{"t":"pause"}'));
+    ws.sendRaw(Buffer.concat(Array.from({length: 500}, () => one))); expect(await ws.closed).toBe(1008);
+  });
+  it('close com código reservado → 1002; motivo não UTF-8 → 1007', async () => {
+    await setup(); const a = await watch(); a.ws.sendRaw(clientFrame(8, Buffer.from([0x03, 0xed]))); expect(await a.ws.closed).toBe(1002);
+    const b = await watch('acc-2'); b.ws.sendRaw(clientFrame(8, Buffer.from([0x03, 0xe8, 0xff, 0xfe]))); expect(await b.ws.closed).toBe(1007);
+  });
+  it('socket que não escoa é derrubado no envio de texto', () => {
+    let killed = 0; expect(guardedSend({buffered: () => 600 * 1024, sendText: () => true, terminate: () => { killed++; }}, 'x')).toBe(false); expect(killed).toBe(1);
+  });
+  it('diálogo do "pode controlar" diz controle total, gemas e sem teto; mudar o PIN encerra o controle; notificações', async () => {
+    const d = controlDialog('Pixel', true); expect(d.detail).toMatch(/controle total/); expect(d.detail).toMatch(/gemas/); expect(d.detail).toMatch(/SEM o teto/);
+    await setup(); const {ws, device} = await watch(); await control(ws); expect(notices).toEqual(expect.arrayContaining(['tela|Pixel · Chrome|Principal', 'controle|Pixel · Chrome|Principal']));
+    await hub.setPin('654321'); await ws.until(() => ws.of('control').some(m => !m.on)); expect(ws.of('control').at(-1)).toMatchObject({reason: 'permissao'});
+    await hub.setCanControl(device.id, false); expect(confirms.at(-1)!.detail).toMatch(/não controla/); expect(hub.devices()[0]!.canControl).toBe(false);
+  });
+  it('expiração conferida na própria entrada, sem esperar o sweep', async () => {
+    await setup({tickMs: 1e9}); const t = targets.get('acc-1')!, {ws} = await watch(); await control(ws); const token = tokenOf(ws); skew += 11 * 60_000;
+    ws.send({t: 'in', token, e: {k: 'md', x: 10, y: 10}}); await ws.until(() => ws.of('control').some(m => !m.on)); expect(ws.of('control').at(-1)).toMatchObject({reason: 'expirou'}); expect(t.inputs).toHaveLength(0);
   });
 });

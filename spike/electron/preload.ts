@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('pokehub', {
     allowNetwork: () => ipcRenderer.invoke('remote:allow-network'),
     revealCode: () => ipcRenderer.invoke('remote:reveal-code'),
     setCanAct: (id: string, value: boolean) => ipcRenderer.invoke('remote:set-can-act',id,value),
+    setCanControl: (id: string, value: boolean) => ipcRenderer.invoke('remote:set-can-control',id,value),
     reenableActions: () => ipcRenderer.invoke('remote:reenable-actions'),
     dismissNotice: () => ipcRenderer.invoke('remote:dismiss-notice'),
     screenEnd: (mode: 'control' | 'all') => ipcRenderer.invoke('remote:screen-end',mode),
