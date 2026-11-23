@@ -7,13 +7,15 @@ import { Ball } from '../src/icons';
 import { PixelIcon } from './pixel-icons';
 import { AlertsView } from './alerts-ui';
 import { CapturesView, LastCapture } from './captures-ui';
+import { AccountActions, ActsProvider, LiteToggle, ShopView, useActsState } from './shop-ui';
 import { resyncPush } from './push-client';
 import { downAccounts, resolveHash, isRemoteAlert, isRemoteCapture, mergeAlerts, mergeCaptures, PUSH_URL_RE } from './push-helpers';
 import type { RemoteAlert, RemoteCapture } from './r3-types';
+import type { ShopEvent } from '../contracts/remote';
 import type { Tab } from './push-helpers';
 import './remote.css';
 
-const TABS: {id: Tab; label: string; soon?: boolean}[] = [{id: 'contas', label: 'Contas'}, {id: 'conta', label: 'Conta'}, {id: 'loja', label: 'Loja', soon: true}, {id: 'mercado', label: 'Mercado'}, {id: 'alertas', label: 'Alertas'}];
+const TABS: {id: Tab; label: string; soon?: boolean}[] = [{id: 'contas', label: 'Contas'}, {id: 'conta', label: 'Conta'}, {id: 'loja', label: 'Loja'}, {id: 'mercado', label: 'Mercado'}, {id: 'alertas', label: 'Alertas'}];
 
 function Pair({onDone}: {onDone: () => void}) {
   const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [sas, setSas] = useState<string | null>(null), [sw, setSw] = useState<'wait' | 'ok' | 'off'>('wait');
@@ -57,7 +59,6 @@ function Pair({onDone}: {onDone: () => void}) {
 }
 
 const StateTag = ({account}: {account: Account}) => { const state = account.suspended ? 'suspended' : account.state; return <span className="st" data-state={state}><b/><small>{STATE_TEXT[state] ?? 'Iniciando'}</small></span>; };
-function Soon({title}: {title: string}) { return <section className="card soon"><h2>{title}</h2><p className="muted">Em breve. Esta parte chega numa próxima versão do acesso remoto.</p></section>; }
 function Pick({accounts, value, onChange}: {accounts: Account[]; value: string | null; onChange: (id: string) => void}) {
   return <div className="chips" role="group" aria-label="Conta">{accounts.map(a => <button key={a.id} className="chip" aria-pressed={a.id === value} onClick={() => onChange(a.id)}><i className="gem" style={{background: a.color}}/>{a.label}</button>)}</div>;
 }
@@ -122,12 +123,14 @@ function Shell({me, onLogout}: {me: Me; onLogout: () => void}) {
   const [tab, setTab] = useState<Tab>(() => resolveHash(location.hash).tab), [accounts, setAccounts] = useState<Account[]>([]), [selected, setSelected] = useState<string | null>(() => resolveHash(location.hash).account ?? null);
   const [sub, setSub] = useState<'hunt' | 'capturas'>('hunt'), [alerts, setAlerts] = useState<RemoteAlert[]>([]), [captures, setCaptures] = useState<RemoteCapture[]>([]);
   const [updated, setUpdated] = useState<number | null>(null), [online, setOnline] = useState(true), [now, setNow] = useState(() => Date.now());
+  const [shopLog, setShopLog] = useState<ShopEvent[]>([]), acts = useActsState(me, now);
   useEffect(() => {
     const events = new EventSource('/api/events');
     const apply = (event: MessageEvent<string>) => { try { const data = JSON.parse(event.data) as {accounts: Account[]}; setAccounts(data.accounts); setUpdated(Date.now()); setOnline(true); } catch { /* quadro inválido: ignora */ } };
     events.addEventListener('state', apply as EventListener);
     events.addEventListener('capture', ((event: MessageEvent<string>) => { try { const d = JSON.parse(event.data) as {captures?: unknown}; const list = d.captures; if (Array.isArray(list)) setCaptures(old => mergeCaptures(list.filter(isRemoteCapture), old)); } catch { /* ignora */ } }) as EventListener);
     events.addEventListener('alert', ((event: MessageEvent<string>) => { try { const a: unknown = JSON.parse(event.data); if (isRemoteAlert(a)) setAlerts(old => mergeAlerts([a], old)); } catch { /* ignora */ } }) as EventListener);
+    events.addEventListener('shop', ((event: MessageEvent<string>) => { try { const d = JSON.parse(event.data) as ShopEvent; if (d && typeof d === 'object' && typeof d.confirmId === 'string') setShopLog(old => [...old.slice(-150), d]); } catch { /* ignora */ } }) as EventListener);
     events.onopen = () => setOnline(true);
     events.onerror = () => { setOnline(false); void get('/api/me').catch(e => { if (e instanceof Unauthorized) onLogout(); }); };
     const clock = window.setInterval(() => setNow(Date.now()), 10_000);
@@ -152,21 +155,23 @@ function Shell({me, onLogout}: {me: Me; onLogout: () => void}) {
   const lastOf = useMemo(() => { const m = new Map<string, RemoteCapture>(); for (const c of captures) if (!m.has(c.profileId)) m.set(c.profileId, c); return m; }, [captures]);
   const current = selected && accounts.some(a => a.id === selected) ? selected : accounts[0]?.id ?? null;
   const open = (id: string) => { setSelected(id); setSub('hunt'); setTab('conta'); };
-  return <>
+  return <ActsProvider value={acts}>
     <header className="top"><Ball/><strong>PokéHub</strong><span className={online ? 'stamp' : 'stamp off'} role="status">{online ? `Atualizado ${ago(updated, now)}` : `Sem conexão com o PC · atualizado ${ago(updated, now)}`}</span></header>
     <main>
       {tab === 'contas' && <>{accounts.length === 0 ? <section className="card"><p className="muted" role="status">{online ? 'Nenhuma conta ainda.' : 'Aguardando o PC…'}</p></section> : <ul className="accounts">{accounts.map(a => <li key={a.id}><button className="acc" onClick={() => open(a.id)}><i className="gem" style={{background: a.color}}/><span className="acc-body"><strong>{a.label}{down.has(a.id) && <i className="down-dot" role="img" aria-label="Conta caiu" title="Conta caiu"/>}</strong>{lastOf.get(a.id) && <LastCapture c={lastOf.get(a.id)!}/>}</span><StateTag account={a}/></button></li>)}</ul>}
+        <LiteToggle/>
         <Health accounts={accounts}/>
         <section className="card"><p className="muted">Pareado como {me.name}.</p><button onClick={() => { if (confirm('Sair deste aparelho? Para voltar, será preciso parear de novo.')) void post('/api/logout', {}).then(onLogout); }}>Sair deste aparelho</button></section></>}
       {tab === 'conta' && (current ? <><Pick accounts={accounts} value={current} onChange={setSelected}/>
         <div className="seg subtabs" role="group" aria-label="Seções da conta"><button aria-pressed={sub === 'hunt'} onClick={() => setSub('hunt')}>Onde caçar</button><button disabled>Jogo <small>em breve</small></button><button aria-pressed={sub === 'capturas'} onClick={() => setSub('capturas')}>Capturas</button><button disabled>Equipe <small>em breve</small></button></div>
-        {sub === 'hunt' ? <HuntView id={current}/> : <CapturesView id={current} live={captures}/>}</> : <section className="card"><p className="muted">Nenhuma conta.</p></section>)}
-      {tab === 'loja' && <Soon title="Loja"/>}
+        {sub === 'hunt' ? <HuntView id={current}/> : <CapturesView id={current} live={captures}/>}
+        <AccountActions account={accounts.find(a => a.id === current)!}/></> : <section className="card"><p className="muted">Nenhuma conta.</p></section>)}
+      {tab === 'loja' && <ShopView accounts={accounts} log={shopLog}/>}
       {tab === 'mercado' && <MarketView accounts={accounts} id={current} onPick={setSelected}/>}
       {tab === 'alertas' && <AlertsView alerts={alerts} colors={colors} now={now} onRefresh={loadAlerts}/>}
     </main>
-    <nav className="tabs" aria-label="Seções">{TABS.map(t => <button key={t.id} aria-current={tab === t.id ? 'page' : undefined} disabled={t.soon} onClick={() => { setTab(t.id); if (t.id === 'alertas') void loadAlerts(); }}><PixelIcon name={t.id}/>{t.label}{t.soon && <small>em breve</small>}</button>)}</nav>
-  </>;
+    <nav className="tabs" aria-label="Seções">{TABS.map(t => <button key={t.id} aria-current={tab === t.id ? 'page' : undefined} disabled={t.soon} onClick={() => { setTab(t.id); if (t.id === 'alertas') void loadAlerts(); if (t.id === 'loja' || t.id === 'contas' || t.id === 'conta') void acts.refresh(); }}><PixelIcon name={t.id}/>{t.label}{t.soon && <small>em breve</small>}</button>)}</nav>
+  </ActsProvider>;
 }
 
 function App() {

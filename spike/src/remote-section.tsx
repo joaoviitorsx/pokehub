@@ -1,7 +1,7 @@
 // Gerenciar → Acesso remoto e o modal "Parear novo aparelho" (tema madeira). Só fala com o main pelo IPC `window.pokehub.remote`.
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { qrMatrix, qrPath } from '../domain/qr';
-import type { RemoteAlert, RemoteAuditEntry, RemoteDevice, RemoteRequest, RemoteStatus } from '../contracts/remote';
+import type { RemoteAlert, RemoteAuditEntry, RemoteDevice, RemotePurchase, RemoteRequest, RemoteSpend, RemoteStatus } from '../contracts/remote';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
 interface RemoteClient {
@@ -11,10 +11,13 @@ interface RemoteClient {
   allowNetwork(): Promise<Result<RemoteStatus>>; revealCode(): Promise<Result<RemoteStatus>>; setCanAct(id: string, value: boolean): Promise<Result<RemoteDevice[]>>;
   reenableActions(): Promise<Result<RemoteStatus>>; dismissNotice(): Promise<Result<RemoteStatus>>;
   pushTest(id: string): Promise<Result<{sent: number}>>; alerts(): Promise<Result<RemoteAlert[]>>;
+  purchases(): Promise<Result<PurchasesInfo>>; setCap(value: number): Promise<Result<PurchasesInfo>>;
 }
+interface PurchasesInfo { purchases: RemotePurchase[]; spend: RemoteSpend[]; capGold: number }
 const client = () => (window.pokehub as unknown as {remote: RemoteClient}).remote;
 const ALERT_ICON: Record<string, string> = {shiny: '✨', p5: 'P5', recorde: 'Recorde', nota: 'Nota', conta_caiu: 'Conta caiu', conta_voltou: 'Conta voltou'};
-const AUDIT_TEXT: Record<string, string> = {push_assinado: 'Notificações ativadas no aparelho', push_teste: 'Teste de notificação', acesso_remoto_ligado: 'Acesso remoto ligado', acesso_remoto_desligado: 'Acesso remoto desligado', pareamento_iniciado: 'Pareamento iniciado', pareamento_pedido: 'Pedido de pareamento', pareamento_aceito: 'Aparelho aceito', pareamento_negado: 'Aparelho recusado', pareamento_cancelado: 'Pedido cancelado', pareamento_abandonado: 'Celular desistiu do pedido', pareamento_contestado: 'Código usado por mais de um aparelho', pareamento_codigo_errado: 'Código errado', aparelho_revogado: 'Aparelho revogado', aparelho_revogado_pin: 'Aparelho revogado (PIN)', expirado: 'Acesso expirado', saiu: 'Aparelho saiu', pin_definido: 'PIN definido', pin_removido: 'PIN removido', pin_bloqueado: 'PIN bloqueado', acoes_desligadas: 'Ações desligadas (erros de PIN)', acoes_religadas: 'Ações religadas', rede_nova: 'Rede nova detectada', rede_perdida: 'Rede indisponível', rede_fixada: 'Rede doméstica fixada', rede_liberada: 'Rede nova liberada', ca_refeita: 'Certificado refeito', pode_agir_ligado: '“Pode agir” permitido', pode_agir_desligado: '“Pode agir” bloqueado'};
+const AUDIT_TEXT: Record<string, string> = {push_assinado: 'Notificações ativadas no aparelho', push_teste: 'Teste de notificação', acesso_remoto_ligado: 'Acesso remoto ligado', acesso_remoto_desligado: 'Acesso remoto desligado', pareamento_iniciado: 'Pareamento iniciado', pareamento_pedido: 'Pedido de pareamento', pareamento_aceito: 'Aparelho aceito', pareamento_negado: 'Aparelho recusado', pareamento_cancelado: 'Pedido cancelado', pareamento_abandonado: 'Celular desistiu do pedido', pareamento_contestado: 'Código usado por mais de um aparelho', pareamento_codigo_errado: 'Código errado', aparelho_revogado: 'Aparelho revogado', aparelho_revogado_pin: 'Aparelho revogado (PIN)', expirado: 'Acesso expirado', saiu: 'Aparelho saiu', pin_definido: 'PIN definido', pin_removido: 'PIN removido', pin_bloqueado: 'PIN bloqueado', acoes_desligadas: 'Ações desligadas (erros de PIN)', acoes_religadas: 'Ações religadas', rede_nova: 'Rede nova detectada', rede_perdida: 'Rede indisponível', rede_fixada: 'Rede doméstica fixada', rede_liberada: 'Rede nova liberada', ca_refeita: 'Certificado refeito', pode_agir_ligado: '“Pode agir” permitido', pode_agir_desligado: '“Pode agir” bloqueado', compra_confirmada: 'Compra feita pelo celular', compra_abortada: 'Compra do celular não concluída', compra_preco_mudou: 'Compra abortada: preço mudou', compra_recusada_teto: 'Compra recusada: teto diário', compra_hash_diferente: 'Confirmação com plano diferente (recusada)', acao_recarregar: 'Conta recarregada pelo celular', acao_suspender: 'Conta suspensa pelo celular', acao_retomar: 'Conta retomada pelo celular', acao_falhou: 'Ação do celular falhou', modo_leve: 'Modo leve mudado pelo celular', elevacao_pin: 'PIN lembrado por 10 min', teto_diario: 'Teto diário de compras alterado'};
+const gold = (n: number) => n.toLocaleString('pt-BR');
 const when = (iso: string | null) => { if (!iso) return '—'; const d = new Date(iso); return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}); };
 export const ALLOW_DELAY_MS = 1500;
 /** "Permitir" só habilita 1,5 s depois que o pedido aparece e depois de qualquer troca de foco da janela (evita o clique por reflexo). */
@@ -32,14 +35,15 @@ export function RemoteSection({onPair}: {onPair: () => void}) {
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
   const [audit, setAudit] = useState<RemoteAuditEntry[]>([]);
   const [alerts, setAlerts] = useState<RemoteAlert[]>([]);
+  const [shop, setShop] = useState<PurchasesInfo | null>(null), [cap, setCap] = useState('');
   const [pin, setPin] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const load = async () => {
     try {
-      const [s, d, a, al] = await Promise.all([client().status(), client().devices(), client().audit(), client().alerts()]);
+      const [s, d, a, al, pu] = await Promise.all([client().status(), client().devices(), client().audit(), client().alerts(), client().purchases()]);
       if (s.ok) setStatus(s.data); else setMessage(s.error);
-      if (d.ok) setDevices(d.data); if (a.ok) setAudit(a.data); if (al.ok) setAlerts(al.data);
+      if (d.ok) setDevices(d.data); if (a.ok) setAudit(a.data); if (al.ok) setAlerts(al.data); if (pu.ok) setShop(pu.data);
     } catch { setMessage('Não foi possível consultar o acesso remoto.'); }
   };
   useEffect(() => {
@@ -54,6 +58,7 @@ export function RemoteSection({onPair}: {onPair: () => void}) {
     try { const result = await action(); if (!result.ok) setMessage(result.error); await load(); } catch { setMessage('Não foi possível concluir a operação.'); } finally { setBusy(false); }
   };
   const submitPin = (event: FormEvent) => { event.preventDefault(); if (!/^\d{6}$/.test(pin)) { setMessage('O PIN precisa ter 6 dígitos.'); return; } void run(async () => { const r = await client().setPin(pin); if (r.ok) setPin(''); return r; }); };
+  const capValue = /^d{1,10}$/.test(cap.replace(/./g, '')) ? Number(cap.replace(/./g, '')) : null;
   if (!status) return <p role="status">{message || 'Carregando…'}</p>;
   const url = status.urls[0];
   return <section aria-label="Acesso remoto">
@@ -76,15 +81,24 @@ export function RemoteSection({onPair}: {onPair: () => void}) {
     </div>}
     <div className="actions"><button className="primary" disabled={busy || !status.enabled || !status.running} onClick={onPair}>Parear novo aparelho</button></div>
     <h2>PIN de ações</h2>
-    <p className="note">O PIN de 6 dígitos libera, no celular, as ações que mudam alguma coisa (nas próximas versões). {status.pinSet ? 'PIN definido. 5 erros bloqueiam o aparelho (15 min, depois 1 h, depois 24 h; o ciclo seguinte revoga o aparelho) e 10 erros no dia desligam as ações até você religar aqui.' : 'Nenhum PIN definido ainda.'}</p>
+    <p className="note">O PIN de 6 dígitos libera, no celular, as ações que mudam alguma coisa (compras na Loja, recarregar, suspender, retomar e Modo leve). Depois de digitar, o celular pode “lembrar” o PIN por 10 min (a memória fica aqui, no PC). {status.pinSet ? 'PIN definido. 5 erros bloqueiam o aparelho (15 min, depois 1 h, depois 24 h; o ciclo seguinte revoga o aparelho) e 10 erros no dia desligam as ações até você religar aqui.' : 'Nenhum PIN definido ainda.'}</p>
     <form className="rm-pin" onSubmit={submitPin}><label>{status.pinSet ? 'Novo PIN' : 'PIN'} <input type="password" inputMode="numeric" autoComplete="off" maxLength={6} pattern="\d{6}" value={pin} onChange={event => setPin(event.target.value.replace(/\D/g, ''))}/></label>
       <button disabled={busy || pin.length !== 6}>{status.pinSet ? 'Trocar PIN' : 'Definir PIN'}</button>{status.pinSet && <button type="button" disabled={busy} onClick={() => { if (window.confirm('Remover o PIN? As ações pelo celular ficam bloqueadas até definir outro.')) void run(() => client().clearPin()); }}>Remover</button>}</form>
     <h2>Aparelhos pareados</h2>
     {devices.length === 0 ? <p className="ext-state" data-on="false">Nenhum aparelho pareado.</p> : <ul className="acc-list">{devices.map(device => <li key={device.id} className="acc"><div className="acc-main"><strong>{device.name}</strong></div><small>Pareado em {when(device.createdAt)} · último acesso {when(device.lastSeen)}</small>
       <small>Notificações: {(device.push ?? 0) > 0 ? `ativas (${device.push})` : 'desativadas'}</small>
       {(device.push ?? 0) > 0 && <div className="actions"><button disabled={busy} onClick={() => void run(async () => { const r = await client().pushTest(device.id); if (r.ok) setMessage(r.data.sent > 0 ? 'Teste enviado. Veja se chegou no celular.' : 'O serviço de notificações não aceitou o teste agora.'); return r; })}>Enviar teste</button></div>}
-      <label className="switch"><span>Pode agir (com PIN, nas próximas versões)</span><input type="checkbox" role="switch" checked={device.canAct} disabled={busy} onChange={event => void run(() => client().setCanAct(device.id, event.target.checked))}/></label>
+      <label className="switch"><span>Pode agir: {device.canAct ? 'sim' : 'não'} (compras, recarregar, suspender e Modo leve, sempre com PIN)</span><input type="checkbox" role="switch" checked={device.canAct} disabled={busy} onChange={event => void run(() => client().setCanAct(device.id, event.target.checked))}/></label>
       <div className="actions"><button className="danger" disabled={busy} onClick={() => { if (window.confirm(`Revogar “${device.name}”? Ele perde o acesso na hora.`)) void run(() => client().revoke(device.id)); }}>Revogar</button></div></li>)}</ul>}
+    <h2>Compras pelo celular</h2>
+    <p className="note">Só no Market (ouro, itens do catálogo da Loja). Nunca no Mercado da Comunidade. Cada compra pede a confirmação do servidor, relê o preço no jogo e aparece aqui, no registro e numa notificação. O teto abaixo só pode ser mudado neste PC.</p>
+    <form className="rm-pin" onSubmit={event => { event.preventDefault(); if (capValue !== null) void run(async () => { const r = await client().setCap(capValue); if (r.ok) { setCap(''); setShop(r.data); } return r; }); }}>
+      <label>Teto diário por conta (ouro) <input inputMode="numeric" autoComplete="off" placeholder={gold(shop?.capGold ?? status.dailyCapGold)} value={cap} onChange={event => setCap(event.target.value.replace(/[^d.]/g, ''))}/></label>
+      <button disabled={busy || capValue === null || capValue === (shop?.capGold ?? status.dailyCapGold)}>Salvar teto</button></form>
+    <p className="note">Teto atual: <strong>{gold(shop?.capGold ?? status.dailyCapGold)}</strong> de ouro por conta, por dia (horário do PC). Aumentar pede confirmação do sistema e encerra os PINs lembrados.</p>
+    {shop && shop.spend.length > 0 && <ul className="acc-list">{shop.spend.map(s => <li key={s.profileId} className="acc"><div className="acc-main"><strong>{s.label}</strong></div><small>Hoje pelo celular: {gold(s.gold)} de {gold(s.capGold)} de ouro</small></li>)}</ul>}
+    <details className="rm-audit"><summary>Compras do celular (últimas 50)</summary>
+      {!shop || shop.purchases.length === 0 ? <p className="note">Nenhuma compra pelo celular ainda.</p> : <ul>{shop.purchases.map(p => <li key={p.id}><time>{when(p.at)}</time> · <strong>{p.label}</strong>: {p.qty}× {p.item} a {gold(p.unitPrice)} = {gold(p.total)} · {p.result === 'ok' ? 'ok' : p.result} · {p.deviceName ?? 'aparelho removido'}</li>)}</ul>}</details>
     <details className="rm-audit"><summary>Alertas (últimos 20)</summary>
       {alerts.length === 0 ? <p className="note">Nenhum alerta ainda.</p> : <ul>{alerts.map(alert => <li key={alert.id}><time>{when(alert.at)}</time> · <strong>{ALERT_ICON[alert.kind] ?? alert.kind}</strong> {alert.label}: {alert.text}</li>)}</ul>}</details>
     <details className="rm-audit"><summary>Registro de auditoria (últimos 100)</summary>

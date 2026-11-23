@@ -8,7 +8,9 @@ import { createRemoteServer, type PairInfo, type RemoteApi, type RemoteServer, t
 import { RemoteStore, validPort, type AuditRow } from './store';
 import { createAlertEngine, type AlertEngine, type AlertProfile, type CaptureSource } from './alerts';
 import { createPush, type Push, type PushFetch } from './push';
-import type { RemoteAlert, RemoteDevice, RemoteStatus } from '../contracts/remote';
+import { createActions, type AccountPort, type Actions, type ShopPort } from './actions';
+import { MAX_CAP_GOLD } from './store';
+import type { RemoteAlert, RemoteDevice, RemotePurchase, RemoteSpend, RemoteStatus } from '../contracts/remote';
 
 /** Confirmação NATIVA do sistema (fora da página): quem controla a janela do app não aprova sozinho. */
 export type NativeConfirm = (options: {title: string; message: string; detail: string; confirmLabel: string}) => Promise<boolean>;
@@ -19,6 +21,8 @@ export interface HubDeps {
   secretBox?: SecretBox; nativeConfirm?: NativeConfirm;
   /** R3: de onde vêm as capturas e as contas; sem isto não há alertas nem push. `fetcher` só para testes/Electron (`net.fetch`). */
   alerts?: {captures: CaptureSource; profiles(): readonly AlertProfile[]; fetcher?: PushFetch};
+  /** R4: Loja rápida e ações de conta do hub + aviso no PC (notificação do sistema). Sem isto o celular não age. */
+  actions?: {shop: ShopPort; account: AccountPort; notify(title: string, body: string): void; dayOf?(ms: number): string; tz?: string};
   /** Só para testes: troca a fábrica do servidor e os limites/tempos dele. */
   serverFactory?: (deps: ServerDeps) => RemoteServer; serverLimits?: ServerDeps['limits']; serverTiming?: ServerDeps['timing'];
 }
@@ -40,7 +44,7 @@ export function createRemoteHub(deps: HubDeps) {
   let netState: 'ok' | 'rede_nova' | 'sem_rede' = 'ok', netLabel = store.getNetPin()?.label ?? '', caNotice: string | null = null, aclOk = true, notice: string | null = null;
   type Request = {info: PairInfo; since: number; contested: boolean; deciding: boolean; settle: (allow: boolean) => void; timer: ReturnType<typeof setTimeout>};
   let request: Request | null = null, paired: string | null = null, revealed = true, closed = false;
-  let engine: AlertEngine | null = null, pushLib: Push | null = null;
+  let engine: AlertEngine | null = null, pushLib: Push | null = null, actions: Actions | null = null;
   const changed = () => { engine?.update(); try { deps.onChange?.(); } catch { /* ouvinte */ } };
   /** Chave VAPID criada só quando precisa (1ª assinatura/consulta); se foi refeita, as assinaturas antigas não valem mais. */
   const getPush = (): Push | null => {
@@ -53,10 +57,15 @@ export function createRemoteHub(deps: HubDeps) {
   const alertUser = (text: string) => { notice = text; changed(); };
   const pinStore: PinStore = {get: k => store.pinState(k), set: (k, s) => store.setPinState(k, s), delete: k => store.clearPinState(k), actionsDisabled: () => store.getActionsDisabled(), setActionsDisabled: v => store.setActionsDisabled(v)};
   const pin = new PinGuard(() => store.getPinHash(), now, {
-    onLock: (id, level, until) => { audit(id, 'pin_bloqueado', `nível ${level} até ${new Date(until).toISOString()}`); changed(); },
+    onLock: (id, level, until) => { actions?.clearElevations(id); audit(id, 'pin_bloqueado', `nível ${level} até ${new Date(until).toISOString()}`); changed(); },
     onRevoke: id => { const name = store.getDevice(id)?.name ?? 'aparelho'; if (server ? server.revoke(id) : store.revokeDevice(id)) { audit(id, 'aparelho_revogado_pin', name); alertUser(`“${name}” foi revogado depois de várias tentativas erradas de PIN.`); } },
-    onDisable: () => { audit(null, 'acoes_desligadas', '10 erros de PIN no dia'); alertUser('Ações pelo celular desligadas: 10 erros de PIN em um dia. Religue em Acesso remoto quando quiser.'); },
+    onDisable: () => { actions?.clearElevations(); audit(null, 'acoes_desligadas', '10 erros de PIN no dia'); alertUser('Ações pelo celular desligadas: 10 erros de PIN em um dia. Religue em Acesso remoto quando quiser.'); },
   }, pinStore);
+
+  if (deps.actions) {
+    const a = deps.actions;
+    actions = createActions({store, pin, now, accounts: () => deps.api.accounts(), shop: a.shop, account: a.account, publish: (deviceId, event, data) => server?.publish(event, data, id => id === deviceId), notifyPc: a.notify, pushDevices: (label, text) => { void engine?.notifyAction(label, text); }, audit, dayOf: a.dayOf, tz: a.tz});
+  }
 
   /** Fila serial: ligar, desligar e reiniciar nunca se sobrepõem. */
   const serial = <T>(task: () => Promise<T>): Promise<T> => { const run = chain.then(task, task); chain = run.then(() => undefined, () => undefined); return run; };
@@ -83,7 +92,7 @@ export function createRemoteHub(deps: HubDeps) {
     const binds = [...sel.binds, ...(allowLoopback ? [LOOPBACK] : [])];
     let set: CertResult;
     try { set = ensureCerts(join(deps.dir), binds.map(b => b.address), {...deps.certOptions, box: deps.secretBox, subnets: sel.subnets}); } catch { error = MSG_START; changed(); throw new RemoteUserError(MSG_START); } // as chaves ficam só em disco (0600, cifradas quando possível)
-    const created = (deps.serverFactory ?? createRemoteServer)({store, certs: () => set, api: deps.api, pairing, confirmPair, onContested: () => { if (request) { request.contested = true; audit(null, 'pareamento_contestado', request.info.ip); changed(); } }, uiDir: deps.uiDir, iconPath: deps.iconPath, now, alerts: engine ?? undefined, onActivity: () => engine?.update(), limits: deps.serverLimits, timing: deps.serverTiming});
+    const created = (deps.serverFactory ?? createRemoteServer)({store, certs: () => set, api: deps.api, pairing, confirmPair, onContested: () => { if (request) { request.contested = true; audit(null, 'pareamento_contestado', request.info.ip); changed(); } }, uiDir: deps.uiDir, iconPath: deps.iconPath, now, alerts: engine ?? undefined, actions: actions ?? undefined, onActivity: () => engine?.update(), limits: deps.serverLimits, timing: deps.serverTiming});
     let listened: number;
     try { listened = await created.listen(binds, deps.portOverride ?? store.getPort()); } catch { error = MSG_START; changed(); throw new RemoteUserError(MSG_START); }
     if (!alive()) { await created.close(); return; } // desligaram (ou outra geração assumiu) enquanto abria a porta
@@ -97,6 +106,7 @@ export function createRemoteHub(deps: HubDeps) {
   async function stopServer(): Promise<void> {
     pairing.cancel();
     request?.settle(false);
+    actions?.clearElevations(); // desligar, trocar de rede ou reiniciar: ninguém continua "elevado"
     const current = server; server = null;
     await current?.close();
     changed();
@@ -174,8 +184,8 @@ export function createRemoteHub(deps: HubDeps) {
         if (request === r) r.settle(ok);
       } catch (e) { if (request === r) { r.deciding = false; changed(); } throw e; }
     },
-    async setPin(value: unknown): Promise<void> { if (!validPin(value)) throw new RemoteUserError('O PIN precisa ter 6 dígitos.'); store.setPinHash(await hashPin(value)); pin.reset(); audit(null, 'pin_definido'); changed(); },
-    clearPin(): void { store.setPinHash(null); pin.reset(); audit(null, 'pin_removido'); changed(); },
+    async setPin(value: unknown): Promise<void> { if (!validPin(value)) throw new RemoteUserError('O PIN precisa ter 6 dígitos.'); store.setPinHash(await hashPin(value)); pin.reset(); actions?.clearElevations(); audit(null, 'pin_definido'); changed(); },
+    clearPin(): void { store.setPinHash(null); pin.reset(); actions?.clearElevations(); audit(null, 'pin_removido'); changed(); },
     /** Religa as ações pelo celular depois dos 10 erros de PIN no dia (e zera os contadores). */
     reenableActions(): void { pin.reset(); audit(null, 'acoes_religadas'); notice = null; changed(); },
     dismissNotice(): void { notice = null; changed(); },
@@ -183,8 +193,8 @@ export function createRemoteHub(deps: HubDeps) {
     async setCanAct(id: unknown, value: unknown): Promise<RemoteDevice[]> {
       if (typeof id !== 'string' || typeof value !== 'boolean') throw new RemoteUserError('Pedido inválido.');
       const device = store.getDevice(id); if (!device) throw new RemoteUserError('Aparelho não encontrado.');
-      if (!await confirmNative({title: 'PokéHub — permissão de ações', message: `${value ? 'Permitir' : 'Bloquear'} ações de “${device.name}”?`, detail: value ? 'Com “pode agir” o celular poderá, nas próximas versões, mudar coisas (com PIN). Só permita para um aparelho seu.' : 'O celular volta a só ver.', confirmLabel: value ? 'Permitir' : 'Bloquear'})) return self.devices();
-      store.setCanAct(id, value); audit(id, value ? 'pode_agir_ligado' : 'pode_agir_desligado', device.name); changed(); return self.devices();
+      if (!await confirmNative({title: 'PokéHub — permissão de ações', message: `${value ? 'Permitir' : 'Bloquear'} ações de “${device.name}”?`, detail: value ? 'Com “pode agir” o celular poderá comprar na Loja (dentro do teto diário), recarregar, suspender e retomar contas e ligar o Modo leve, sempre com PIN. Só permita para um aparelho seu.' : 'O celular volta a só ver.', confirmLabel: value ? 'Permitir' : 'Bloquear'})) return self.devices();
+      store.setCanAct(id, value); if (!value) actions?.clearElevations(id); audit(id, value ? 'pode_agir_ligado' : 'pode_agir_desligado', device.name); changed(); return self.devices();
     },
     devices: (): RemoteDevice[] => store.listDevices().map(d => ({...d, push: store.pushCount(d.id)})),
     /** Últimos alertas (histórico do banco), para o painel do PC. */
@@ -200,7 +210,19 @@ export function createRemoteHub(deps: HubDeps) {
       audit(id, 'push_teste', `${sent} enviado(s)`); changed(); return {sent};
     },
     audit: (): AuditRow[] => store.listAudit(100),
-    revoke(id: unknown): boolean { if (typeof id !== 'string') return false; const ok = server ? server.revoke(id) : store.revokeDevice(id); if (ok) audit(id, 'aparelho_revogado'); changed(); return ok; },
+    revoke(id: unknown): boolean { if (typeof id !== 'string') return false; const ok = server ? server.revoke(id) : store.revokeDevice(id); actions?.forget(id); if (ok) audit(id, 'aparelho_revogado'); changed(); return ok; },
+    /** R4: histórico de compras do celular (últimas 50) e gasto de hoje por conta, para o painel do PC. */
+    purchases: (): RemotePurchase[] => actions?.purchases() ?? [],
+    spendToday: (): RemoteSpend[] => actions?.spendToday() ?? [],
+    /** Teto diário de ouro por conta (SÓ no PC). Aumentar pede confirmação nativa e derruba as elevações de PIN. */
+    async setDailyCap(value: unknown): Promise<number> {
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > MAX_CAP_GOLD) throw new RemoteUserError('Teto inválido.');
+      const old = store.getDailyCapGold();
+      if (value === old) return old;
+      if (value > old && !await confirmNative({title: 'PokéHub — teto diário do celular', message: `Aumentar o teto diário de compras pelo celular para ${value.toLocaleString('pt-BR')} de ouro por conta?`, detail: 'Um aparelho com permissão poderá gastar mais ouro por dia (sempre com PIN). Todas as elevações de PIN serão encerradas.', confirmLabel: 'Aumentar'})) return old;
+      store.setDailyCapGold(value); if (value > old) actions?.clearElevations();
+      audit(null, 'teto_diario', `${old} → ${value} de ouro por conta`); changed(); return value;
+    },
     setPort(value: unknown): void { if (!validPort(value)) throw new RemoteUserError('Porta inválida.'); store.setPort(value); },
     publish: (event: string, data: unknown) => server?.publish(event, data),
     updatePower: () => !closed && power.update(server?.listening() ?? false, deps.running()), // o sono só é segurado com o servidor de fato escutando

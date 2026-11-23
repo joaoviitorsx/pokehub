@@ -8,6 +8,9 @@ export interface TokenRow { hash: string; prevHash: string | null; prevUntil: nu
 export interface PinStateRow { fails: number; level: number; lockedUntil: number; day: string | null }
 export interface AuditRow { id: number; at: string; deviceId: string | null; action: string; detail: string | null }
 export interface PushRow { id: string; deviceId: string; endpoint: string; p256dh: string; auth: string; createdAt: string; lastOk: string | null; failCount: number }
+export interface ConfirmRow { id: string; deviceId: string; planHash: string; planJson: string; createdAt: number; expiresAt: number; used: boolean; idemKey: string | null; resultJson: string | null }
+export interface PurchaseRow { id: number; at: string; deviceId: string | null; deviceName: string | null; profileId: string; confirmId: string | null; planHash: string | null; item: string; qty: number; unitPrice: number; total: number; result: string }
+export const MAX_CAP_GOLD = 1_000_000_000;
 export const DEFAULT_PORT = 47321, MAX_DEVICES = 8, AUDIT_KEEP = 1000, PUSH_PER_DEVICE = 2, ALERTS_KEEP = 1000, ALERTS_MAX_AGE_MS = 7 * 86_400_000;
 export const validPort = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 1024 && value <= 65535;
 const clip = (value: string | null | undefined, max: number) => value == null ? null : value.slice(0, max);
@@ -45,7 +48,7 @@ export class RemoteStore {
   countDevices(): number { return Number(this.db.prepare('SELECT COUNT(*) AS n FROM remote_devices').get()?.n ?? 0); }
   touch(id: string, now: string): void { this.db.prepare('UPDATE remote_devices SET last_seen=? WHERE id=?').run(now, id); }
   /** Apaga o aparelho e, junto, o que está ligado a ele (assinaturas de push e preferências de alerta; a FK em cascata também faz isso, aqui é explícito). */
-  revokeDevice(id: string): boolean { this.db.prepare('DELETE FROM remote_pin_state WHERE key=?').run(id); this.db.prepare('DELETE FROM remote_push WHERE device_id=?').run(id); this.db.prepare('DELETE FROM remote_alert_prefs WHERE device_id=?').run(id); return this.db.prepare('DELETE FROM remote_devices WHERE id=?').run(id).changes === 1; }
+  revokeDevice(id: string): boolean { this.db.prepare('DELETE FROM remote_pin_state WHERE key=?').run(id); this.db.prepare('DELETE FROM remote_confirms WHERE device_id=?').run(id); this.db.prepare('DELETE FROM remote_push WHERE device_id=?').run(id); this.db.prepare('DELETE FROM remote_alert_prefs WHERE device_id=?').run(id); return this.db.prepare('DELETE FROM remote_devices WHERE id=?').run(id).changes === 1; }
   pinState(key: string): PinStateRow | null { const r = this.db.prepare('SELECT fails, level, locked_until, day FROM remote_pin_state WHERE key=?').get(key); return r ? {fails: Number(r.fails), level: Number(r.level), lockedUntil: Number(r.locked_until), day: r.day == null ? null : String(r.day)} : null; }
   setPinState(key: string, s: PinStateRow): void { this.db.prepare('INSERT INTO remote_pin_state (key, fails, level, locked_until, day) VALUES (?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET fails=excluded.fails, level=excluded.level, locked_until=excluded.locked_until, day=excluded.day').run(key, s.fails, s.level, s.lockedUntil, s.day); }
   clearPinState(key?: string): void { if (key) this.db.prepare('DELETE FROM remote_pin_state WHERE key=?').run(key); else this.db.exec('DELETE FROM remote_pin_state'); }
@@ -84,6 +87,45 @@ export class RemoteStore {
   listAlerts(limit = 50): RemoteAlert[] {
     return this.db.prepare('SELECT id, at, kind, profile_id, label, text FROM remote_alerts ORDER BY at DESC, rowid DESC LIMIT ?').all(Math.min(Math.max(1, limit | 0), 200)).map(r => ({id: String(r.id), at: String(r.at), kind: String(r.kind) as AlertKind, profileId: String(r.profile_id), label: String(r.label), text: String(r.text)}));
   }
+  // --- R4: teto diário, confirmações de compra e histórico de compras do celular ---
+  setDailyCapGold(value: number): void { if (!Number.isInteger(value) || value < 0 || value > MAX_CAP_GOLD) throw new Error('Teto inválido'); this.db.prepare('UPDATE workspace_settings SET remote_daily_cap_gold=? WHERE id=1').run(value); }
+  spentToday(day: string, profileId: string): number { return Number(this.db.prepare('SELECT gold FROM remote_spend WHERE day=? AND profile_id=?').get(day, profileId)?.gold ?? 0); }
+  spendOfDay(day: string): {profileId: string; gold: number}[] { return this.db.prepare('SELECT profile_id, gold FROM remote_spend WHERE day=? ORDER BY profile_id').all(day).map(r => ({profileId: String(r.profile_id), gold: Number(r.gold)})); }
+  /** Reserva ATÔMICA do teto: confere e soma na mesma transação (BEGIN IMMEDIATE). false = estouraria o teto do dia desta conta. */
+  reserveSpend(day: string, profileId: string, amount: number, cap: number, tz: string): boolean {
+    if (!Number.isInteger(amount) || amount < 0) return false;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = Number(this.db.prepare('SELECT gold FROM remote_spend WHERE day=? AND profile_id=?').get(day, profileId)?.gold ?? 0);
+      if (current + amount > cap) { this.db.exec('ROLLBACK'); return false; }
+      this.db.prepare('INSERT INTO remote_spend (day, profile_id, gold, tz) VALUES (?, ?, ?, ?) ON CONFLICT(day, profile_id) DO UPDATE SET gold=gold+excluded.gold, tz=excluded.tz').run(day, profileId, amount, tz.slice(0, 64));
+      this.db.exec('COMMIT'); return true;
+    } catch (error) { try { this.db.exec('ROLLBACK'); } catch { /* já desfeito */ } throw error; }
+  }
+  /** Devolve parte da reserva (compra que falhou ou custou menos); nunca fica negativo. */
+  releaseSpend(day: string, profileId: string, amount: number): void { if (amount > 0) this.db.prepare('UPDATE remote_spend SET gold=MAX(0, gold-?) WHERE day=? AND profile_id=?').run(Math.floor(amount), day, profileId); }
+  /** Uma confirmação ativa por aparelho: o plano novo invalida os anteriores ainda não usados. */
+  addConfirm(c: ConfirmRow): void {
+    this.db.prepare('UPDATE remote_confirms SET used=1 WHERE device_id=? AND used=0').run(c.deviceId);
+    this.db.prepare('DELETE FROM remote_confirms WHERE created_at < ?').run(c.createdAt - 86_400_000);
+    this.db.prepare('INSERT INTO remote_confirms (id, device_id, plan_hash, plan_json, created_at, expires_at, used) VALUES (?, ?, ?, ?, ?, ?, 0)').run(c.id, c.deviceId, c.planHash, c.planJson, c.createdAt, c.expiresAt);
+  }
+  getConfirm(id: string): ConfirmRow | null {
+    const r = this.db.prepare('SELECT id, device_id, plan_hash, plan_json, created_at, expires_at, used, idem_key, result_json FROM remote_confirms WHERE id=?').get(id);
+    return r ? {id: String(r.id), deviceId: String(r.device_id), planHash: String(r.plan_hash), planJson: String(r.plan_json), createdAt: Number(r.created_at), expiresAt: Number(r.expires_at), used: Number(r.used) !== 0, idemKey: r.idem_key == null ? null : String(r.idem_key), resultJson: r.result_json == null ? null : String(r.result_json)} : null;
+  }
+  /** Marca como usada de forma atômica (UPDATE condicional): só UM chamador recebe true. */
+  markConfirmUsed(id: string, idemKey: string | null): boolean { return this.db.prepare('UPDATE remote_confirms SET used=1, idem_key=? WHERE id=? AND used=0').run(idemKey, id).changes === 1; }
+  setConfirmResult(id: string, json: string): void { this.db.prepare('UPDATE remote_confirms SET result_json=? WHERE id=?').run(json.slice(0, 20_000), id); }
+  findIdem(deviceId: string, key: string): ConfirmRow | null { const r = this.db.prepare('SELECT id FROM remote_confirms WHERE device_id=? AND idem_key=?').get(deviceId, key); return r ? this.getConfirm(String(r.id)) : null; }
+  addPurchase(p: Omit<PurchaseRow, 'id'>): void {
+    this.db.prepare('INSERT INTO remote_purchases (at, device_id, device_name, profile_id, confirm_id, plan_hash, item, qty, unit_price, total, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(p.at, clip(p.deviceId, 64), clip(p.deviceName, 60), p.profileId, p.confirmId, p.planHash, p.item.slice(0, 60), p.qty, p.unitPrice, p.total, p.result.slice(0, 120));
+  }
+  /** Histórico de compras (tabela sem poda); o painel mostra as últimas 50. */
+  listPurchases(limit = 50): PurchaseRow[] {
+    return this.db.prepare('SELECT id, at, device_id, device_name, profile_id, confirm_id, plan_hash, item, qty, unit_price, total, result FROM remote_purchases ORDER BY id DESC LIMIT ?').all(Math.min(Math.max(1, limit | 0), 50)).map(r => ({id: Number(r.id), at: String(r.at), deviceId: r.device_id == null ? null : String(r.device_id), deviceName: r.device_name == null ? null : String(r.device_name), profileId: String(r.profile_id), confirmId: r.confirm_id == null ? null : String(r.confirm_id), planHash: r.plan_hash == null ? null : String(r.plan_hash), item: String(r.item), qty: Number(r.qty), unitPrice: Number(r.unit_price), total: Number(r.total), result: String(r.result)}));
+  }
+  countPurchases(): number { return Number(this.db.prepare('SELECT COUNT(*) AS n FROM remote_purchases').get()?.n ?? 0); }
   close(): void { this.db.close(); }
   private toDevice(row: Record<string, unknown>): DeviceRow { return {id: String(row.id), name: String(row.name), createdAt: String(row.created_at), lastSeen: row.last_seen == null ? null : String(row.last_seen), canAct: Number(row.can_act) !== 0}; }
 }

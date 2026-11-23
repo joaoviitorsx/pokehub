@@ -46,6 +46,10 @@ Automação em jogo pode ser vista como violação dos termos: o risco da conta 
 
 Desligado por padrão; ver `docs/ACESSO-REMOTO.md`. Com ele ligado, o PC escuta só na rede doméstica; as únicas conexões de saída que ele cria são as notificações push descritas em “O que sai do seu computador”, e só para celulares que você pareou e que ativaram as notificações. O histórico de alertas (7 dias, até 1.000) e as assinaturas de push ficam no `pokehub.sqlite`; revogar ou expirar o aparelho apaga as assinaturas e as preferências dele.
 
+### O que o celular pode fazer (R4)
+
+Só aparelhos com **“Pode agir”** (ligado por você no PC, com confirmação do sistema) e só com o **PIN** de 6 dígitos que você definiu no PC (verificado no PC, com bloqueios 15 min → 1 h → 24 h, revogação e desligamento das ações após 10 erros no dia). O celular pode: comprar **pokébolas, poções e revives no Market do jogo, só com ouro**, do catálogo da Loja; recarregar, suspender e retomar contas; ligar/desligar o Modo leve. Ele **não** compra nada no Mercado da Comunidade (gemas/dinheiro real), não digita senha e não vê e-mail. Cada compra vale por uma confirmação **emitida pelo PC** (uso único, 60 s, ligada ao hash do plano), o preço é lido de novo no jogo antes de comprar, existe um **teto diário por conta** (padrão 200.000 de ouro, só editável no PC; aumentar pede confirmação do sistema) e toda ação gera aviso no PC, registro de auditoria e, nas compras, notificação push e linha no histórico (`remote_purchases`, sem poda, no `pokehub.sqlite`). “Lembrar o PIN por 10 min” fica só na memória do PC e cai ao revogar, trocar o PIN, bloquear, desligar o acesso ou mudar de rede; compras acima de 50% do teto restante pedem o PIN sempre.
+
 ## Como apagar seus dados
 
 - **Uma conta**: Gerenciar → Contas → editar o perfil → apagar o perfil e os dados da sessão (irreversível; pode exigir novo login).

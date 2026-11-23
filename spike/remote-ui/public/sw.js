@@ -19,7 +19,7 @@ self.addEventListener('fetch', event => {
 // Lógica pura em escopo de topo (spike/tests/remote-push.test.ts carrega este arquivo e a testa).
 const PUSH_MAX_BYTES = 4096;
 const PUSH_URL_RE = /^#(alertas|contas|conta\/[0-9a-f-]{36})$/;
-const PUSH_TITLES = {shiny: '✨ Shiny capturado!', p5: 'P5 capturado', recorde: 'Recorde!', nota: 'Nota alta', conta_caiu: 'Conta caiu', conta_voltou: 'Conta voltou'};
+const PUSH_TITLES = {shiny: '✨ Shiny capturado!', p5: 'P5 capturado', recorde: 'Recorde!', nota: 'Nota alta', conta_caiu: 'Conta caiu', conta_voltou: 'Conta voltou', acao: 'Ação pelo celular'};
 function pushSafeUrl(url) { return typeof url === 'string' && PUSH_URL_RE.test(url) ? url : '#alertas'; }
 function pushClip(value, max) { return typeof value === 'string' ? value.slice(0, max) : ''; }
 /** Texto → {kind,label,text,at,url} válido, ou null (vazio, grande demais, JSON ruim, tipo desconhecido). */

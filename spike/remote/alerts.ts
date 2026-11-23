@@ -146,6 +146,14 @@ export function createAlertEngine(deps: AlertEngineDeps) {
     const results = await Promise.all(deps.store.pushOf(deviceId).map(s => sendOne(push, s.id, s, body, 'normal')));
     return results.filter(Boolean).length;
   }
+  /** Aviso de ação feita pelo celular (compra): push a todos os aparelhos pareados com notificações, sem agrupar (uma por confirmação). */
+  async function notifyAction(label: string, text: string): Promise<number> {
+    const push = deps.push(); if (!push) return 0;
+    let body: string; try { body = buildPayload({kind: 'acao', label, text, at: iso(), url: '#alertas'}); } catch { return 0; }
+    const jobs: Promise<boolean>[] = [];
+    for (const device of deps.store.listDevices()) for (const sub of deps.store.pushOf(device.id)) jobs.push(sendOne(push, sub.id, sub, body, 'normal'));
+    return (await Promise.all(jobs)).filter(Boolean).length;
+  }
   /** Assina o push do aparelho; false = endpoint fora da allowlist ou chaves inválidas. */
   function subscribe(deviceId: string, sub: {endpoint: unknown; p256dh: unknown; auth: unknown}): boolean {
     const url = validateEndpoint(sub.endpoint);
@@ -158,7 +166,7 @@ export function createAlertEngine(deps: AlertEngineDeps) {
     update(); return ok;
   }
   return {
-    reportState, update, onCaptures, sendTest, subscribe, unsubscribe: unsubscribeDevice,
+    reportState, update, onCaptures, sendTest, notifyAction, subscribe, unsubscribe: unsubscribeDevice,
     listCaptures(deviceId: string, q: {profileId?: string; onlyAlerts?: boolean; limit?: number}): RemoteCapture[] {
       const prefs = prefsOr(deps.store.getPrefs(deviceId));
       return deps.captures.list({...q, notaMin: prefs.notaMin}).map(toRemote).filter((c): c is RemoteCapture => c !== null);

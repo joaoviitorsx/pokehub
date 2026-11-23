@@ -27,4 +27,28 @@ export interface AlertPrefs { shiny: boolean; p5: boolean; recorde: boolean; not
 export const DEFAULT_ALERT_PREFS: AlertPrefs = { shiny: true, p5: true, recorde: false, notaMin: null, contaCaiu: true };
 /** Destinos permitidos no campo url do payload de push (hashes relativos do app do celular). */
 export const PUSH_URL_PATTERN = /^#(?:alertas|contas|conta\/[\w-]{1,64})$/;
-export interface PushPayload { kind: AlertKind; label: string; text: string; at: string; url: string }
+export interface PushPayload { kind: AlertKind | 'acao'; label: string; text: string; at: string; url: string }
+
+// --- R4: compras e ações pelo celular (contrato com o app do celular). Nada aqui carrega emailLabel, token, PIN nem caminho. ---
+export type ShopCatR = 'Pokebolas' | 'Poções' | 'Revives';
+export interface RemoteShopItem { cat: ShopCatR; name: string; have: number; price: number }
+export interface RemoteShopAccount { profileId: string; label: string; gold: number | null; items: RemoteShopItem[]; error?: string }
+export interface RemotePlanLine { cat: ShopCatR; name: string; have: number; qty: number; unitPrice: number; total: number; fits: boolean; note?: string }
+export interface RemotePlanAccount {
+  profileId: string; label: string; goldBefore: number | null; goldAfter: number | null; lines: RemotePlanLine[]; total: number;
+  /** Teto diário do celular: sobra antes e depois desta compra (ouro). */ capRemaining: number; capAfter: number; executable: boolean; error?: string;
+}
+export interface RemotePlan { accounts: RemotePlanAccount[]; total: number; needsPin: boolean; dailyCapGold: number; mode: 'manual' | 'kit'; kitName?: string }
+export interface ShopPlanReply { confirmId: string; planHash: string; expiresAt: number; plan: RemotePlan; elevated: boolean }
+export interface RemoteLineResult { name: string; qty: number; status: 'ok' | 'erro' | 'pulada'; bought?: number; spent?: number; error?: string }
+export interface RemoteAccountResult { profileId: string; label: string; status: 'ok' | 'parcial' | 'abortada'; spent: number; lines: RemoteLineResult[]; error?: string }
+export interface ShopConfirmReply { confirmId: string; spent: number; accounts: RemoteAccountResult[] }
+/** Evento SSE `shop`: progresso ao vivo da compra confirmada (só para o aparelho que confirmou). */
+export type ShopEvent =
+  | {kind: 'start'; confirmId: string; accounts: {profileId: string; label: string; lines: number}[]}
+  | {kind: 'line'; confirmId: string; profileId: string; label: string; line: number; name: string; qty: number; status: 'buying' | 'ok' | 'error' | 'skipped'; spent?: number | null; error?: string}
+  | {kind: 'done'; confirmId: string; result: ShopConfirmReply};
+/** Estado das ações deste aparelho (parte de GET /api/me). */
+export interface ActionsState { canAct: boolean; pinSet: boolean; actionsDisabled: boolean; lockedMs: number; elevatedMs: number; dailyCapGold: number; lite: boolean }
+export interface RemotePurchase { id: number; at: string; deviceId: string | null; deviceName: string | null; profileId: string; label: string; item: string; qty: number; unitPrice: number; total: number; result: string }
+export interface RemoteSpend { profileId: string; label: string; gold: number; capGold: number }

@@ -13,6 +13,7 @@ import { MAX_DEVICES, type DeviceRow, type RemoteStore } from './store';
 import { caFingerprint, mobileconfig, type CertSet } from './certs';
 import { parsePrefs } from './alerts';
 import type { AlertPrefs, RemoteAlert, RemoteCapture } from '../contracts/remote';
+import type { Actions } from './actions';
 
 export interface RemoteAccount { id: string; label: string; color: string; state: string; suspended: boolean }
 export interface RemoteApi {
@@ -37,6 +38,8 @@ export interface ServerDeps {
   /** O mesmo código certo chegou de novo enquanto o pedido está aberto: alguém mais o conhece. */
   onContested?(): void;
   uiDir: string; iconPath: string; now?: () => number; alerts?: AlertsApi;
+  /** R4: compras e ações pelo celular (Loja, recarregar/suspender/retomar, Modo leve, elevação por PIN). Sem isto as rotas respondem 404. */
+  actions?: Actions;
   /** Abriu/fechou um fluxo SSE ou um aparelho saiu (revogado/expirado): o motor decide se o leitor de capturas precisa ficar ligado. */
   onActivity?(): void;
   limits?: {general?: number; pair?: number; wait?: number; api?: number}; timing?: {waitMs?: number; abandonMs?: number; maxMs?: number};
@@ -106,7 +109,7 @@ export function createRemoteServer(deps: ServerDeps) {
     }
     return null;
   }
-  function expire(device: DeviceRow, why: string) { deps.store.revokeDevice(device.id); audit(device.id, 'expirado', `${device.name} (${why})`); closeStreams(device.id); lastTouch.delete(device.id); lastRenew.delete(device.id); activity(); }
+  function expire(device: DeviceRow, why: string) { deps.store.revokeDevice(device.id); audit(device.id, 'expirado', `${device.name} (${why})`); closeStreams(device.id); lastTouch.delete(device.id); lastRenew.delete(device.id); deps.actions?.forget(device.id); activity(); }
   /**
    * Aparelho autenticado pelo cookie (hash em tempo constante). Vence por inatividade (30 dias) ou limite absoluto (180);
    * o token roda a cada 24 h (o anterior vale 5 min) e o cookie renova a cada uso (Max-Age 30 dias) pelo `Set-Cookie` da resposta.
@@ -268,6 +271,22 @@ export function createRemoteServer(deps: ServerDeps) {
     return json(res, 200, {ok: true});
   }
 
+  /** POSTs de R4 (JSON ≤ 8 KB, Origin conferido): a lógica e as travas ficam em actions.ts; aqui só entram o corpo, a chave de repetição e o tempo do soquete. */
+  const ACTION_POST = /^\/api\/(elevate|lite|shop\/(read|plan|confirm)|account\/[\w-]{1,64}\/(reload|suspend|resume))$/;
+  async function actionsPost(req: IncomingMessage, res: ServerResponse, device: DeviceRow, path: string) {
+    const a = deps.actions!, body = await readJson(req);
+    if (body === 'big') return fail(res, 413, MSG.big);
+    if (!body) return fail(res, 400, MSG.json);
+    req.socket.setTimeout(path === '/api/shop/confirm' ? 0 : 60_000); // ler/comprar na Loja demora mais que os 30 s ociosos do soquete
+    try {
+      const m = /^\/api\/account\/([\w-]{1,64})\/(reload|suspend|resume)$/.exec(path);
+      const reply = path === '/api/elevate' ? await a.elevate(device, body) : path === '/api/lite' ? await a.lite(device, body)
+        : path === '/api/shop/read' ? await a.shopRead(device, body) : path === '/api/shop/plan' ? await a.shopPlan(device, body)
+        : path === '/api/shop/confirm' ? await a.shopConfirm(device, body, req.headers['idempotency-key']) : await a.account(device, m![1]!, m![2] as 'reload' | 'suspend' | 'resume', body);
+      json(res, reply.status, reply.body, reply.headers ?? {});
+    } finally { try { req.socket.setTimeout(SOCKET_TIMEOUT_MS); } catch { /* soquete já fechado */ } }
+  }
+
   async function route(req: IncomingMessage, res: ServerResponse, ip: string) {
     const url = new URL(req.url ?? '/', 'https://x'), path = url.pathname, method = req.method ?? 'GET';
     if (method !== 'GET' && method !== 'POST') return fail(res, 405, MSG.method, {Allow: 'GET, POST'});
@@ -298,12 +317,13 @@ export function createRemoteServer(deps: ServerDeps) {
     const device = authenticate(req, res);
     if (!device) return fail(res, 401, MSG.auth);
     if (method === 'POST') {
-      if (path === '/api/logout') { deps.store.revokeDevice(device.id); audit(device.id, 'saiu', device.name); closeStreams(device.id); return json(res, 200, {ok: true}, {'Set-Cookie': `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`}); }
+      if (path === '/api/logout') { deps.store.revokeDevice(device.id); audit(device.id, 'saiu', device.name); closeStreams(device.id); deps.actions?.forget(device.id); return json(res, 200, {ok: true}, {'Set-Cookie': `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`}); }
       if (deps.alerts && /^\/api\/(alerts\/prefs|push\/(subscribe|unsubscribe|test))$/.test(path)) return alertsPost(req, res, device, path);
+      if (deps.actions && ACTION_POST.test(path)) return actionsPost(req, res, device, path);
       return fail(res, 404, MSG.notFound);
     }
     const idMatch = /^\/api\/(hunt|market)\/([\w-]{1,64})$/.exec(path);
-    if (path === '/api/me') return json(res, 200, {name: device.name, canAct: device.canAct, pinSet: deps.store.getPinHash() !== null});
+    if (path === '/api/me') return json(res, 200, {name: device.name, canAct: device.canAct, pinSet: deps.store.getPinHash() !== null, ...(deps.actions ? {actions: deps.actions.state(device)} : {})});
     if (path === '/api/state') return json(res, 200, {accounts: deps.api.accounts()});
     if (path === '/api/diag') return json(res, 200, deps.api.diag());
     if (path === '/api/events') return events(req, res, device);
@@ -386,7 +406,7 @@ export function createRemoteServer(deps: ServerDeps) {
       for (const [res, deviceId] of [...streams]) { if (filter && !filter(deviceId)) continue; if (isBackedUp(res)) { drop(res); continue; } try { res.write(frame); } catch { streams.delete(res); } } // quem não acompanha é desconectado (contrapressão)
     },
     /** Revogação: apaga o aparelho e derruba na hora os fluxos SSE dele. */
-    revoke(deviceId: string): boolean { const ok = deps.store.revokeDevice(deviceId); closeStreams(deviceId); lastTouch.delete(deviceId); lastRenew.delete(deviceId); activity(); return ok; },
+    revoke(deviceId: string): boolean { const ok = deps.store.revokeDevice(deviceId); closeStreams(deviceId); lastTouch.delete(deviceId); lastRenew.delete(deviceId); deps.actions?.forget(deviceId); activity(); return ok; },
     sweepExpired,
     streamCount: () => streams.size,
     connectionCount: () => sockets.size,

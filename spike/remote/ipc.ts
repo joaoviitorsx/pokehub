@@ -25,4 +25,8 @@ export function registerRemoteIpc(ipcMain: Pick<IpcMain, 'handle'>, trusted: (ev
   handle('remote:audit', () => hub.audit());
   handle('remote:push-test', id => hub.pushTest(id));
   handle('remote:alerts', () => hub.alerts(20));
+  // R4: histórico de compras do celular, gasto de hoje e teto diário (editável SÓ aqui, no PC)
+  const spend = () => ({purchases: hub.purchases(), spend: hub.spendToday(), capGold: hub.status().dailyCapGold});
+  handle('remote:purchases', () => spend());
+  handle('remote:set-cap', async value => { await hub.setDailyCap(value); return spend(); });
 }

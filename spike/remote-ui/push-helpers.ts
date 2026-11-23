@@ -68,7 +68,7 @@ export const isRemoteCapture = (x: unknown): x is RemoteCapture => { const c = x
 export const detectIos = (ua: string, platform = '', touch = 0) => /iPad|iPhone|iPod/.test(ua) || (platform === 'MacIntel' && touch > 1);
 
 export type Tab = 'contas' | 'conta' | 'loja' | 'mercado' | 'alertas';
-const LIVE_TABS: readonly string[] = ['contas', 'conta', 'mercado', 'alertas'];
+const LIVE_TABS: readonly string[] = ['contas', 'conta', 'loja', 'mercado', 'alertas'];
 /** #alertas, #contas, #conta/<id> (o que o push manda) e os links antigos (#conta, #mercado, #saude). Abas "em breve" caem em Contas. */
 export function resolveHash(hash: string): {tab: Tab; account?: string} {
   const h = hash.replace(/^#/, ''), m = /^conta\/(.+)$/.exec(h);

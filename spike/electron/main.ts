@@ -10,6 +10,7 @@ import { createMarketReader } from './market-read';
 import { createShop, SHOP_UNAVAILABLE } from './shop';
 import { createCaptureService, parseQuery } from './captures';
 import { alertsOf, alertText } from '../domain/captures';
+import type { ShopProgress } from '../domain/shop';
 import { isAllowedSessionNavigation, isOAuthProviderUrl } from './navigation';
 import { ProfileStore } from './profile-store';
 import { partitionFor } from './partition';
@@ -392,6 +393,29 @@ function readMetrics() {
 }
 if (process.platform === 'win32') app.setAppUserModelId('local.pokehub.desktop'); // a barra de tarefas usa o ícone do app (mesmo appId do electron-builder)
 // Bandeja: a janela some, as sessões continuam vivas (views intactas); só o ícone fica nos ícones ocultos.
+// Ações de conta compartilhadas: o IPC do PC e o acesso remoto (celular, com PIN e "Pode agir") chamam exatamente as mesmas funções.
+const SUSPEND_FAILED = 'Não foi possível suspender a conta.';
+function reloadAccount(id: unknown) { if (typeof id !== 'string' || resetting.has(id) || !views.has(id)) throw new Error(); views.get(id)?.webContents.reload(); }
+async function suspendAccount(id: unknown): Promise<{ok:true;data:undefined} | {ok:false;error:string}> {
+  if (typeof id !== 'string' || resetting.has(id) || suspended.has(id) || !views.has(id) || !store.list().some(profile => profile.id === id)) return {ok:false,error:SUSPEND_FAILED};
+  resetting.add(id); suspended.add(id);
+  try {
+    await closeViewAwaited(id);
+    if (!window.isDestroyed()) { report(id,'suspended'); arrange(); }
+    refreshTray.call();
+    return {ok:true,data:undefined};
+  } catch { suspended.delete(id); return {ok:false,error:SUSPEND_FAILED}; }
+  finally { resetting.delete(id); }
+}
+function resumeAccount(id: unknown) {
+  if (typeof id !== 'string' || resetting.has(id) || !suspended.has(id) || !store.list().some(profile => profile.id === id)) throw new Error();
+  suspended.delete(id);
+  if (!openView(id)) { suspended.add(id); throw new Error(); }
+  report(id,'loading'); arrange(); refreshTray.call();
+}
+function setLiteMode(lite: boolean): boolean {
+  try { perf = preferences.setPerformance({lite}); arrange(); updateTray(); if (!window.isDestroyed()) window.webContents.send('performance:changed',perf); return true; } catch { console.error('Falha ao salvar o Modo leve.'); return false; }
+}
 function showWindow() {
   if (!window || window.isDestroyed()) return;
   if (window.isMinimized()) window.restore();
@@ -417,7 +441,7 @@ function updateTray() {
       profiles, states, lite:perf.lite, open:showWindow, quit:() => app.quit(),
       remote:remote ? {enabled:remote.enabled(), toggle:() => { void remote?.setEnabled(!remote.enabled()).catch(() => console.error('Falha ao alternar o acesso remoto.')).finally(() => { refreshTray.call(); if (!window.isDestroyed()) window.webContents.send('remote:changed'); }); }} : undefined,
       focus:id => { showWindow(); if (window.isDestroyed() || !store.list().some(profile => profile.id === id)) return; focused = id; arrange(); window.webContents.send('workspace:focus',id); },
-      setLite:lite => { try { perf = preferences.setPerformance({lite}); arrange(); updateTray(); if (!window.isDestroyed()) window.webContents.send('performance:changed',perf); } catch { console.error('Falha ao salvar o Modo leve.'); } },
+      setLite:lite => { setLiteMode(lite); },
     })));
   } catch { console.error('Falha ao atualizar a bandeja.'); }
 }
@@ -548,7 +572,8 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('market:readAll', async (event,id: unknown) => trusted(event) ? marketReader.readAll(id) : {ok:false,error:MARKET_UNAVAILABLE});
   ipcMain.handle('market:stop', (event,id: unknown) => trusted(event) ? {ok:true,data:marketReader.stop(id)} : {ok:false,error:MARKET_UNAVAILABLE});
   // Loja rápida (Market do jogo): leitura/compra só a pedido da janela do PokéHub, depois da confirmação do usuário (ver spike/electron/shop.ts).
-  const shop = createShop({known:() => store.list().map(profile => profile.id), target:marketTarget, lock:accountLock, emit:progress => { if (!window.isDestroyed()) window.webContents.send('shop:progress',progress); }});
+  let remoteShopProgress: ((progress: ShopProgress) => void) | null = null; // compra pedida pelo celular: o progresso vai para ele (SSE), não para a tela do PC
+  const shop = createShop({known:() => store.list().map(profile => profile.id), target:marketTarget, lock:accountLock, emit:progress => { if (remoteShopProgress) remoteShopProgress(progress); else if (!window.isDestroyed()) window.webContents.send('shop:progress',progress); }});
   ipcMain.handle('shop:read', async (event,id: unknown) => trusted(event) ? shop.read(id) : {ok:false,error:SHOP_UNAVAILABLE});
   ipcMain.handle('shop:run', async (event,plan: unknown) => trusted(event) ? shop.run(plan) : {ok:false,error:SHOP_UNAVAILABLE});
   ipcMain.handle('shop:stop', event => trusted(event) ? {ok:true,data:shop.stop()} : {ok:false,error:SHOP_UNAVAILABLE});
@@ -581,7 +606,7 @@ if (primary) app.whenReady().then(() => {
     focused = id; editing = false; sideOpen = side; arrange();
   }));
   ipcMain.handle('session:drag', (event,active: unknown) => invoke(event, () => { if (typeof active !== 'boolean') throw new Error(); if (active || dragging) setDrag(active); }));
-  ipcMain.handle('session:reload', (event,id: unknown) => invoke(event, () => { if (typeof id !== 'string' || resetting.has(id) || !views.has(id)) throw new Error(); views.get(id)?.webContents.reload(); }));
+  ipcMain.handle('session:reload', (event,id: unknown) => invoke(event, () => reloadAccount(id)));
   ipcMain.handle('session:restart', async (event,id: unknown) => {
     if (!trusted(event) || typeof id !== 'string' || resetting.has(id)) return {ok:false,error:'Não foi possível reabrir a sessão.'};
     resetting.add(id);
@@ -594,23 +619,8 @@ if (primary) app.whenReady().then(() => {
     finally { resetting.delete(id); }
   });
   // Suspender fecha só a view (libera o renderer); a partição e o login ficam. O estado vive em memória: ao reiniciar o app todas abrem.
-  ipcMain.handle('session:suspend', async (event,id: unknown) => {
-    if (!trusted(event) || typeof id !== 'string' || resetting.has(id) || suspended.has(id) || !views.has(id) || !store.list().some(profile => profile.id === id)) return {ok:false,error:'Não foi possível suspender a conta.'};
-    resetting.add(id); suspended.add(id);
-    try {
-      await closeViewAwaited(id);
-      if (!window.isDestroyed()) { report(id,'suspended'); arrange(); }
-      refreshTray.call();
-      return {ok:true,data:undefined};
-    } catch { suspended.delete(id); return {ok:false,error:'Não foi possível suspender a conta.'}; }
-    finally { resetting.delete(id); }
-  });
-  ipcMain.handle('session:resume', (event,id: unknown) => invoke(event, () => {
-    if (typeof id !== 'string' || resetting.has(id) || !suspended.has(id) || !store.list().some(profile => profile.id === id)) throw new Error();
-    suspended.delete(id);
-    if (!openView(id)) { suspended.add(id); throw new Error(); }
-    report(id,'loading'); arrange(); refreshTray.call();
-  }));
+  ipcMain.handle('session:suspend', async (event,id: unknown) => trusted(event) ? suspendAccount(id) : {ok:false,error:SUSPEND_FAILED});
+  ipcMain.handle('session:resume', (event,id: unknown) => invoke(event, () => resumeAccount(id)));
   ipcMain.handle('session:clear', async (event,id: unknown,full: unknown) => {
     if (!trusted(event) || typeof id !== 'string' || resetting.has(id)) return {ok:false,error:'Não foi possível limpar a sessão.'};
     const view = views.get(id);
@@ -646,7 +656,12 @@ if (primary) app.whenReady().then(() => {
   const trayEvent = (event: TrayEvent) => trayAction({event, platform:process.platform, prefs:trayPrefs, quitting, hasTray:tray !== null});
   window.on('close', event => { if (trayEvent('close') === 'hide') { event.preventDefault(); hideToTray(); } });
   window.on('minimize', () => { if (trayEvent('minimize') === 'hide') hideToTray(); });
-  remote = createRemoteHub({dbPath:databasePath, dir:join(app.getPath('userData'),'remote'), uiDir:join(__dirname,'../../dist-remote'), iconPath:join(__dirname,'../../build/icon.png'), api:remoteApi.api, alerts:{captures, profiles:() => store.list().map(profile => ({id:profile.id, label:profile.label, colorToken:profile.colorToken})), fetcher:(url,init) => net.fetch(url,init as RequestInit)}, running:() => runningCount(store.list(),states), blocker:powerSaveBlocker, onChange:() => refreshTray.call(), onPairRequest:showWindow, secretBox:(() => { try { return safeStorage.isEncryptionAvailable() ? {encrypt:(text:string) => safeStorage.encryptString(text), decrypt:(data:Buffer) => safeStorage.decryptString(data)} : undefined; } catch { return undefined; } })(), nativeConfirm:async o => (await dialog.showMessageBox(window,{type:'warning', title:o.title, message:o.message, detail:o.detail, buttons:['Recusar',o.confirmLabel], defaultId:0, cancelId:0, noLink:true})).response === 1});
+  remote = createRemoteHub({dbPath:databasePath, dir:join(app.getPath('userData'),'remote'), uiDir:join(__dirname,'../../dist-remote'), iconPath:join(__dirname,'../../build/icon.png'), api:remoteApi.api, alerts:{captures, profiles:() => store.list().map(profile => ({id:profile.id, label:profile.label, colorToken:profile.colorToken})), fetcher:(url,init) => net.fetch(url,init as RequestInit)}, actions:{
+    shop:{read:id => shop.read(id), run:async (plan,onProgress) => { if (shop.isRunning()) return {ok:false as const,error:'Já existe uma operação da Loja em andamento.'}; remoteShopProgress = onProgress; try { return await shop.run(plan); } finally { remoteShopProgress = null; } }},
+    account:{reload:async id => { try { reloadAccount(id); return {ok:true}; } catch { return {ok:false,error:'Não foi possível recarregar a conta.'}; } }, suspend:async id => { const r = await suspendAccount(id); return r.ok ? {ok:true} : {ok:false,error:r.error}; },
+      resume:async id => { try { resumeAccount(id); return {ok:true}; } catch { return {ok:false,error:'Não foi possível retomar a conta.'}; } }, setLite:on => setLiteMode(on) ? {ok:true} : {ok:false,error:'Não foi possível mudar o Modo leve.'}, lite:() => perf.lite},
+    notify:(title,body) => { try { if (process.platform === 'win32' && tray && !tray.isDestroyed()) tray.displayBalloon({title,content:body,iconType:'info'}); else if (Notification.isSupported()) new Notification({title,body}).show(); } catch { console.error('Falha ao avisar no PC.'); } }},
+  running:() => runningCount(store.list(),states), blocker:powerSaveBlocker, onChange:() => refreshTray.call(), onPairRequest:showWindow, secretBox:(() => { try { return safeStorage.isEncryptionAvailable() ? {encrypt:(text:string) => safeStorage.encryptString(text), decrypt:(data:Buffer) => safeStorage.decryptString(data)} : undefined; } catch { return undefined; } })(), nativeConfirm:async o => (await dialog.showMessageBox(window,{type:'warning', title:o.title, message:o.message, detail:o.detail, buttons:['Recusar',o.confirmLabel], defaultId:0, cancelId:0, noLink:true})).response === 1});
   registerRemoteIpc(ipcMain,trusted,remote);
   void remote.boot().catch(() => console.error('Falha ao iniciar o acesso remoto.'));
   createTray();
