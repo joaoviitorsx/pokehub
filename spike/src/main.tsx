@@ -14,6 +14,7 @@ import { HuntSide, loadSidePrefs, saveSidePrefs } from './hunt-side';
 import type { HuntSnapshot } from '../contracts/hunt';
 import type { MarketScan } from '../domain/market';
 import type { MarketProgress } from '../domain/market-session';
+import type { ShopLineResult, ShopOrder, ShopPlanEntry, ShopProgress, ShopRead } from '../domain/shop';
 import { columns, COL_HEAD, MAX_PROFILES, sideWidth, TOP_BAR } from '../electron/layout';
 
 type Result<T> = {ok:true; data:T} | {ok:false; error:string};
@@ -25,6 +26,7 @@ declare global { interface Window { pokehub: {
  list(): Promise<Result<Profile[]>>; initialFocus():Promise<Result<string|null>>; getPreferences():Promise<Result<StartupMode>>; setStartupMode(mode:StartupMode):Promise<Result<StartupMode>>; create(input:ProfileInput): Promise<Result<Profile>>; update(id:string,input:ProfileInput): Promise<Result<Profile>>; remove(id:string): Promise<Result<void>>;
  layout(id:string|null,hide:boolean,side:boolean,panel?:number,account?:string|null): Promise<Result<void>>; onToggleExpand(callback:(id:string|null)=>void):()=>void; drag(active:boolean): Promise<Result<void>>; huntSnapshot(id:string,soLiberadas?:boolean):Promise<Result<HuntSnapshot>>; onToggleSide(callback:()=>void):()=>void; reload(id:string): Promise<Result<void>>; restart(id:string): Promise<Result<void>>; clearSession(id:string): Promise<Result<void>>; states(): Promise<Result<Record<string,string>>>; diagnostics():Promise<Result<DiagnosticsSample>>; onStatus(callback:(status:Status)=>void):()=>void; onFocus(callback:(id:string|null)=>void):()=>void; autoFocus():Promise<Result<string|null>>; onAutoFocus(callback:(id:string|null)=>void):()=>void;
  market: {scan(id:string):Promise<Result<MarketScan>>; readAll(id:string):Promise<Result<void>>; stop(id:string):Promise<Result<boolean>>; onProgress(callback:(progress:MarketProgress)=>void):()=>void};
+ shop: {read(id:string):Promise<Result<ShopRead>>; buy(id:string,order:ShopOrder):Promise<Result<{before:number;after:number;bought:number;spent:number|null}>>; run(plan:ShopPlanEntry[]):Promise<Result<ShopLineResult[]>>; stop():Promise<Result<boolean>>; onProgress(callback:(progress:ShopProgress)=>void):()=>void};
  extensions: {list():Promise<Result<ExtensionInfo[]>>; detect():Promise<Result<ExtensionInfo[]>>; add():Promise<Result<ExtensionInfo[]>>; toggle(id:string,enabled:boolean):Promise<Result<ExtensionInfo[]>>; remove(id:string):Promise<Result<ExtensionInfo[]>>; approve(id:string,hosts:string[]):Promise<Result<ExtensionInfo[]>>; openStore(id:string):Promise<Result<void>>};
  updates: {get():Promise<Result<UpdateInfo>>; check():Promise<Result<UpdateInfo>>; download():Promise<Result<UpdateInfo>>; install():Promise<Result<void>>; setAuto(enabled:boolean):Promise<Result<UpdateInfo>>; onStatus(callback:(status:UpdateStatus)=>void):()=>void};
 } } }

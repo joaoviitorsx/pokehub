@@ -171,6 +171,20 @@ describe('processo principal', () => {
   expect(await invoke('market:readAll',saved.id)).toEqual(marketFail); // sessão ainda carregando
   expect(await invoke('market:stop',saved.id)).toEqual({ok:true,data:false});
   expect(await invoke('market:stop',42)).toEqual({ok:true,data:false});
+  // Loja rápida: canais exigem origem confiável, perfil conhecido e pedido válido; nada roda em sessão que ainda carrega
+  const shopFail = {ok:false,error:'Não foi possível acessar o Market desta conta.'};
+  for (const channel of ['shop:read','shop:buy','shop:run','shop:stop']) expect(handlers.has(channel)).toBe(true);
+  expect(await handlers.get('shop:read')?.(foreign,saved.id)).toEqual(shopFail);
+  expect(await handlers.get('shop:buy')?.(foreign,saved.id,{})).toEqual(shopFail);
+  expect(await handlers.get('shop:run')?.(foreign,[])).toEqual(shopFail);
+  expect(await handlers.get('shop:stop')?.(foreign)).toEqual(shopFail);
+  for (const id of ['nao-existe',null,42,{id:saved.id}]) expect(await invoke('shop:read',id)).toEqual(shopFail);
+  expect(await invoke('shop:read',saved.id)).toEqual(shopFail); // sessão ainda carregando
+  const shopOrder = {cat:'Pokebolas',name:'Ultra Ball',qty:1,unitPrice:130,total:130};
+  expect(await invoke('shop:buy',saved.id,shopOrder)).toEqual({ok:false,error:'Leia o estoque desta conta antes de comprar.'});
+  expect(await invoke('shop:buy',saved.id,{...shopOrder,cat:'Ovos'})).toEqual({ok:false,error:'Pedido inválido.'});
+  expect(await invoke('shop:run',[{id:saved.id,lines:[{...shopOrder,total:1}]}])).toEqual({ok:false,error:'Pedido inválido.'});
+  expect(await invoke('shop:stop')).toEqual({ok:true,data:false});
   expect(invoke('session:layout',null,false,'sim').ok).toBe(false);
   expect(invoke('session:layout',null,false,true).ok).toBe(true);
   for (const panel of [279,521,300.5,'340',null,NaN]) expect(invoke('session:layout',null,false,true,panel).ok).toBe(false);

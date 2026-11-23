@@ -5,6 +5,7 @@ import type { HuntRow, HuntSnapshot, HuntSprite } from '../contracts/hunt';
 import type { MarketListing, MarketScan } from '../domain/market';
 import type { UpdateInfo, UpdateStatus } from '../contracts/update';
 import type { PerformancePrefs } from '../contracts/preferences';
+import { createMockShop } from './mock-shop';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
 const ok = <T>(data: T): Promise<Result<T>> => new Promise(resolve => setTimeout(() => resolve({ok: true, data}), 40));
@@ -83,6 +84,7 @@ const on = <T>(type: string, cb: (value: T) => void) => { const l = (e: Event) =
 const withExt = () => ok(extensions.map(e => ({...e})));
 const setUpdate = (status: UpdateStatus) => { update = {...update, status}; emit('update', status); };
 
+const shop = createMockShop(() => profiles.map(p => p.id), p => emit('shop-progress', p));
 window.pokehub = {
   list: () => ok(profiles.map(p => ({...p}))),
   getPreferences: () => ok(preferences),
@@ -119,6 +121,13 @@ window.pokehub = {
     },
     stop: () => { const was = reading; stopRead = true; return ok(was); },
     onProgress: cb => on<Parameters<typeof cb>[0]>('market-progress', cb),
+  },
+  shop: {
+    read: id => { const r = shop.read(id); return r; },
+    buy: (id, order) => shop.buy(id, order),
+    run: plan => shop.run(plan),
+    stop: () => ok(shop.stop()),
+    onProgress: cb => on<Parameters<typeof cb>[0]>('shop-progress', cb),
   },
   onToggleSide: cb => on<void>('toggle-side', cb),
   onToggleExpand: cb => on<string | null>('toggle-expand', cb),
