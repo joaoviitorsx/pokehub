@@ -187,6 +187,7 @@ nav { position: relative; flex: 1; min-width: 0; height: 100%; display: flex; al
 .bar .tab { --c: var(--pi-vao-luz); position: relative; flex: 1 1 0; min-width: 40px; max-width: 168px; padding: 0 10px; gap: var(--sp-2); justify-content: flex-start; container: tab / inline-size; }
 .bar .tab > * { flex: none; }
 .tab .name { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.bar .tab .name { text-transform: none; letter-spacing: 0; font-size: 12.5px; } /* nomes em caixa normal cabem melhor; o cabeçalho da coluna repete o nome em destaque */
 /* Aba estreita: vira gema + ponto de estado (o nome continua no title e no aria-label); o nome nunca é cortado no meio sem reticências. */
 
 /* Um só filete para todas as abas; posição e cor vêm de placeIndicator (main.tsx). */
@@ -230,7 +231,7 @@ nav { position: relative; flex: 1; min-width: 0; height: 100%; display: flex; al
 .bar-alert span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar-alert .icon { height: 26px; width: 26px; box-shadow: inset 0 0 0 2px var(--pi-mad-linha); }
 /* Barra estreita (largura da própria barra): some o texto do Perfil e do selo de atualização encurta até virar só o ícone; as ferramentas nunca quebram nem passam por baixo. */
-@container bar (max-width: 1080px) { .brand strong, .seg span { display: none; } .tools .primary { width: 32px; padding: 0; } .tools .primary span { display: none; } .tools button.update .u-long { display: none; } .tools button.update .u-short { display: inline; } }
+@container bar (max-width: 1440px) { .brand strong, .seg span { display: none; } .tools .primary { width: 32px; padding: 0; } .tools .primary span { display: none; } .tools button.update .u-long { display: none; } .tools button.update .u-short { display: inline; } }
 @container bar (max-width: 780px) { .tools button.update { width: 32px; height: 32px; padding: 0; } .tools button.update .u-short { display: none; } nav { padding: 0 var(--sp-1); gap: 6px; } }
 
 /* ---------- Painéis de madeira sobre o xadrez ---------- */
