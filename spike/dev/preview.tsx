@@ -10,8 +10,9 @@ const click = (pattern: RegExp, tries = 40) => {
   if (hit) hit.click(); else if (tries > 0) setTimeout(() => click(pattern, tries - 1), 100);
 };
 const section = new URLSearchParams(location.search).get('section'); // ?panel=manage&section=ext|upd|layout|diag
-const sectionLabel = {ext: /extens/i, upd: /atualiza/i, layout: /layout/i, diag: /diagn/i}[section ?? ''];
+const sectionLabel = {ext: /extens/i, upd: /atualiza/i, layout: /layout/i, diag: /diagn/i, remote: /acesso remoto/i}[section ?? ''];
 if (panel === 'manage') { click(/gerenciar/i); if (sectionLabel) setTimeout(() => [...document.querySelectorAll<HTMLButtonElement>('.manage-nav button')].find(b => sectionLabel.test(b.textContent ?? ''))?.click(), 700); }
+if (panel === 'manage' && section === 'remote' && new URLSearchParams(location.search).get('remote')) setTimeout(() => click(/parear novo aparelho/i), 1500);
 if (panel === 'form') setTimeout(() => document.querySelector<HTMLButtonElement>('.tools .primary')?.click(), 1200);
 if (panel === 'side' || panel === 'market' || panel === 'captures' || panel?.startsWith('shop')) setTimeout(() => { emit('toggle-side'); if (panel !== 'side') setTimeout(() => document.querySelector<HTMLButtonElement>(panel === 'market' ? '.side-tabs button:nth-child(2)' : panel === 'captures' ? '.side-tabs button:nth-child(4)' : '.side-tabs button:nth-child(3)')?.click(), 400); }, 600);
 

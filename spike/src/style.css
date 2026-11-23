@@ -467,7 +467,7 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 .side-poke div span { font-size: 12px; color: var(--pi-vao-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-bonus { flex: none; padding: 2px 8px; border-radius: 5px; font-size: 11px; font-weight: 700; color: var(--pi-ouro); background: var(--pi-campo); box-shadow: inset 0 0 0 1px var(--pi-mad-linha), 0 2px 0 var(--pi-mad-linha); cursor: help; }
 .side-body .seg { margin: 0; background: var(--pi-campo); }
-.side-opts { display: flex; align-items: center; gap: 8px; }
+.side-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; } /* lateral estreita (compacta + barra de rolagem): a fileira quebra em vez de vazar */
 .side-opts .opt, .mkt-row .opt { height: 26px; padding: 0 10px 0 8px; gap: 5px; font-size: 11px; }
 .side-opts .opt .ic { width: 13px; height: 13px; }
 .side-opts .seg { margin-left: auto; }

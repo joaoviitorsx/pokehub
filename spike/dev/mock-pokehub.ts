@@ -8,6 +8,7 @@ import type { UpdateInfo, UpdateStatus } from '../contracts/update';
 import type { PerformancePrefs } from '../contracts/preferences';
 import type { Capture } from '../domain/captures';
 import { createMockShop } from './mock-shop';
+import { createMockRemote } from './mock-remote';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
 const ok = <T>(data: T): Promise<Result<T>> => new Promise(resolve => setTimeout(() => resolve({ok: true, data}), 40));
@@ -184,4 +185,5 @@ window.pokehub = {
   onFocus: cb => on<string | null>('focus', cb),
   onStatus: cb => on<{id: string; state: string}>('status', cb),
 };
+(window.pokehub as unknown as {remote: unknown}).remote = createMockRemote(params.get('remote')); // fora do tipo `Pokehub` do preload (o contrato do remoto é do remote-section)
 export const mockProfiles = () => profiles;
