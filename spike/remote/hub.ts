@@ -5,8 +5,10 @@ import { discoverNetwork, type Bind, type NetSelection } from './ip';
 import { ensureCerts, formatFingerprint, type CertResult, type SecretBox } from './certs';
 import { Pairing, PinGuard, createPowerGuard, formatCode, hashPin, validPin, type Blocker, type PinStore } from './guards';
 import { createRemoteServer, type PairInfo, type RemoteApi, type RemoteServer, type ServerDeps } from './server';
-import { RemoteStore, validPort, type AuditRow, type DeviceRow } from './store';
-import type { RemoteStatus } from '../contracts/remote';
+import { RemoteStore, validPort, type AuditRow } from './store';
+import { createAlertEngine, type AlertEngine, type AlertProfile, type CaptureSource } from './alerts';
+import { createPush, type Push, type PushFetch } from './push';
+import type { RemoteAlert, RemoteDevice, RemoteStatus } from '../contracts/remote';
 
 /** Confirmação NATIVA do sistema (fora da página): quem controla a janela do app não aprova sozinho. */
 export type NativeConfirm = (options: {title: string; message: string; detail: string; confirmLabel: string}) => Promise<boolean>;
@@ -15,6 +17,8 @@ export interface HubDeps {
   net?: () => Promise<NetSelection>; now?: () => number; onChange?: () => void; onPairRequest?: () => void; certOptions?: {restrict?: boolean};
   networkPollMs?: number; requestTimeoutMs?: number; portOverride?: number; approveDelayMs?: number;
   secretBox?: SecretBox; nativeConfirm?: NativeConfirm;
+  /** R3: de onde vêm as capturas e as contas; sem isto não há alertas nem push. `fetcher` só para testes/Electron (`net.fetch`). */
+  alerts?: {captures: CaptureSource; profiles(): readonly AlertProfile[]; fetcher?: PushFetch};
   /** Só para testes: troca a fábrica do servidor e os limites/tempos dele. */
   serverFactory?: (deps: ServerDeps) => RemoteServer; serverLimits?: ServerDeps['limits']; serverTiming?: ServerDeps['timing'];
 }
@@ -36,7 +40,15 @@ export function createRemoteHub(deps: HubDeps) {
   let netState: 'ok' | 'rede_nova' | 'sem_rede' = 'ok', netLabel = store.getNetPin()?.label ?? '', caNotice: string | null = null, aclOk = true, notice: string | null = null;
   type Request = {info: PairInfo; since: number; contested: boolean; deciding: boolean; settle: (allow: boolean) => void; timer: ReturnType<typeof setTimeout>};
   let request: Request | null = null, paired: string | null = null, revealed = true, closed = false;
-  const changed = () => { try { deps.onChange?.(); } catch { /* ouvinte */ } };
+  let engine: AlertEngine | null = null, pushLib: Push | null = null;
+  const changed = () => { engine?.update(); try { deps.onChange?.(); } catch { /* ouvinte */ } };
+  /** Chave VAPID criada só quando precisa (1ª assinatura/consulta); se foi refeita, as assinaturas antigas não valem mais. */
+  const getPush = (): Push | null => {
+    if (!deps.alerts) return null;
+    if (!pushLib) { try { pushLib = createPush({dir: deps.dir, box: deps.secretBox, fetcher: deps.alerts.fetcher}); if (pushLib.replaced) store.clearPush(); } catch { return null; } }
+    return pushLib;
+  };
+  if (deps.alerts) engine = createAlertEngine({store, push: getPush, captures: deps.alerts.captures, profiles: deps.alerts.profiles, running: () => server?.listening() ?? false, streams: () => server?.streamCount() ?? 0, publish: (event, data, filter) => server?.publish(event, data, filter), now});
   const audit = (deviceId: string | null, action: string, detail: string | null = null) => { try { store.audit(deviceId, action, detail, iso()); } catch { /* auditoria */ } };
   const alertUser = (text: string) => { notice = text; changed(); };
   const pinStore: PinStore = {get: k => store.pinState(k), set: (k, s) => store.setPinState(k, s), delete: k => store.clearPinState(k), actionsDisabled: () => store.getActionsDisabled(), setActionsDisabled: v => store.setActionsDisabled(v)};
@@ -71,7 +83,7 @@ export function createRemoteHub(deps: HubDeps) {
     const binds = [...sel.binds, ...(allowLoopback ? [LOOPBACK] : [])];
     let set: CertResult;
     try { set = ensureCerts(join(deps.dir), binds.map(b => b.address), {...deps.certOptions, box: deps.secretBox, subnets: sel.subnets}); } catch { error = MSG_START; changed(); throw new RemoteUserError(MSG_START); } // as chaves ficam só em disco (0600, cifradas quando possível)
-    const created = (deps.serverFactory ?? createRemoteServer)({store, certs: () => set, api: deps.api, pairing, confirmPair, onContested: () => { if (request) { request.contested = true; audit(null, 'pareamento_contestado', request.info.ip); changed(); } }, uiDir: deps.uiDir, iconPath: deps.iconPath, now, limits: deps.serverLimits, timing: deps.serverTiming});
+    const created = (deps.serverFactory ?? createRemoteServer)({store, certs: () => set, api: deps.api, pairing, confirmPair, onContested: () => { if (request) { request.contested = true; audit(null, 'pareamento_contestado', request.info.ip); changed(); } }, uiDir: deps.uiDir, iconPath: deps.iconPath, now, alerts: engine ?? undefined, onActivity: () => engine?.update(), limits: deps.serverLimits, timing: deps.serverTiming});
     let listened: number;
     try { listened = await created.listen(binds, deps.portOverride ?? store.getPort()); } catch { error = MSG_START; changed(); throw new RemoteUserError(MSG_START); }
     if (!alive()) { await created.close(); return; } // desligaram (ou outra geração assumiu) enquanto abria a porta
@@ -168,19 +180,31 @@ export function createRemoteHub(deps: HubDeps) {
     reenableActions(): void { pin.reset(); audit(null, 'acoes_religadas'); notice = null; changed(); },
     dismissNotice(): void { notice = null; changed(); },
     /** "Pode agir" muda o que o celular faz: passa por confirmação nativa. */
-    async setCanAct(id: unknown, value: unknown): Promise<DeviceRow[]> {
+    async setCanAct(id: unknown, value: unknown): Promise<RemoteDevice[]> {
       if (typeof id !== 'string' || typeof value !== 'boolean') throw new RemoteUserError('Pedido inválido.');
       const device = store.getDevice(id); if (!device) throw new RemoteUserError('Aparelho não encontrado.');
-      if (!await confirmNative({title: 'PokéHub — permissão de ações', message: `${value ? 'Permitir' : 'Bloquear'} ações de “${device.name}”?`, detail: value ? 'Com “pode agir” o celular poderá, nas próximas versões, mudar coisas (com PIN). Só permita para um aparelho seu.' : 'O celular volta a só ver.', confirmLabel: value ? 'Permitir' : 'Bloquear'})) return store.listDevices();
-      store.setCanAct(id, value); audit(id, value ? 'pode_agir_ligado' : 'pode_agir_desligado', device.name); changed(); return store.listDevices();
+      if (!await confirmNative({title: 'PokéHub — permissão de ações', message: `${value ? 'Permitir' : 'Bloquear'} ações de “${device.name}”?`, detail: value ? 'Com “pode agir” o celular poderá, nas próximas versões, mudar coisas (com PIN). Só permita para um aparelho seu.' : 'O celular volta a só ver.', confirmLabel: value ? 'Permitir' : 'Bloquear'})) return self.devices();
+      store.setCanAct(id, value); audit(id, value ? 'pode_agir_ligado' : 'pode_agir_desligado', device.name); changed(); return self.devices();
     },
-    devices: (): DeviceRow[] => store.listDevices(),
+    devices: (): RemoteDevice[] => store.listDevices().map(d => ({...d, push: store.pushCount(d.id)})),
+    /** Últimos alertas (histórico do banco), para o painel do PC. */
+    alerts: (limit = 20): RemoteAlert[] => store.listAlerts(limit),
+    /** Relatório de estado de uma conta (alimenta "conta caiu/voltou"). */
+    reportState: (id: string, state: string) => engine?.reportState(id, state),
+    /** "Enviar teste": push de teste aos aparelhos deste dispositivo (3 a cada 10 min). */
+    async pushTest(id: unknown): Promise<{sent: number}> {
+      if (typeof id !== 'string' || !store.getDevice(id)) throw new RemoteUserError('Aparelho não encontrado.');
+      if (!engine || store.pushCount(id) === 0) throw new RemoteUserError('Este aparelho não ativou as notificações.');
+      const sent = await engine.sendTest(id);
+      if (sent === null) throw new RemoteUserError('Aguarde alguns minutos para enviar outro teste.');
+      audit(id, 'push_teste', `${sent} enviado(s)`); changed(); return {sent};
+    },
     audit: (): AuditRow[] => store.listAudit(100),
     revoke(id: unknown): boolean { if (typeof id !== 'string') return false; const ok = server ? server.revoke(id) : store.revokeDevice(id); if (ok) audit(id, 'aparelho_revogado'); changed(); return ok; },
     setPort(value: unknown): void { if (!validPort(value)) throw new RemoteUserError('Porta inválida.'); store.setPort(value); },
     publish: (event: string, data: unknown) => server?.publish(event, data),
     updatePower: () => !closed && power.update(server?.listening() ?? false, deps.running()), // o sono só é segurado com o servidor de fato escutando
-    async close(): Promise<void> { if (closed) return; closed = true; gen++; clearPoll(); power.update(false, 0); const done = serial(stopServer); try { store.close(); } catch { /* já fechado */ } await done; }, // o banco fecha já; a porta fecha junto
+    async close(): Promise<void> { if (closed) return; closed = true; gen++; engine?.close(); clearPoll(); power.update(false, 0); const done = serial(stopServer); try { store.close(); } catch { /* já fechado */ } await done; }, // o banco fecha já; a porta fecha junto
   };
   return self;
 }

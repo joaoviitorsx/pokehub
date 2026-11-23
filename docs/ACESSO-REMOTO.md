@@ -112,6 +112,44 @@ Só o certificado **público** da CA é baixável, **só enquanto o pareamento e
 ### Firewall do Windows
 Na primeira vez o Windows pergunta se o PokéHub pode receber conexões: marque **Redes privadas** (não marque públicas). Se o celular não abrir o endereço, confira se a rede está como **Privada**. Em Wi-Fi Público (cafés, hotéis) o hub não abre a porta: aparece "Rede nova detectada".
 
+## Implementado (R3, capturas e Web Push)
+
+**Contrato com o app do celular** (tipos em `spike/contracts/remote.ts`). Todas as rotas exigem autenticação; os GETs exigem `X-PH: 1`; os POSTs mantêm Origin idêntico, `Content-Type: application/json` e corpo ≤ 8 KB.
+- `GET /api/captures?profileId=&onlyAlerts=1&limit=1..200` → `{captures: RemoteCapture[]}`, mais novas primeiro. `RemoteCapture` = captura + `label` e `color` da conta (colocados pelo servidor). **Nunca** leva `emailLabel` nem as dicas internas (`hints`); há teste que varre as respostas, o SSE e o push.
+- `GET /api/alerts?limit=1..200` → `{alerts: RemoteAlert[]}` (histórico do banco: 7 dias, no máximo 1.000 linhas).
+- `GET|POST /api/alerts/prefs` → `AlertPrefs` por aparelho (`{shiny, p5, recorde, notaMin 0–10|null, contaCaiu}`; padrão `shiny` e `p5` ligados, `recorde` desligado, `notaMin` nulo, `contaCaiu` ligado). O POST é validado (chaves exatas, tipos e faixa).
+- `GET /api/push/key` → `{publicKey}` (VAPID, base64url). **Só a pública** é servida.
+- `POST /api/push/subscribe` (`{endpoint, keys:{p256dh, auth}}`), `POST /api/push/unsubscribe` (`{endpoint}`), `POST /api/push/test` (3 a cada 10 min por aparelho; `{sent}`).
+- SSE em `/api/events`: `capture` (`{captures: RemoteCapture[]}`, só as novas) e `alert` (`RemoteAlert`, só para os aparelhos cujas preferências combinam).
+
+**Como funciona**
+- **Leitor de capturas sob demanda.** O leitor do `createCaptureService` só fica ligado enquanto o acesso remoto está de fato escutando **e** há quem precise: ao menos um aparelho com push assinado ou um fluxo SSE aberto. Respeita o Modo leve (30 s → 60 s). Sem isso, custo zero.
+- **Alertas** (`spike/remote/alerts.ts`): para cada captura nova, `alertsOf` calcula shiny, P5, recorde e nota mínima; `conta_caiu` quando uma conta fica em erro/offline por mais de 5 min seguidos (recarregar não zera o relógio) e `conta_voltou` quando ela volta a `ready` depois de um `conta_caiu`. Cada alerta vira uma linha do histórico (7 dias, ≤ 1.000) e, por aparelho, SSE + push conforme as preferências.
+- **Agrupamento:** no máximo 1 push por aparelho e por tipo a cada 2 min; o push seguinte àquele que foi retido diz "(+N)". O SSE e o histórico não são agrupados.
+- **Assinaturas** (`remote_push`, banco v13): presas ao aparelho (`ON DELETE CASCADE`, e também apagadas de forma explícita ao revogar, sair ou expirar), no máximo 2 por aparelho (a mais antiga sai), `endpoint` único. 404/410 do serviço apaga na hora; 5 falhas seguidas apagam.
+- **Biblioteca:** `web-push` 3.6.7 (dependência de runtime; `bun audit --prod` sem vulnerabilidades) **só cifra (RFC 8291, aes128gcm) e assina o VAPID (RFC 8292, ES256, validade de 12 h)**. O envio é nosso (ver abaixo), nunca o da biblioteca.
+
+**O que sai do PC com o push ligado** (ver também `SECURITY.md`)
+- Um `POST` de saída ao serviço de push do navegador do celular. Os destinos aceitos são só: `fcm.googleapis.com`, `web.push.apple.com` e `*.push.apple.com`, `updates.push.services.mozilla.com` e `*.push.services.mozilla.com`, `*.notify.windows.com`.
+- **Conteúdo (cifrado ponta a ponta; o serviço vê só destino e tamanho):** JSON ≤ 1 KB com `{kind, label, text, at, url}`. `kind`: shiny, p5, recorde, nota, conta_caiu ou conta_voltou. `label`: nome da conta no PokéHub. `text`: frase curta em pt-BR (≤ 120), por exemplo "Shiny: Pikachu Nv 20 P5". `at`: horário ISO. `url`: um destes atalhos dentro do app: `#alertas`, `#contas`, `#conta/<id>`. **Nunca** vai e-mail, token, PIN, IP, caminho, chave nem nada de pagamento.
+- Cabeçalhos: `Authorization: vapid t=<JWT>, k=<chave pública>` com assunto genérico `mailto:pokehub@example.com` (**nunca** o seu e-mail), `TTL: 3600`, `Urgency`.
+
+**Segurança do R3 (testada)**
+- **SSRF:** o endpoint é conferido antes de qualquer envio (na assinatura e de novo a cada envio): `https`, porta 443, sem usuário/senha nem fragmento, host fora de IP literal (v4, v6, decimal, hexa), host exatamente na lista ou sufixo `.push.apple.com`/`.notify.windows.com`/`.push.services.mozilla.com` com rótulo antes (nada de `fcm.googleapis.com.evil.com`, `xpush.apple.com` ou ponto final). Vai à rede a URL **normalizada** (a mesma que foi conferida). `redirect: 'error'`, `credentials: 'omit'`, tempo máximo de 5 s e o corpo da resposta é descartado sem ser lido.
+- **Chave VAPID:** gerada uma vez (na primeira necessidade) em `<userData>/remote/vapid.key`, **cifrada com o `safeStorage`** (sem ele, em texto com permissão restrita da pasta, como as chaves da CA); nunca servida, logada nem devolvida por IPC/status. Se a chave cifrada não puder ser aberta (outro usuário/máquina), é refeita e as assinaturas antigas são apagadas.
+- **Aparelho dono da assinatura:** só o aparelho autenticado assina/remove as suas (um aparelho não remove a de outro); revogar, sair ou expirar apaga assinaturas e preferências.
+- **Sem cache no service worker:** o `sw.js` não pode guardar respostas de `/api/*` nem o push; ele só mostra a notificação e abre o atalho.
+- **Limites:** POSTs de preferências/assinatura 30 por 10 min por aparelho; teste de push 3 por 10 min (também no botão do PC).
+- **Banco v13** (não destrutivo, aceita 0–13): `remote_push`, `remote_alert_prefs`, `remote_alerts` (+ índice por data).
+
+**No PC:** Gerenciar → Acesso remoto mostra, por aparelho, "Notificações: ativas (N)" e o botão **Enviar teste**, e o histórico dos últimos 20 alertas.
+
+**Limites honestos do R3**
+- O serviço de push do navegador (Google, Apple, Mozilla, Microsoft) sabe que o seu PC mandou algo para aquele celular e quando (o conteúdo é cifrado). Quem não quer isso não ativa as notificações.
+- Se o PC estiver dormindo/sem internet, o alerta não sai; o histórico no banco mostra o que ocorreu.
+- No iPhone o push só funciona com o app instalado na tela inicial (PWA) e a CA instalada; a Apple recusa assuntos VAPID com `localhost`, por isso o assunto genérico é `example.com`.
+- Não há envio por Discord/ntfy (fica para depois).
+
 ## SEGURANÇA (R1, o que é garantido de verdade)
 **Garantias reais (testadas):**
 - **Desligado por padrão**; ao desligar (chave, bandeja ou sair do app) todos os listeners fecham na hora. Ligar, desligar e reiniciar passam por **fila serial com contador de geração**: um *listen* lento nunca sobrevive a um "desligar" posterior.
@@ -133,10 +171,10 @@ Na primeira vez o Windows pergunta se o PokéHub pode receber conexões: marque 
 - O acesso remoto **não** protege contra malware no PC ou no celular.
 
 ## Requisitos obrigatórios para R3/R4/R5
-Nada disto existe ainda; **não implemente R3/R4/R5 sem cada item abaixo**:
+Itens de R4/R5 ainda não existem; **não implemente R4/R5 sem cada item abaixo** (o de Push, R3, já está feito):
 - **Compras (R4):** *tokens de confirmação emitidos pelo servidor*, de uso único, ligados ao **hash do plano** (item, quantidade, conta, preço), com validade curta; reserva **atômica** do teto diário em SQLite (`remote_spend`, uma transação que confere e soma antes de agir). O celular nunca decide o valor.
 - **Elevação por PIN no servidor:** ação que muda algo exige o PIN verificado **no servidor** (mesmos bloqueios/escalonamento), gerando uma elevação curta e vinculada ao aparelho e à ação; nada de `pin/check` que só devolve "ok".
-- **Push (R3):** *allowlist* de endpoints de push (host/esquema) para evitar **SSRF** ao enviar; chave **VAPID** guardada com `safeStorage`; payload sem dados sensíveis.
+- **Push (R3), implementado:** *allowlist* de endpoints de push (host/esquema/porta) para evitar **SSRF** ao enviar; chave **VAPID** guardada com `safeStorage` e nunca servida; payload sem dados sensíveis; assinaturas presas ao aparelho com cascata; no máximo 2 por aparelho; agrupamento/limite de taxa; sem cache de `/api` no service worker. Ver "Implementado (R3)".
 - **Tela ao vivo (R5):** capturar **somente** views de conta em `https://pokeidle.io`, **nunca** a janela do hub nem campos de senha; recusar se a URL da view mudou de origem.
 - **WebSocket/stream (R5):** conferir o cabeçalho `Origin` no *upgrade*; sem ele, fechar.
 - **Controlar (R5):** *allowlist* de tipos de evento de entrada (clique, tecla, rolagem) com limites de taxa e tamanho; **atalhos bloqueados** (fechar janela, DevTools, colar, Alt+F4 etc.).
@@ -144,7 +182,7 @@ Nada disto existe ainda; **não implemente R3/R4/R5 sem cada item abaixo**:
 - **Auditoria** de toda ação (aparelho, ação, parâmetros resumidos, resultado) e revisão de segurança antes de liberar cada fase.
 
 ## O que falta
-- **R3:** leitor mínimo de capturas + feed, Web Push (VAPID local), Discord/ntfy. O service worker já está registrado.
+- **R3:** feito (servidor): leitor de capturas, feed, alertas e Web Push (VAPID local). Falta no app do celular a tela de Alertas/assinatura (feita à parte) e, mais tarde, Discord/ntfy.
 - **R4:** ações com PIN (repor kit, recarregar, suspender, Modo leve), teto diário de ouro e a Loja, **com os requisitos acima**.
 - **R5:** tela ao vivo (capturePage) e modo Controlar com PIN e expiração de 10 min, **com os requisitos acima**.
 - **R6:** revisão de segurança (força bruta distribuída, replay, token roubado).

@@ -25,13 +25,15 @@
   "dependencies": {
     "electron-updater": "^6.8.11",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "web-push": "3.6.7"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "22.20.1",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
+    "@types/web-push": "^3.6.4",
     "electron": "44.10.2",
     "electron-builder": "26.15.3",
     "eslint": "10.14.0",

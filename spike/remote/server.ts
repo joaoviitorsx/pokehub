@@ -11,6 +11,8 @@ import { deviceNameFromUA, sanitizeName } from './device-name';
 import { Pairing, RateLimiter, generateSas, normalizeCode } from './guards';
 import { MAX_DEVICES, type DeviceRow, type RemoteStore } from './store';
 import { caFingerprint, mobileconfig, type CertSet } from './certs';
+import { parsePrefs } from './alerts';
+import type { AlertPrefs, RemoteAlert, RemoteCapture } from '../contracts/remote';
 
 export interface RemoteAccount { id: string; label: string; color: string; state: string; suspended: boolean }
 export interface RemoteApi {
@@ -18,6 +20,13 @@ export interface RemoteApi {
   hunt(id: string, soLiberadas: boolean): Promise<unknown>;
   market(id: string, focus: string): Promise<unknown>;
   diag(): unknown;
+}
+/** Alertas e push (R3). Opcional: sem isto as rotas de alertas respondem 404. */
+export interface AlertsApi {
+  listCaptures(deviceId: string, q: {profileId?: string; onlyAlerts?: boolean; limit?: number}): RemoteCapture[]; history(limit: number): RemoteAlert[];
+  getPrefs(deviceId: string): AlertPrefs; setPrefs(deviceId: string, prefs: AlertPrefs): AlertPrefs; publicKey(): string | null;
+  subscribe(deviceId: string, sub: {endpoint: unknown; p256dh: unknown; auth: unknown}): boolean; unsubscribe(deviceId: string, endpoint: unknown): boolean;
+  sendTest(deviceId: string): Promise<number | null>;
 }
 /** O que o PC mostra no pedido: `ua` é o que o servidor leu do User-Agent; `nickname` é o que o celular disse de si (não confiável). */
 export interface PairInfo { name: string; nickname: string; ua: string; ip: string; sas: string }
@@ -27,7 +36,9 @@ export interface ServerDeps {
   confirmPair(info: PairInfo, signal: AbortSignal): Promise<boolean>;
   /** O mesmo código certo chegou de novo enquanto o pedido está aberto: alguém mais o conhece. */
   onContested?(): void;
-  uiDir: string; iconPath: string; now?: () => number;
+  uiDir: string; iconPath: string; now?: () => number; alerts?: AlertsApi;
+  /** Abriu/fechou um fluxo SSE ou um aparelho saiu (revogado/expirado): o motor decide se o leitor de capturas precisa ficar ligado. */
+  onActivity?(): void;
   limits?: {general?: number; pair?: number; wait?: number; api?: number}; timing?: {waitMs?: number; abandonMs?: number; maxMs?: number};
 }
 export const COOKIE = '__Host-ph', MAX_BODY = 8192, SSE_MAX = 20, SSE_PER_DEVICE = 4, HEARTBEAT_MS = 25_000;
@@ -62,7 +73,8 @@ interface Pending { id: string; ip: string; code: string; ctrl: AbortController;
 export function createRemoteServer(deps: ServerDeps) {
   const now = deps.now ?? Date.now;
   const general = new RateLimiter(deps.limits?.general ?? 300, 60_000, now), pairLimit = new RateLimiter(deps.limits?.pair ?? 10, 60_000, now), waitLimit = new RateLimiter(deps.limits?.wait ?? 40, 60_000, now);
-  const apiLimit = new RateLimiter(deps.limits?.api ?? API_PER_MIN, 60_000, now); // por aparelho: hunt e mercado são caros
+  const apiLimit = new RateLimiter(deps.limits?.api ?? API_PER_MIN, 60_000, now); const writeLimit = new RateLimiter(30, 600_000, now); // POSTs de alertas/push: por aparelho
+  const activity = () => { try { deps.onActivity?.(); } catch { /* ouvinte */ } }; // por aparelho: hunt e mercado são caros
   const waitMs = deps.timing?.waitMs ?? 25_000, abandonMs = deps.timing?.abandonMs ?? 15_000, maxMs = deps.timing?.maxMs ?? 60_000;
   const servers: Server[] = [];
   const sockets = new Set<Socket>();
@@ -94,7 +106,7 @@ export function createRemoteServer(deps: ServerDeps) {
     }
     return null;
   }
-  function expire(device: DeviceRow, why: string) { deps.store.revokeDevice(device.id); audit(device.id, 'expirado', `${device.name} (${why})`); closeStreams(device.id); lastTouch.delete(device.id); lastRenew.delete(device.id); }
+  function expire(device: DeviceRow, why: string) { deps.store.revokeDevice(device.id); audit(device.id, 'expirado', `${device.name} (${why})`); closeStreams(device.id); lastTouch.delete(device.id); lastRenew.delete(device.id); activity(); }
   /**
    * Aparelho autenticado pelo cookie (hash em tempo constante). Vence por inatividade (30 dias) ou limite absoluto (180);
    * o token roda a cada 24 h (o anterior vale 5 min) e o cookie renova a cada uso (Max-Age 30 dias) pelo `Set-Cookie` da resposta.
@@ -208,8 +220,8 @@ export function createRemoteServer(deps: ServerDeps) {
     req.socket.setTimeout(0); // só o SSE fica aberto além do limite de 30 s do soquete
     res.writeHead(200, {...HEADERS, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no'});
     res.write(`retry: 5000\nevent: state\ndata: ${JSON.stringify({accounts: deps.api.accounts()})}\n\n`);
-    streams.set(res, device.id);
-    req.on('close', () => streams.delete(res));
+    streams.set(res, device.id); activity();
+    req.on('close', () => { streams.delete(res); activity(); });
   }
   /** Consulta cara: no máximo 10/min por aparelho e chamadas iguais simultâneas dividem uma só execução. */
   async function expensive(res: ServerResponse, device: DeviceRow, key: string, run: () => Promise<unknown>) {
@@ -217,6 +229,43 @@ export function createRemoteServer(deps: ServerDeps) {
     let work = inflight.get(key);
     if (!work) { work = run().finally(() => inflight.delete(key)); inflight.set(key, work); }
     json(res, 200, await work);
+  }
+
+  const INT = /^\d{1,3}$/;
+  /** GETs de R3 (X-PH: 1 obrigatório): capturas, histórico de alertas, preferências e a chave pública VAPID. */
+  function alertsGet(req: IncomingMessage, res: ServerResponse, device: DeviceRow, path: string, url: URL) {
+    const a = deps.alerts!;
+    if (req.headers['x-ph'] !== '1') return fail(res, 400, MSG.header);
+    const limitRaw = url.searchParams.get('limit');
+    if (limitRaw !== null && (!INT.test(limitRaw) || Number(limitRaw) < 1 || Number(limitRaw) > 200)) return fail(res, 400, MSG.json);
+    const limit = limitRaw === null ? 50 : Number(limitRaw);
+    if (path === '/api/captures') {
+      const profileId = url.searchParams.get('profileId'), only = url.searchParams.get('onlyAlerts');
+      if (profileId !== null && !deps.api.accounts().some(x => x.id === profileId)) return fail(res, 404, MSG.notFound);
+      if (only !== null && only !== '1' && only !== '0') return fail(res, 400, MSG.json);
+      return json(res, 200, {captures: a.listCaptures(device.id, {...(profileId ? {profileId} : {}), onlyAlerts: only === '1', limit})});
+    }
+    if (path === '/api/alerts') return json(res, 200, {alerts: a.history(limit)});
+    if (path === '/api/alerts/prefs') return json(res, 200, a.getPrefs(device.id));
+    const publicKey = a.publicKey(); // só a chave PÚBLICA; a privada nunca sai do hub
+    return publicKey ? json(res, 200, {publicKey}) : fail(res, 404, MSG.notFound);
+  }
+  async function alertsPost(req: IncomingMessage, res: ServerResponse, device: DeviceRow, path: string) {
+    const a = deps.alerts!;
+    const body = await readJson(req); // JSON obrigatório e corpo ≤ 8 KB em todos os POSTs
+    if (body === 'big') return fail(res, 413, MSG.big);
+    if (!body) return fail(res, 400, MSG.json);
+    if (path === '/api/push/test') {
+      const sent = await a.sendTest(device.id); // 3 a cada 10 min por aparelho
+      return sent === null ? fail(res, 429, MSG.rate, {'Retry-After': '600'}) : json(res, 200, {sent});
+    }
+    if (!writeLimit.hit(device.id)) return fail(res, 429, MSG.rate, {'Retry-After': '60'});
+    if (path === '/api/alerts/prefs') { const prefs = parsePrefs(body); return prefs ? json(res, 200, a.setPrefs(device.id, prefs)) : fail(res, 400, MSG.json); }
+    if (path === '/api/push/unsubscribe') { if (typeof body.endpoint !== 'string') return fail(res, 400, MSG.json); a.unsubscribe(device.id, body.endpoint); return json(res, 200, {ok: true}); }
+    const keys = typeof body.keys === 'object' && body.keys !== null && !Array.isArray(body.keys) ? body.keys as Record<string, unknown> : null;
+    if (typeof body.endpoint !== 'string' || !keys || !a.subscribe(device.id, {endpoint: body.endpoint, p256dh: keys.p256dh, auth: keys.auth})) return fail(res, 400, MSG.json);
+    audit(device.id, 'push_assinado', device.name);
+    return json(res, 200, {ok: true});
   }
 
   async function route(req: IncomingMessage, res: ServerResponse, ip: string) {
@@ -250,6 +299,7 @@ export function createRemoteServer(deps: ServerDeps) {
     if (!device) return fail(res, 401, MSG.auth);
     if (method === 'POST') {
       if (path === '/api/logout') { deps.store.revokeDevice(device.id); audit(device.id, 'saiu', device.name); closeStreams(device.id); return json(res, 200, {ok: true}, {'Set-Cookie': `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0`}); }
+      if (deps.alerts && /^\/api\/(alerts\/prefs|push\/(subscribe|unsubscribe|test))$/.test(path)) return alertsPost(req, res, device, path);
       return fail(res, 404, MSG.notFound);
     }
     const idMatch = /^\/api\/(hunt|market)\/([\w-]{1,64})$/.exec(path);
@@ -257,6 +307,7 @@ export function createRemoteServer(deps: ServerDeps) {
     if (path === '/api/state') return json(res, 200, {accounts: deps.api.accounts()});
     if (path === '/api/diag') return json(res, 200, deps.api.diag());
     if (path === '/api/events') return events(req, res, device);
+    if (deps.alerts && /^\/api\/(captures|alerts|alerts\/prefs|push\/key)$/.test(path)) return alertsGet(req, res, device, path, url);
     if (idMatch) {
       if (req.headers['x-ph'] !== '1') return fail(res, 400, MSG.header); // um <img>/<a> de outro site não dispara a consulta
       const id = idMatch[2]!;
@@ -329,13 +380,13 @@ export function createRemoteServer(deps: ServerDeps) {
       sockets.clear(); perIp.clear();
       await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
     },
-    publish(event: string, data: unknown): void {
+    publish(event: string, data: unknown, filter?: (deviceId: string) => boolean): void {
       if (!/^[a-z-]{1,20}$/.test(event)) return;
       const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-      for (const res of [...streams.keys()]) { if (isBackedUp(res)) { drop(res); continue; } try { res.write(frame); } catch { streams.delete(res); } } // quem não acompanha é desconectado (contrapressão)
+      for (const [res, deviceId] of [...streams]) { if (filter && !filter(deviceId)) continue; if (isBackedUp(res)) { drop(res); continue; } try { res.write(frame); } catch { streams.delete(res); } } // quem não acompanha é desconectado (contrapressão)
     },
     /** Revogação: apaga o aparelho e derruba na hora os fluxos SSE dele. */
-    revoke(deviceId: string): boolean { const ok = deps.store.revokeDevice(deviceId); closeStreams(deviceId); lastTouch.delete(deviceId); lastRenew.delete(deviceId); return ok; },
+    revoke(deviceId: string): boolean { const ok = deps.store.revokeDevice(deviceId); closeStreams(deviceId); lastTouch.delete(deviceId); lastRenew.delete(deviceId); activity(); return ok; },
     sweepExpired,
     streamCount: () => streams.size,
     connectionCount: () => sockets.size,

@@ -27,6 +27,7 @@ Pasta de dados do app: `%APPDATA%\PokeHub` (Windows) ou `~/.config/PokeHub` (Lin
 - **GitHub Releases** (verificação de atualização): 10 segundos depois de abrir e a cada 6 horas, se a verificação automática estiver ligada. Dá para desligar em Configurações.
 - **Chrome Web Store**: a página abre no **seu navegador**, quando você pede para instalar uma extensão.
 - **Tráfego das extensões**: a `/hunt` fala com `pokeidleguide.io` e `pokeidle-gg.pages.dev`; qualquer outra extensão só carrega depois que você aprova os hosts que ela acessa.
+- **Notificações push do acesso remoto** (só se você ligar o acesso remoto **e** ativar as notificações num celular pareado): o PC faz um `POST` **de saída** ao serviço de push do navegador desse celular (`fcm.googleapis.com` no Chrome/Android, `*.push.apple.com` no Safari/iPhone, `*.push.services.mozilla.com` no Firefox, `*.notify.windows.com` no Edge). O conteúdo vai **cifrado de ponta a ponta** (RFC 8291; o serviço só vê o tamanho e o destino) e é só: tipo do alerta, nome da conta, texto curto (ex.: “Shiny: Pikachu Nv 20 P5”), horário e um atalho dentro do app. Nunca vai e-mail, token, PIN, senha nem dados de pagamento. O endereço de envio é conferido numa lista fixa de hosts (https, porta 443, sem IP, sem redirecionamento, 5 s). A chave privada VAPID (identifica o seu PC perante esses serviços) fica cifrada com o `safeStorage` e nunca sai do PC. Detalhes em `docs/ACESSO-REMOTO.md`.
 - **Telemetria e relatório de falhas: nenhum.** O PokéHub não envia métricas, nem de uso, nem de erro.
 - A interface do app tem CSP com `connect-src 'none'`: ela mesma não faz `fetch`/XHR/WebSocket.
 
@@ -43,7 +44,7 @@ Automação em jogo pode ser vista como violação dos termos: o risco da conta 
 
 ## Acesso remoto pela rede de casa
 
-Desligado por padrão; ver `docs/ACESSO-REMOTO.md`. (Recurso em planejamento: esta seção será detalhada quando existir.)
+Desligado por padrão; ver `docs/ACESSO-REMOTO.md`. Com ele ligado, o PC escuta só na rede doméstica; as únicas conexões de saída que ele cria são as notificações push descritas em “O que sai do seu computador”, e só para celulares que você pareou e que ativaram as notificações. O histórico de alertas (7 dias, até 1.000) e as assinaturas de push ficam no `pokehub.sqlite`; revogar ou expirar o aparelho apaga as assinaturas e as preferências dele.
 
 ## Como apagar seus dados
 

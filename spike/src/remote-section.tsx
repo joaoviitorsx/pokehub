@@ -1,7 +1,7 @@
 // Gerenciar → Acesso remoto e o modal "Parear novo aparelho" (tema madeira). Só fala com o main pelo IPC `window.pokehub.remote`.
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { qrMatrix, qrPath } from '../domain/qr';
-import type { RemoteAuditEntry, RemoteDevice, RemoteRequest, RemoteStatus } from '../contracts/remote';
+import type { RemoteAlert, RemoteAuditEntry, RemoteDevice, RemoteRequest, RemoteStatus } from '../contracts/remote';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
 interface RemoteClient {
@@ -10,9 +10,11 @@ interface RemoteClient {
   devices(): Promise<Result<RemoteDevice[]>>; revoke(id: string): Promise<Result<RemoteDevice[]>>; audit(): Promise<Result<RemoteAuditEntry[]>>; onChanged(callback: () => void): () => void;
   allowNetwork(): Promise<Result<RemoteStatus>>; revealCode(): Promise<Result<RemoteStatus>>; setCanAct(id: string, value: boolean): Promise<Result<RemoteDevice[]>>;
   reenableActions(): Promise<Result<RemoteStatus>>; dismissNotice(): Promise<Result<RemoteStatus>>;
+  pushTest(id: string): Promise<Result<{sent: number}>>; alerts(): Promise<Result<RemoteAlert[]>>;
 }
 const client = () => (window.pokehub as unknown as {remote: RemoteClient}).remote;
-const AUDIT_TEXT: Record<string, string> = {acesso_remoto_ligado: 'Acesso remoto ligado', acesso_remoto_desligado: 'Acesso remoto desligado', pareamento_iniciado: 'Pareamento iniciado', pareamento_pedido: 'Pedido de pareamento', pareamento_aceito: 'Aparelho aceito', pareamento_negado: 'Aparelho recusado', pareamento_cancelado: 'Pedido cancelado', pareamento_abandonado: 'Celular desistiu do pedido', pareamento_contestado: 'Código usado por mais de um aparelho', pareamento_codigo_errado: 'Código errado', aparelho_revogado: 'Aparelho revogado', aparelho_revogado_pin: 'Aparelho revogado (PIN)', expirado: 'Acesso expirado', saiu: 'Aparelho saiu', pin_definido: 'PIN definido', pin_removido: 'PIN removido', pin_bloqueado: 'PIN bloqueado', acoes_desligadas: 'Ações desligadas (erros de PIN)', acoes_religadas: 'Ações religadas', rede_nova: 'Rede nova detectada', rede_perdida: 'Rede indisponível', rede_fixada: 'Rede doméstica fixada', rede_liberada: 'Rede nova liberada', ca_refeita: 'Certificado refeito', pode_agir_ligado: '“Pode agir” permitido', pode_agir_desligado: '“Pode agir” bloqueado'};
+const ALERT_ICON: Record<string, string> = {shiny: '✨', p5: 'P5', recorde: 'Recorde', nota: 'Nota', conta_caiu: 'Conta caiu', conta_voltou: 'Conta voltou'};
+const AUDIT_TEXT: Record<string, string> = {push_assinado: 'Notificações ativadas no aparelho', push_teste: 'Teste de notificação', acesso_remoto_ligado: 'Acesso remoto ligado', acesso_remoto_desligado: 'Acesso remoto desligado', pareamento_iniciado: 'Pareamento iniciado', pareamento_pedido: 'Pedido de pareamento', pareamento_aceito: 'Aparelho aceito', pareamento_negado: 'Aparelho recusado', pareamento_cancelado: 'Pedido cancelado', pareamento_abandonado: 'Celular desistiu do pedido', pareamento_contestado: 'Código usado por mais de um aparelho', pareamento_codigo_errado: 'Código errado', aparelho_revogado: 'Aparelho revogado', aparelho_revogado_pin: 'Aparelho revogado (PIN)', expirado: 'Acesso expirado', saiu: 'Aparelho saiu', pin_definido: 'PIN definido', pin_removido: 'PIN removido', pin_bloqueado: 'PIN bloqueado', acoes_desligadas: 'Ações desligadas (erros de PIN)', acoes_religadas: 'Ações religadas', rede_nova: 'Rede nova detectada', rede_perdida: 'Rede indisponível', rede_fixada: 'Rede doméstica fixada', rede_liberada: 'Rede nova liberada', ca_refeita: 'Certificado refeito', pode_agir_ligado: '“Pode agir” permitido', pode_agir_desligado: '“Pode agir” bloqueado'};
 const when = (iso: string | null) => { if (!iso) return '—'; const d = new Date(iso); return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString('pt-BR', {dateStyle: 'short', timeStyle: 'short'}); };
 export const ALLOW_DELAY_MS = 1500;
 /** "Permitir" só habilita 1,5 s depois que o pedido aparece e depois de qualquer troca de foco da janela (evita o clique por reflexo). */
@@ -29,14 +31,15 @@ export function RemoteSection({onPair}: {onPair: () => void}) {
   const [status, setStatus] = useState<RemoteStatus | null>(null);
   const [devices, setDevices] = useState<RemoteDevice[]>([]);
   const [audit, setAudit] = useState<RemoteAuditEntry[]>([]);
+  const [alerts, setAlerts] = useState<RemoteAlert[]>([]);
   const [pin, setPin] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const load = async () => {
     try {
-      const [s, d, a] = await Promise.all([client().status(), client().devices(), client().audit()]);
+      const [s, d, a, al] = await Promise.all([client().status(), client().devices(), client().audit(), client().alerts()]);
       if (s.ok) setStatus(s.data); else setMessage(s.error);
-      if (d.ok) setDevices(d.data); if (a.ok) setAudit(a.data);
+      if (d.ok) setDevices(d.data); if (a.ok) setAudit(a.data); if (al.ok) setAlerts(al.data);
     } catch { setMessage('Não foi possível consultar o acesso remoto.'); }
   };
   useEffect(() => {
@@ -78,8 +81,12 @@ export function RemoteSection({onPair}: {onPair: () => void}) {
       <button disabled={busy || pin.length !== 6}>{status.pinSet ? 'Trocar PIN' : 'Definir PIN'}</button>{status.pinSet && <button type="button" disabled={busy} onClick={() => { if (window.confirm('Remover o PIN? As ações pelo celular ficam bloqueadas até definir outro.')) void run(() => client().clearPin()); }}>Remover</button>}</form>
     <h2>Aparelhos pareados</h2>
     {devices.length === 0 ? <p className="ext-state" data-on="false">Nenhum aparelho pareado.</p> : <ul className="acc-list">{devices.map(device => <li key={device.id} className="acc"><div className="acc-main"><strong>{device.name}</strong></div><small>Pareado em {when(device.createdAt)} · último acesso {when(device.lastSeen)}</small>
+      <small>Notificações: {(device.push ?? 0) > 0 ? `ativas (${device.push})` : 'desativadas'}</small>
+      {(device.push ?? 0) > 0 && <div className="actions"><button disabled={busy} onClick={() => void run(async () => { const r = await client().pushTest(device.id); if (r.ok) setMessage(r.data.sent > 0 ? 'Teste enviado. Veja se chegou no celular.' : 'O serviço de notificações não aceitou o teste agora.'); return r; })}>Enviar teste</button></div>}
       <label className="switch"><span>Pode agir (com PIN, nas próximas versões)</span><input type="checkbox" role="switch" checked={device.canAct} disabled={busy} onChange={event => void run(() => client().setCanAct(device.id, event.target.checked))}/></label>
       <div className="actions"><button className="danger" disabled={busy} onClick={() => { if (window.confirm(`Revogar “${device.name}”? Ele perde o acesso na hora.`)) void run(() => client().revoke(device.id)); }}>Revogar</button></div></li>)}</ul>}
+    <details className="rm-audit"><summary>Alertas (últimos 20)</summary>
+      {alerts.length === 0 ? <p className="note">Nenhum alerta ainda.</p> : <ul>{alerts.map(alert => <li key={alert.id}><time>{when(alert.at)}</time> · <strong>{ALERT_ICON[alert.kind] ?? alert.kind}</strong> {alert.label}: {alert.text}</li>)}</ul>}</details>
     <details className="rm-audit"><summary>Registro de auditoria (últimos 100)</summary>
       {audit.length === 0 ? <p className="note">Sem registros.</p> : <ul>{audit.map(entry => <li key={entry.id}><time>{when(entry.at)}</time> · {AUDIT_TEXT[entry.action] ?? entry.action}{entry.detail ? ` — ${entry.detail}` : ''}</li>)}</ul>}</details>
     <p className="note">O código de pareamento vale 2 minutos, só funciona uma vez e o aparelho só entra depois que você confere o número e aceita aqui (e confirma na janela do sistema). O acesso vence após 30 dias sem uso e o token é trocado a cada 24 h. Revogar ou desligar corta o acesso na hora. Isso <strong>reduz o risco</strong>, mas não substitui cuidado: use só na sua rede de casa. Para a instalação do app e as notificações, instale o certificado do PokéHub no celular conferindo a impressão digital (o passo aparece ao parear).</p>
