@@ -37,6 +37,15 @@ Objetivo: o PokéHub deixa de parecer um app genérico (cinza-azulado, pílulas,
 - **Tipografia:** corpo `"Segoe UI", system-ui, sans-serif` 13 px; títulos/botões `Tahoma, Verdana, "Segoe UI", sans-serif` 700. Sem fontes externas.
 - **Movimento:** curto e “físico” (afundar 2 px ao clicar); sem fades longos, sem brilhos difusos, sem gradientes coloridos decorativos.
 
+## Complementos vistos na landing (`https://pokeidle.io/`)
+
+- **Variante noturna do fundo:** xadrez roxo-ameixa escuro (`#2a1a2e` / `#33213a`) em vez do azul; o PokéHub usa esta variante atrás das colunas (menos ruído ao redor do jogo) e o azul só na tela vazia/boas-vindas.
+- **Títulos de destaque:** caixa alta, peso 900, texto claro com contorno preto/vinho grosso (`text-shadow` em 4 direções de 2 px `#1a0b12` + `0 3px 0 #1a0b12`); palavra de ênfase em ouro `#ffd166`.
+- **Botão grande roxo (CTA):** miolo roxo `--pi-rx` com moldura de madeira laranja (`--pi-mad-quente`) de 4 px, contorno vinho e degrau; ícone redondo à esquerda.
+- **Etiquetas (tags):** fundo vão escuro, contorno vinho, filete `--pi-mad-quente` embaixo, texto 11 px 700 MAIÚSCULAS; a etiqueta “destaque” é ouro.
+- **Cartão de aviso:** vão escuro com contorno ouro 2 px e ícone à esquerda.
+- **Menu do jogo (print da landing):** blocos-botão roxos dentro de moldura de madeira, ícone + rótulo; painéis laterais em ameixa escuro com linhas internas — bom modelo para a navegação do Gerenciar e para os cartões da lateral.
+
 ## Aplicação no PokéHub
 
 - **Barra superior** = prancha de madeira de ponta a ponta (sem raio nas laterais), logo da pokébola + “PokéHub” em Tahoma 700 com sombra vinho.
