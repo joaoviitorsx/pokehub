@@ -1,0 +1,1 @@
+{"name":"PokéHub","short_name":"PokéHub","description":"Suas contas do PokéIdle, pelo celular","start_url":"/","scope":"/","display":"standalone","orientation":"portrait","background_color":"#33202b","theme_color":"#914850","lang":"pt-BR","icons":[{"src":"/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"}]}

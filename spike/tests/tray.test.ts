@@ -51,3 +51,13 @@ describe('bandeja: textos e menu', () => {
   } finally { vi.useRealTimers(); }
  });
 });
+describe('bandeja: acesso remoto', () => {
+ it('mostra ligado/desligado e alterna ao clicar; sem acesso remoto o item não existe', () => {
+  const base = {profiles:[],states:new Map<string,string>(),lite:false,open:() => undefined,focus:() => undefined,setLite:() => undefined,quit:() => undefined};
+  const toggle = vi.fn();
+  const off = trayMenuItems({...base,remote:{enabled:false,toggle}}), on = trayMenuItems({...base,remote:{enabled:true,toggle}});
+  expect(off.map(item => item.label)).toContain('Acesso remoto: desligado'); expect(on.map(item => item.label)).toContain('Acesso remoto: ligado');
+  on.find(item => item.label?.startsWith('Acesso remoto'))!.click?.(); expect(toggle).toHaveBeenCalledTimes(1);
+  expect(trayMenuItems(base).some(item => item.label?.startsWith('Acesso remoto'))).toBe(false);
+ });
+});

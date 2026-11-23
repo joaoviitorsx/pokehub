@@ -13,6 +13,7 @@ export default tseslint.config(
     languageOptions: { sourceType: 'commonjs', globals: globals.node },
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
+  { files: ['spike/remote-ui/public/sw.js'], languageOptions: { globals: globals.serviceworker } },
   {
     // node:sqlite é carregado via require para não ser empacotado pelo Vite/Vitest; mocks de teste usam alias de this.
     files: ['spike/electron/database.ts', 'spike/tests/**'],

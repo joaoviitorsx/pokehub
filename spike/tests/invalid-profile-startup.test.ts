@@ -28,7 +28,7 @@ class FakeWindow extends EventEmitter {
  loadFile(){return Promise.resolve();}
 }
 const app=Object.assign(new EventEmitter(),{requestSingleInstanceLock:()=>true,commandLine:{getSwitchValue:()=>'',appendSwitch:vi.fn()},setAppUserModelId:vi.fn(),whenReady:()=>Promise.resolve(),getPath:()=>directory,quit:vi.fn()});
-vi.doMock('electron',()=>({app,BrowserWindow:FakeWindow,WebContentsView:createView,ipcMain:{handle:(name:string,handler:(...args:unknown[])=>unknown)=>handlers.set(name,handler)},dialog:{showErrorBox(){}}}));
+vi.doMock('electron',()=>({powerSaveBlocker:{start:()=>1,stop(){}},app,BrowserWindow:FakeWindow,WebContentsView:createView,ipcMain:{handle:(name:string,handler:(...args:unknown[])=>unknown)=>handlers.set(name,handler)},dialog:{showErrorBox(){}}}));
 afterAll(()=>{shell?.emit('closed');vi.doUnmock('electron');rmSync(directory,{recursive:true,force:true});});
 
 it('isola identificador inválido e permite remover o perfil sem abrir a view', async () => {

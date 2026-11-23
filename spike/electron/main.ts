@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, Tray, Menu, Notification, nativeImage, type IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, Tray, Menu, Notification, nativeImage, powerSaveBlocker, type IpcMainInvokeEvent } from 'electron';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -27,6 +27,9 @@ import { createUpdater, type Updater } from './updater';
 import type { UpdateInfo } from '../contracts/update';
 import type { PerformancePrefs, TrayPrefs } from '../contracts/preferences';
 import { ProfileLimitError, type ProfileInput } from '../domain/profiles';
+import { createRemoteHub, type RemoteHub } from '../remote/hub';
+import { createRemoteApi } from '../remote/api';
+import { registerRemoteIpc } from '../remote/ipc';
 
 let window: BrowserWindow;
 let store: ProfileStore;
@@ -51,6 +54,7 @@ let externalNoticeOpen = false;
 const suspended = new Set<string>(); // contas suspensas: só em memória; ao reiniciar o app todas abrem
 let perf: PerformancePrefs = {lite: false, muteUnfocused: false};
 let tray: Tray | null = null;
+let remote: RemoteHub | null = null; // acesso remoto pelo celular (spike/remote); só liga se o usuário ativar
 let trayPrefs: TrayPrefs = {onClose:true, onMinimize:true, hintShown:false};
 let quitting = false; // before-quit: a partir daqui fechar a janela encerra de verdade
 const refreshTray = debounced(() => updateTray(), 300);
@@ -198,7 +202,9 @@ function report(id: string, state: string) {
   states.set(id,state);
   if (changed) refreshTray.call();
   if (changed && !window.isDestroyed()) window.webContents.send('session:status', {id,state});
+  if (changed) remote?.publish('state',{accounts:remoteAccounts()});
 }
+const remoteAccounts = () => store.list().map(p => ({id:p.id, label:p.label, color:p.colorToken, state:states.get(p.id) ?? 'loading', suspended:suspended.has(p.id)}));
 function arrange() {
   const profiles = store.list();
   if (!profiles.length) {
@@ -360,11 +366,13 @@ function hideToTray() {
 }
 function updateTray() {
   if (!tray || tray.isDestroyed() || !store) return;
+  remote?.updatePower();
   try {
     const profiles = store.list();
     tray.setToolTip(trayTooltip(runningCount(profiles,states)));
     tray.setContextMenu(Menu.buildFromTemplate(trayMenuItems({
       profiles, states, lite:perf.lite, open:showWindow, quit:() => app.quit(),
+      remote:remote ? {enabled:remote.enabled(), toggle:() => { void remote?.setEnabled(!remote.enabled()).catch(() => console.error('Falha ao alternar o acesso remoto.')).finally(() => { refreshTray.call(); if (!window.isDestroyed()) window.webContents.send('remote:changed'); }); }} : undefined,
       focus:id => { showWindow(); if (window.isDestroyed() || !store.list().some(profile => profile.id === id)) return; focused = id; arrange(); window.webContents.send('workspace:focus',id); },
       setLite:lite => { try { perf = preferences.setPerformance({lite}); arrange(); updateTray(); if (!window.isDestroyed()) window.webContents.send('performance:changed',perf); } catch { console.error('Falha ao salvar o Modo leve.'); } },
     })));
@@ -460,16 +468,21 @@ if (primary) app.whenReady().then(() => {
       if (!contents) return null;
       return {identity:huntDocuments.get(contents) ?? contents, url:contents.getURL(), hasExtension:hasHunt(contents.session), version:extensions.find(extension => extension.catalogId === HUNT_ID)?.version ?? null, run:script => contents.executeJavaScript(script), sprites};
     };
+  const remoteApi = createRemoteApi({profiles:() => store.list(), states, suspended, hunt:(id,soLiberadas) => huntFor(id,soLiberadas), scan:id => scanFor(id), processes:() => processesSample()});
+  const huntFor = (id: unknown, soLiberadas: unknown = true) => huntSnapshot(id, store.list().map(profile => profile.id), huntTarget, undefined, soLiberadas);
   ipcMain.handle('hunt:snapshot', async (event,id: unknown,soLiberadas: unknown = true) => {
     if (!trusted(event)) return {ok:false,error:HUNT_UNAVAILABLE};
-    return huntSnapshot(id, store.list().map(profile => profile.id), huntTarget, undefined, soLiberadas);
+    return huntFor(id,soLiberadas);
   });
+  const scanFor = (id: unknown) => marketScan(id, store.list().map(profile => profile.id), profileId => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:script => contents.executeJavaScript(script)} : null; });
   ipcMain.handle('market:scan', async (event,id: unknown) => {
     if (!trusted(event)) return {ok:false,error:MARKET_UNAVAILABLE};
-    return marketScan(id, store.list().map(profile => profile.id), profileId => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:script => contents.executeJavaScript(script)} : null; });
+    const result = await scanFor(id);
+    if (result.ok && typeof id === 'string') remoteApi.feed(id,result.data);
+    return result;
   });
   const marketTarget = (profileId: string) => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:(script: string) => contents.executeJavaScript(script)} : null; };
-  const marketReader = createMarketReader({known:() => store.list().map(profile => profile.id), target:marketTarget, emit:progress => { if (!window.isDestroyed()) window.webContents.send('market:progress',progress); }});
+  const marketReader = createMarketReader({known:() => store.list().map(profile => profile.id), target:marketTarget, emit:progress => { if (progress.scan) remoteApi.feed(progress.profileId,progress.scan); if (!window.isDestroyed()) window.webContents.send('market:progress',progress); }});
   ipcMain.handle('market:readAll', async (event,id: unknown) => trusted(event) ? marketReader.readAll(id) : {ok:false,error:MARKET_UNAVAILABLE});
   ipcMain.handle('market:stop', (event,id: unknown) => trusted(event) ? {ok:true,data:marketReader.stop(id)} : {ok:false,error:MARKET_UNAVAILABLE});
   // Loja rápida (Market do jogo): leitura/compra só a pedido da janela do PokéHub, depois da confirmação do usuário (ver spike/electron/shop.ts).
@@ -559,24 +572,28 @@ if (primary) app.whenReady().then(() => {
     return {...result.sample,sampledAt:new Date().toISOString()};
   }));
   // Monitor por conta (só consultado com a seção Diagnóstico aberta). getAppMetrics mede a CPU desde a chamada anterior: leituras a menos de 1 s reaproveitam a anterior.
-  ipcMain.handle('diagnostics:processes', event => invoke(event, () => {
+  const processesSample = () => {
     const metrics = readMetrics();
     const pids = new Map<string, number | null>();
     for (const profile of store.list()) { const view = views.get(profile.id); let pid: number | null = null; try { if (view && !view.webContents.isDestroyed()) pid = view.webContents.getOSProcessId(); } catch { /* sem processo */ } pids.set(profile.id,pid); }
     return {sampledAt:new Date().toISOString(), ...groupMetrics(metrics.list,pids,window.webContents.getOSProcessId(),metrics.first)};
-  }));
+  };
+  ipcMain.handle('diagnostics:processes', event => invoke(event, processesSample));
   ipcMain.handle('session:states', event => invoke(event, () => Object.fromEntries(states)));
   ipcMain.handle('workspace:auto-focus', event => invoke(event, () => autoFocused));
   window.on('resize', arrangeSoon);
   const trayEvent = (event: TrayEvent) => trayAction({event, platform:process.platform, prefs:trayPrefs, quitting, hasTray:tray !== null});
   window.on('close', event => { if (trayEvent('close') === 'hide') { event.preventDefault(); hideToTray(); } });
   window.on('minimize', () => { if (trayEvent('minimize') === 'hide') hideToTray(); });
+  remote = createRemoteHub({dbPath:databasePath, dir:join(app.getPath('userData'),'remote'), uiDir:join(__dirname,'../../dist'), iconPath:join(__dirname,'../../build/icon.png'), api:remoteApi.api, running:() => runningCount(store.list(),states), blocker:powerSaveBlocker, onChange:() => refreshTray.call(), onPairRequest:showWindow});
+  registerRemoteIpc(ipcMain,trusted,remote);
+  void remote.boot().catch(() => console.error('Falha ao iniciar o acesso remoto.'));
   createTray();
   window.on('closed', () => {
     refreshTray.cancel(); tray?.destroy(); tray = null;
     clearTimeout(dragTimer); clearTimeout(resizeTimer); for (const timer of startupTimers) clearTimeout(timer); startupTimers.clear(); updater.dispose();
     for (const view of views.values()) { try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { console.error('Falha ao encerrar uma sessão.'); } }
-    views.clear(); preferences.close(); store.close();
+    views.clear(); void remote?.close(); remote = null; preferences.close(); store.close();
   });
   // Início escalonado: a interface primeiro; depois a conta em foco (ou a primeira) e as demais, uma a cada 2,5 s. A auditoria das extensões roda em segundo plano.
   void window.loadFile(join(__dirname,'../../dist/index.html')).catch(() => { dialog.showErrorBox('PokéHub', 'Não foi possível carregar a interface local. Verifique a instalação e tente novamente.'); app.quit(); });
@@ -607,5 +624,5 @@ if (primary) app.whenReady().then(() => {
     : 'Não foi possível iniciar o aplicativo ou abrir os dados locais. Verifique a instalação e o armazenamento.';
   dialog.showErrorBox('PokéHub', message); app.quit();
 });
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', () => { quitting = true; void remote?.close(); }); // a porta do acesso remoto fecha ao sair
 app.on('window-all-closed', () => { if (quitting || !tray) app.quit(); }); // escondida na bandeja a janela não está fechada; só o Sair encerra

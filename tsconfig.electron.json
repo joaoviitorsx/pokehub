@@ -12,6 +12,7 @@
   },
   "include": [
     "spike/electron",
-    "spike/domain"
+    "spike/domain",
+    "spike/remote"
   ]
 }

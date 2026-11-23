@@ -1,0 +1,93 @@
+@import '../shared/dna.css';
+/* PokéHub no celular: mesma linguagem do desktop (tokens --pi-*, receitas de docs/DESIGN-POKEIDLE.md), uma coluna, alvos de toque de 44 px. */
+:root { --fonte: "Segoe UI", system-ui, sans-serif; --fonte-titulo: Tahoma, Verdana, "Segoe UI", sans-serif; --slide: cubic-bezier(.2, .8, .2, 1); --pop: cubic-bezier(.34, 1.56, .64, 1); --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; min-height: 100dvh; font: 15px/1.45 var(--fonte); color: var(--pi-sobre); background: conic-gradient(var(--pi-noite-clr) 0 25%, var(--pi-noite-esc) 0 50%, var(--pi-noite-clr) 0 75%, var(--pi-noite-esc) 0) 0 0 / 32px 32px; padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+::selection { background: var(--pi-rx-clr); color: var(--pi-mad-linha); }
+button, input { font: inherit; }
+small { font-weight: 400; }
+p { margin: 0 0 var(--sp-3); }
+ul, ol { list-style: none; margin: 0; padding: 0; }
+.muted { color: var(--pi-vao-dim); }
+.msg { min-height: 1.4em; color: var(--pi-vermelho-txt); font-weight: 600; }
+
+/* receitas: painel de madeira, vão, botões em relevo (degrau sólido, 2 px ao apertar) */
+.wood { border-radius: 9px; background: linear-gradient(var(--pi-mad-esc) 0 10px, var(--pi-mad) 10px calc(100% - 12px), var(--pi-mad-quente) calc(100% - 12px)); box-shadow: inset 0 0 0 2px var(--pi-mad-linha), inset 0 0 0 4px var(--pi-mad-luz), inset 0 0 0 6px var(--pi-mad), 0 5px 0 var(--pi-mad-base), 0 7px 0 var(--pi-mad-linha), 0 14px 30px #0008; }
+.card, .well { padding: var(--sp-4); border-radius: 8px; background: var(--pi-vao); box-shadow: inset 0 0 0 2px var(--pi-mad-linha), 0 1px 0 var(--pi-mad-luz2); }
+button {
+  --face: linear-gradient(var(--pi-mad-quente) 0 4px, var(--pi-mad) 4px); --step: var(--pi-mad-base);
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 var(--sp-4); border: 0; border-radius: 7px; cursor: pointer;
+  background: var(--face); color: var(--pi-sobre); box-shadow: inset 0 0 0 2px var(--pi-mad-linha), inset 0 -3px 0 #0002, 0 3px 0 var(--step);
+  font-family: var(--fonte-titulo); font-size: 13px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; white-space: nowrap;
+  text-shadow: 0 1px 0 var(--pi-mad-linha), 1px 0 0 var(--pi-mad-linha), -1px 0 0 var(--pi-mad-linha), 0 -1px 0 var(--pi-mad-linha);
+  transition: transform var(--dur-fast) var(--slide);
+}
+button:not(:disabled):active { transform: translateY(2px); box-shadow: inset 0 0 0 2px var(--pi-mad-linha), inset 0 -3px 0 #0002, 0 1px 0 var(--step); }
+button:disabled { filter: saturate(.35) brightness(.78); cursor: not-allowed; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--pi-rx-clr); outline-offset: 2px; box-shadow: 0 0 0 2px var(--pi-mad-linha); }
+button.primary { --face: linear-gradient(var(--pi-ouro-luz) 0 6px, var(--pi-ouro) 6px 62%, var(--pi-ouro-forte) 62%); color: var(--pi-ouro-esc); text-shadow: 0 1px 0 #fff8; letter-spacing: 1px; }
+button.secondary, button[aria-pressed=true], .tabs button[aria-current=page] { --face: linear-gradient(var(--pi-rx-clr), var(--pi-rx) 50%, var(--pi-rx-esc)); color: #fff; text-shadow: 0 1px 0 var(--pi-mad-linha); }
+button.danger { --face: linear-gradient(#ef7b62, #d8574a 50%, #9c3229); color: #fff; }
+
+h1, h2 { margin: 0 0 var(--sp-3); font-family: var(--fonte-titulo); font-weight: 700; text-transform: uppercase; }
+h1 { font-size: 26px; font-weight: 900; text-align: center; text-shadow: 2px 0 0 var(--pi-titulo-linha), -2px 0 0 var(--pi-titulo-linha), 0 2px 0 var(--pi-titulo-linha), 0 -2px 0 var(--pi-titulo-linha), 0 3px 0 var(--pi-titulo-linha); }
+h1 em { font-style: normal; color: #ffd166; }
+h2 { font-size: 11px; letter-spacing: .5px; color: var(--pi-sobre-dim); }
+
+/* barra superior: prancha de madeira com a pokébola */
+.top { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: var(--sp-2); min-height: 52px; padding: 6px var(--sp-4); padding-top: calc(6px + env(safe-area-inset-top)); background: linear-gradient(var(--pi-mad-esc) 0 8px, var(--pi-mad) 8px, var(--pi-mad-quente) calc(100% - 6px)); box-shadow: inset 0 -2px 0 var(--pi-mad-linha), 0 3px 0 var(--pi-mad-base), 0 5px 0 var(--pi-mad-linha); }
+.top .ball { width: 30px; height: 30px; flex: none; }
+.top strong { font-family: var(--fonte-titulo); font-size: 18px; text-shadow: 0 2px 0 var(--pi-mad-linha), 1px 0 0 var(--pi-mad-linha), -1px 0 0 var(--pi-mad-linha); }
+.stamp { margin-left: auto; font-size: 11px; font-weight: 700; text-align: right; color: var(--pi-sobre); text-shadow: 0 1px 0 var(--pi-mad-linha), 1px 0 0 var(--pi-mad-linha), -1px 0 0 var(--pi-mad-linha); }
+.stamp.off { color: var(--pi-ouro-luz); }
+main { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-4); padding: var(--sp-4); max-width: 640px; margin: 0 auto; }
+
+/* pareamento: painel de madeira com a bola no pedestal */
+main.pair { min-height: 100dvh; align-content: center; padding-top: calc(var(--sp-4) + env(safe-area-inset-top)); }
+.pair .wood { padding: var(--sp-5) var(--sp-4) var(--sp-4); }
+.pair .wood > p { text-align: center; color: var(--pi-sobre); text-shadow: 0 1px 0 var(--pi-mad-linha); }
+.pair form { display: grid; gap: var(--sp-3); }
+.pair .well { display: grid; gap: var(--sp-2); }
+.pair label { font: 700 11px var(--fonte-titulo); text-transform: uppercase; letter-spacing: .5px; color: var(--pi-sobre-dim); text-align: center; }
+.code { position: relative; display: grid; grid-template-columns: repeat(4, 1fr) 10px repeat(4, 1fr); gap: 5px; align-items: stretch; }
+.code span { display: grid; place-items: center; height: 52px; border-radius: 6px; background: var(--pi-campo); box-shadow: inset 0 0 0 2px var(--pi-mad-linha), 0 1px 0 var(--pi-mad-luz2); font: 700 24px/1 Consolas, "Courier New", monospace; color: var(--pi-ouro-luz); text-shadow: 0 2px 0 var(--pi-mad-linha); }
+.code span[data-on] { box-shadow: inset 0 0 0 2px var(--pi-rx-clr), 0 0 0 2px var(--pi-mad-linha); }
+.code i { align-self: center; height: 4px; border-radius: 2px; background: var(--pi-mad-linha); }
+.code input { position: absolute; inset: 0; width: 100%; opacity: 0; font-size: 16px; /* 16 px: o iOS não dá zoom ao focar */ }
+.hint { margin: 0; font-size: 12px; color: var(--pi-vao-dim); text-align: center; }
+
+/* carregando: pokébola balança 3 vezes e assenta */
+.loading { display: grid; justify-items: center; gap: var(--sp-3); min-height: 60dvh; align-content: center; }
+.loading .ball { width: 56px; height: 56px; transform-origin: 50% 90%; animation: wobble var(--dur-wobble) ease-in-out var(--dur-fast) 1 both; }
+
+.accounts { display: grid; gap: var(--sp-3); }
+.acc { display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-height: 56px; text-align: left; text-transform: none; font-size: 16px; --face: linear-gradient(var(--pi-vao-luz), var(--pi-vao2)); text-shadow: none; }
+.acc strong { flex: 1; font-weight: 700; }
+.gem { flex: none; width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 0 0 2px var(--pi-mad-linha); }
+.st small { font-size: 11px; color: var(--pi-sobre); }
+.chips, .seg { min-width: 0; display: flex; gap: var(--sp-2); overflow-x: auto; padding: 0 2px 6px; scrollbar-width: none; }
+.chip { flex: none; text-transform: none; }
+.seg { flex-wrap: wrap; overflow: visible; margin-bottom: var(--sp-2); } .seg button { flex: none; min-height: 40px; font-size: 12px; }
+.seg button[aria-pressed=true], .chip[aria-pressed=true] { --face: linear-gradient(var(--pi-ouro-luz) 0 6px, var(--pi-ouro) 6px 62%, var(--pi-ouro-forte) 62%); color: var(--pi-ouro-esc); text-shadow: 0 1px 0 #fff8; }
+.subtabs button small, .tabs button small { display: block; font-size: 9px; letter-spacing: 0; text-transform: none; }
+.rows li { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 10px 0; border-top: 1px solid #0005; }
+.rows li:first-child { border-top: 0; }
+.rows li small { grid-column: 1 / -1; color: var(--pi-vao-dim); }
+.health li { grid-template-columns: 1fr auto auto; align-items: baseline; font-variant-numeric: tabular-nums; }
+.hunts li strong, .deals li strong { grid-column: 1; }
+.hunts li span, .deals li span { text-align: right; font-variant-numeric: tabular-nums; }
+.hunts li span:nth-of-type(n+2) { grid-column: 2; }
+.hunts li small { grid-column: 1; }
+.big { font: 700 28px var(--fonte-titulo); color: var(--pi-ouro-luz); text-shadow: 2px 0 0 var(--pi-titulo-linha), -2px 0 0 var(--pi-titulo-linha), 0 2px 0 var(--pi-titulo-linha), 0 -2px 0 var(--pi-titulo-linha); }
+.bar { height: 14px; margin: 0 0 var(--sp-3); border-radius: 4px; background: var(--pi-campo); box-shadow: inset 0 0 0 2px var(--pi-mad-linha); overflow: hidden; }
+.bar i { display: block; height: 100%; background: linear-gradient(var(--pi-xp-luz), var(--pi-xp)); }
+.bar[data-hot] i { background: linear-gradient(#f4d27a, var(--hp-medio)); } .bar[data-hot=alto] i { background: linear-gradient(#f5a095, var(--hp-baixo)); }
+.soon { opacity: .75; }
+
+/* navegação inferior em pixel art: 5 abas, só as já prontas estão ativas */
+.tabs { position: fixed; inset: auto 0 0 0; z-index: 3; display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 8px 6px calc(8px + env(safe-area-inset-bottom)); background: linear-gradient(var(--pi-mad-esc) 0 8px, var(--pi-mad) 8px, var(--pi-mad-quente) calc(100% - 6px)); box-shadow: inset 0 2px 0 var(--pi-mad-linha), 0 -3px 0 var(--pi-mad-linha); }
+.tabs button { flex-direction: column; gap: 2px; min-height: 56px; padding: 4px 2px; font-size: 10px; letter-spacing: .3px; --face: linear-gradient(var(--pi-vao-luz), var(--pi-vao2)); --step: var(--pi-mad-linha); }
+.tabs button[aria-current=page] { --step: var(--pi-mad-linha); }
+.tabs .px { display: block; filter: drop-shadow(0 2px 0 var(--pi-mad-linha)); }
+@media (prefers-reduced-motion: reduce) { * { animation-duration: 0s !important; transition-duration: 0s !important; } }
