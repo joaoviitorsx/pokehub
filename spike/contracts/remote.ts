@@ -1,3 +1,4 @@
+import type { Capture } from '../domain/captures';
 // Estado do acesso remoto mostrado em Gerenciar → Acesso remoto. Nunca carrega chaves, tokens, hashes nem caminhos de arquivo.
 export interface RemotePairing {
   /** Código legível; vazio enquanto oculto (1º pareamento: só depois de conferir a impressão digital no celular). */
@@ -14,5 +15,16 @@ export interface RemoteStatus {
   pairing: RemotePairing | null; request: RemoteRequest | null; paired: string | null;
   pinSet: boolean; devices: number; firstPairing: boolean; dailyCapGold: number;
 }
-export interface RemoteDevice { id: string; name: string; createdAt: string; lastSeen: string | null; canAct: boolean }
+export interface RemoteDevice { id: string; name: string; createdAt: string; lastSeen: string | null; canAct: boolean; /** Assinaturas de push ativas deste aparelho (0–2) */ push?: number }
 export interface RemoteAuditEntry { id: number; at: string; deviceId: string | null; action: string; detail: string | null }
+
+// --- R3: capturas, alertas e Web Push (contrato com o app do celular) ---
+/** Captura entregue ao celular: nome/cor da conta vêm do servidor; NUNCA inclui emailLabel nem as dicas internas (hints). */
+export type RemoteCapture = Omit<Capture, 'hints'> & { label: string; color: string };
+export type AlertKind = 'shiny' | 'p5' | 'recorde' | 'nota' | 'conta_caiu' | 'conta_voltou';
+export interface RemoteAlert { id: string; at: string /* ISO */; kind: AlertKind; profileId: string; label: string; text: string /* pt-BR curto, ≤120 */ }
+export interface AlertPrefs { shiny: boolean; p5: boolean; recorde: boolean; notaMin: number | null /* 0–10 */; contaCaiu: boolean }
+export const DEFAULT_ALERT_PREFS: AlertPrefs = { shiny: true, p5: true, recorde: false, notaMin: null, contaCaiu: true };
+/** Destinos permitidos no campo url do payload de push (hashes relativos do app do celular). */
+export const PUSH_URL_PATTERN = /^#(?:alertas|contas|conta\/[\w-]{1,64})$/;
+export interface PushPayload { kind: AlertKind; label: string; text: string; at: string; url: string }

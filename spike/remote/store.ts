@@ -1,12 +1,14 @@
 // Persistência do acesso remoto (SQLite): preferências, aparelhos pareados (só o hash do token), auditoria, pino da rede e contadores do PIN.
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from '../electron/database';
+import type { AlertKind, AlertPrefs, RemoteAlert } from '../contracts/remote';
 
 export interface DeviceRow { id: string; name: string; createdAt: string; lastSeen: string | null; canAct: boolean }
 export interface TokenRow { hash: string; prevHash: string | null; prevUntil: number; rotatedAt: number }
 export interface PinStateRow { fails: number; level: number; lockedUntil: number; day: string | null }
 export interface AuditRow { id: number; at: string; deviceId: string | null; action: string; detail: string | null }
-export const DEFAULT_PORT = 47321, MAX_DEVICES = 8, AUDIT_KEEP = 1000;
+export interface PushRow { id: string; deviceId: string; endpoint: string; p256dh: string; auth: string; createdAt: string; lastOk: string | null; failCount: number }
+export const DEFAULT_PORT = 47321, MAX_DEVICES = 8, AUDIT_KEEP = 1000, PUSH_PER_DEVICE = 2, ALERTS_KEEP = 1000, ALERTS_MAX_AGE_MS = 7 * 86_400_000;
 export const validPort = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 1024 && value <= 65535;
 const clip = (value: string | null | undefined, max: number) => value == null ? null : value.slice(0, max);
 
@@ -42,7 +44,8 @@ export class RemoteStore {
   listDevices(): DeviceRow[] { return this.db.prepare('SELECT id, name, created_at, last_seen, can_act FROM remote_devices ORDER BY created_at').all().map(row => this.toDevice(row)); }
   countDevices(): number { return Number(this.db.prepare('SELECT COUNT(*) AS n FROM remote_devices').get()?.n ?? 0); }
   touch(id: string, now: string): void { this.db.prepare('UPDATE remote_devices SET last_seen=? WHERE id=?').run(now, id); }
-  revokeDevice(id: string): boolean { this.db.prepare('DELETE FROM remote_pin_state WHERE key=?').run(id); return this.db.prepare('DELETE FROM remote_devices WHERE id=?').run(id).changes === 1; }
+  /** Apaga o aparelho e, junto, o que está ligado a ele (assinaturas de push e preferências de alerta; a FK em cascata também faz isso, aqui é explícito). */
+  revokeDevice(id: string): boolean { this.db.prepare('DELETE FROM remote_pin_state WHERE key=?').run(id); this.db.prepare('DELETE FROM remote_push WHERE device_id=?').run(id); this.db.prepare('DELETE FROM remote_alert_prefs WHERE device_id=?').run(id); return this.db.prepare('DELETE FROM remote_devices WHERE id=?').run(id).changes === 1; }
   pinState(key: string): PinStateRow | null { const r = this.db.prepare('SELECT fails, level, locked_until, day FROM remote_pin_state WHERE key=?').get(key); return r ? {fails: Number(r.fails), level: Number(r.level), lockedUntil: Number(r.locked_until), day: r.day == null ? null : String(r.day)} : null; }
   setPinState(key: string, s: PinStateRow): void { this.db.prepare('INSERT INTO remote_pin_state (key, fails, level, locked_until, day) VALUES (?, ?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET fails=excluded.fails, level=excluded.level, locked_until=excluded.locked_until, day=excluded.day').run(key, s.fails, s.level, s.lockedUntil, s.day); }
   clearPinState(key?: string): void { if (key) this.db.prepare('DELETE FROM remote_pin_state WHERE key=?').run(key); else this.db.exec('DELETE FROM remote_pin_state'); }
@@ -52,6 +55,34 @@ export class RemoteStore {
   }
   listAudit(limit = 100): AuditRow[] {
     return this.db.prepare('SELECT id, at, device_id, action, detail FROM remote_audit ORDER BY id DESC LIMIT ?').all(Math.min(Math.max(1, limit | 0), 100)).map(row => ({id: Number(row.id), at: String(row.at), deviceId: row.device_id == null ? null : String(row.device_id), action: String(row.action), detail: row.detail == null ? null : String(row.detail)}));
+  }
+  // --- R3: push, preferências e alertas ---
+  private toPush(row: Record<string, unknown>): PushRow { return {id: String(row.id), deviceId: String(row.device_id), endpoint: String(row.endpoint), p256dh: String(row.p256dh), auth: String(row.auth), createdAt: String(row.created_at), lastOk: row.last_ok == null ? null : String(row.last_ok), failCount: Number(row.fail_count)}; }
+  pushOf(deviceId: string): PushRow[] { return this.db.prepare('SELECT * FROM remote_push WHERE device_id=? ORDER BY rowid').all(deviceId).map(r => this.toPush(r)); }
+  pushAll(): PushRow[] { return this.db.prepare('SELECT * FROM remote_push ORDER BY rowid').all().map(r => this.toPush(r)); }
+  pushCount(deviceId?: string): number { return Number((deviceId === undefined ? this.db.prepare('SELECT COUNT(*) AS n FROM remote_push').get() : this.db.prepare('SELECT COUNT(*) AS n FROM remote_push WHERE device_id=?').get(deviceId))?.n ?? 0); }
+  /** Registra a assinatura do aparelho (no máx. 2: a mais antiga sai). O mesmo endpoint de outro aparelho passa para este (é o mesmo navegador). */
+  addPush(deviceId: string, sub: {endpoint: string; p256dh: string; auth: string}, id: string, now: string): void {
+    this.db.prepare('DELETE FROM remote_push WHERE endpoint=?').run(sub.endpoint);
+    const mine = this.pushOf(deviceId);
+    for (const old of mine.slice(0, Math.max(0, mine.length - PUSH_PER_DEVICE + 1))) this.db.prepare('DELETE FROM remote_push WHERE id=?').run(old.id);
+    this.db.prepare('INSERT INTO remote_push (id, device_id, endpoint, p256dh, auth, created_at, last_ok, fail_count) VALUES (?, ?, ?, ?, ?, ?, NULL, 0)').run(id, deviceId, sub.endpoint, sub.p256dh, sub.auth, now);
+  }
+  removePush(deviceId: string, endpoint: string): boolean { return this.db.prepare('DELETE FROM remote_push WHERE device_id=? AND endpoint=?').run(deviceId, endpoint).changes > 0; }
+  deletePush(id: string): void { this.db.prepare('DELETE FROM remote_push WHERE id=?').run(id); }
+  clearPush(): void { this.db.exec('DELETE FROM remote_push'); }
+  pushSucceeded(id: string, now: string): void { this.db.prepare('UPDATE remote_push SET last_ok=?, fail_count=0 WHERE id=?').run(now, id); }
+  /** Conta uma falha; devolve o total (o chamador apaga a assinatura ao chegar em 5). */
+  pushFailed(id: string): number { this.db.prepare('UPDATE remote_push SET fail_count=fail_count+1 WHERE id=?').run(id); return Number(this.db.prepare('SELECT fail_count FROM remote_push WHERE id=?').get(id)?.fail_count ?? 0); }
+  getPrefs(deviceId: string): AlertPrefs | null { const row = this.db.prepare('SELECT json FROM remote_alert_prefs WHERE device_id=?').get(deviceId); if (!row) return null; try { return JSON.parse(String(row.json)) as AlertPrefs; } catch { return null; } }
+  setPrefs(deviceId: string, prefs: AlertPrefs): void { this.db.prepare('INSERT INTO remote_alert_prefs (device_id, json) VALUES (?, ?) ON CONFLICT(device_id) DO UPDATE SET json=excluded.json').run(deviceId, JSON.stringify(prefs)); }
+  addAlert(alert: RemoteAlert, nowMs: number = Date.now()): void {
+    this.db.prepare('INSERT OR IGNORE INTO remote_alerts (id, at, kind, profile_id, label, text) VALUES (?, ?, ?, ?, ?, ?)').run(alert.id, alert.at, alert.kind, alert.profileId, alert.label, alert.text);
+    this.db.prepare('DELETE FROM remote_alerts WHERE at < ?').run(new Date(nowMs - ALERTS_MAX_AGE_MS).toISOString());
+    this.db.prepare('DELETE FROM remote_alerts WHERE id NOT IN (SELECT id FROM remote_alerts ORDER BY at DESC, rowid DESC LIMIT ?)').run(ALERTS_KEEP);
+  }
+  listAlerts(limit = 50): RemoteAlert[] {
+    return this.db.prepare('SELECT id, at, kind, profile_id, label, text FROM remote_alerts ORDER BY at DESC, rowid DESC LIMIT ?').all(Math.min(Math.max(1, limit | 0), 200)).map(r => ({id: String(r.id), at: String(r.at), kind: String(r.kind) as AlertKind, profileId: String(r.profile_id), label: String(r.label), text: String(r.text)}));
   }
   close(): void { this.db.close(); }
   private toDevice(row: Record<string, unknown>): DeviceRow { return {id: String(row.id), name: String(row.name), createdAt: String(row.created_at), lastSeen: row.last_seen == null ? null : String(row.last_seen), canAct: Number(row.can_act) !== 0}; }
