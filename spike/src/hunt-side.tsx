@@ -4,6 +4,7 @@ import type { HuntRow, HuntSnapshot, HuntSprite } from '../contracts/hunt';
 import { Ball, El, Icon, icons } from './icons';
 import { huntFetchable, huntQueue, huntRefreshMs, signature } from './hunt-queue';
 import { MarketPanel } from './market-side';
+import { ShopPanel } from './shop-side';
 
 type Mode = 'xp' | 'ouro' | 'shiny';
 type Entry = {data: HuntSnapshot} | {error: string};
@@ -98,7 +99,7 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
  const [seenFocus,setSeenFocus] = useState(focusId);
  if (seenFocus !== focusId) { setSeenFocus(focusId); if (focusId) setPick(focusId); }
  const [mode,setMode] = useState<Mode>('xp');
- const [tab,setTab] = useState<'cacar'|'mercado'>('cacar');
+ const [tab,setTab] = useState<'cacar'|'mercado'|'loja'>('cacar');
  const [entries,setEntries] = useState<Record<string,Entry>>({});
  const [stamp,setStamp] = useState(0);
  const frame = useRef(0);
@@ -185,19 +186,20 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
  };
 
  const sprite = prefs.compact ? 28 : 36;
- return <aside className="side" aria-label="Assistente: caçar e mercado" data-compact={prefs.compact || undefined} data-drag={drag !== null || undefined} style={{'--side':`${drag ?? prefs.width}px`} as CSSProperties}>
+ return <aside className="side" aria-label="Assistente: caçar, mercado e loja" data-compact={prefs.compact || undefined} data-drag={drag !== null || undefined} style={{'--side':`${drag ?? prefs.width}px`} as CSSProperties}>
   {drag !== null && <div className="side-ghost" aria-hidden="true"><span>Ajustando a lateral · {drag} px</span></div>}
   <div className="side-grip" role="separator" aria-orientation="vertical" aria-label="Largura da lateral" aria-valuemin={SIDE_MIN} aria-valuemax={SIDE_MAX} aria-valuenow={drag ?? prefs.width} tabIndex={0} title="Arraste para ajustar a largura. Duplo clique volta ao padrão."
    onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); /* não inicia seleção de texto */ event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId); startDrag(); }}
    onLostPointerCapture={endDrag}
    onDoubleClick={() => resize(SIDE_DEFAULT)}
    onKeyDown={event => { const next = {ArrowLeft:prefs.width + 16,ArrowRight:prefs.width - 16,Home:SIDE_MAX,End:SIDE_MIN}[event.key]; if (next !== undefined) { event.preventDefault(); resize(next); } }}/>
-  <header className="side-head"><h2>{tab === 'mercado' ? 'Mercado' : 'Onde caçar?'}</h2><button className="icon" aria-label="Atualizar dados" title="Atualizar dados" disabled={!live} onClick={() => setStamp(value => value + 1)}><Icon d={icons.reload}/></button><button className="icon" aria-label="Fechar lateral" title="Fechar (Ctrl+H)" onClick={onClose}><Icon d={icons.close}/></button></header>
+  <header className="side-head"><h2>{tab === 'mercado' ? 'Mercado' : tab === 'loja' ? 'Loja' : 'Onde caçar?'}</h2><button className="icon" aria-label="Atualizar dados" title="Atualizar dados" disabled={!live || tab !== 'cacar'} onClick={() => setStamp(value => value + 1)}><Icon d={icons.reload}/></button><button className="icon" aria-label="Fechar lateral" title="Fechar (Ctrl+H)" onClick={onClose}><Icon d={icons.close}/></button></header>
   <div className="side-accounts" role="group" aria-label="Conta">{profiles.map(profile => {const s=states[profile.id] ?? '';return <button key={profile.id} className="tab" style={{'--c':profile.colorToken} as CSSProperties} aria-pressed={profile.id === id} title={profile.label} onClick={() => setPick(profile.id)}><El color={profile.colorToken}/><span className="name">{profile.label}</span><span className="st" data-state={s}><b/></span></button>;})}</div>
-  <div className="seg side-tabs" role="group" aria-label="Seção" style={{'--n':2,'--i':tab === 'cacar' ? 0 : 1} as CSSProperties}><button aria-pressed={tab === 'cacar'} onClick={() => setTab('cacar')}>Caçar</button><button aria-pressed={tab === 'mercado'} onClick={() => setTab('mercado')}>Mercado</button></div>
+  <div className="seg side-tabs" role="group" aria-label="Seção" style={{'--n':3,'--i':['cacar','mercado','loja'].indexOf(tab)} as CSSProperties}><button aria-pressed={tab === 'cacar'} onClick={() => setTab('cacar')}>Caçar</button><button aria-pressed={tab === 'mercado'} onClick={() => setTab('mercado')}>Mercado</button><button aria-pressed={tab === 'loja'} onClick={() => setTab('loja')}>Loja</button></div>
   {tab === 'mercado' && <MarketPanel id={id} state={state}/>}
+  <ShopPanel profiles={profiles} states={states} id={id} active={tab === 'loja'}/>
   {lite && tab === 'cacar' && <p className="lite-tip" role="note">Nas contas que você não está olhando, ative o Modo economia do próprio jogo (botão na tela de sessão) — economiza CPU/GPU.</p>}
-  <div className="side-body" hidden={tab === 'mercado'} aria-busy={state === 'ready' && !entry}>
+  <div className="side-body" hidden={tab !== 'cacar'} aria-busy={state === 'ready' && !entry}>
    {!entry && state !== 'ready' ? message(...(waiting[state] ?? waiting.loading!))
    : !entry ? skeleton('Lendo o jogo…')
    : 'error' in entry ? message('Dados indisponíveis',`${entry.error}. O jogo pode ainda estar conectando.`,retry)
@@ -223,6 +225,6 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
     <p className="side-foot">{ok.liberadas} de {ok.total} hunts liberadas{ok.versaoJogo && ` · jogo v${ok.versaoJogo}`}. Atualiza a cada {refreshMs / 1000} s.<span className="side-sync" data-on={busy === slot || undefined} aria-hidden="true">Atualizando…</span></p>
    </>}
   </div>
-  <p className="side-credit" hidden={tab === 'mercado'}>Dados: extensão /hunt (Liang){ok?.versaoExtensao && ` ${ok.versaoExtensao}`}</p>
+  <p className="side-credit" hidden={tab !== 'cacar'}>Dados: extensão /hunt (Liang){ok?.versaoExtensao && ` ${ok.versaoExtensao}`}</p>
  </aside>;
 }

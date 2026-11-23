@@ -6,6 +6,7 @@ import { effectiveFocus, initialFocus, layout, SIDE_MAX, SIDE_MIN, SIDE_PANEL, s
 import { huntSnapshot, HUNT_UNAVAILABLE, type HuntTarget } from './hunt-snapshot';
 import { marketScan, MARKET_UNAVAILABLE } from './market-scan';
 import { createMarketReader } from './market-read';
+import { createShop, SHOP_UNAVAILABLE } from './shop';
 import { isAllowedSessionNavigation, isOAuthProviderUrl } from './navigation';
 import { ProfileStore } from './profile-store';
 import { partitionFor } from './partition';
@@ -420,6 +421,12 @@ if (primary) app.whenReady().then(() => {
   const marketReader = createMarketReader({known:() => store.list().map(profile => profile.id), target:marketTarget, emit:progress => { if (!window.isDestroyed()) window.webContents.send('market:progress',progress); }});
   ipcMain.handle('market:readAll', async (event,id: unknown) => trusted(event) ? marketReader.readAll(id) : {ok:false,error:MARKET_UNAVAILABLE});
   ipcMain.handle('market:stop', (event,id: unknown) => trusted(event) ? {ok:true,data:marketReader.stop(id)} : {ok:false,error:MARKET_UNAVAILABLE});
+  // Loja rápida (Market do jogo): leitura/compra só a pedido da janela do PokéHub, depois da confirmação do usuário (ver spike/electron/shop.ts).
+  const shop = createShop({known:() => store.list().map(profile => profile.id), target:marketTarget, emit:progress => { if (!window.isDestroyed()) window.webContents.send('shop:progress',progress); }});
+  ipcMain.handle('shop:read', async (event,id: unknown) => trusted(event) ? shop.read(id) : {ok:false,error:SHOP_UNAVAILABLE});
+  ipcMain.handle('shop:buy', async (event,id: unknown,order: unknown) => trusted(event) ? shop.buy(id,order) : {ok:false,error:SHOP_UNAVAILABLE});
+  ipcMain.handle('shop:run', async (event,plan: unknown) => trusted(event) ? shop.run(plan) : {ok:false,error:SHOP_UNAVAILABLE});
+  ipcMain.handle('shop:stop', event => trusted(event) ? {ok:true,data:shop.stop()} : {ok:false,error:SHOP_UNAVAILABLE});
   ipcMain.handle('session:layout', (event,id: unknown,hide: unknown,side: unknown = false,panel: unknown = sidePanel,account: unknown = null) => invoke(event, () => {
     if (typeof hide !== 'boolean' || typeof side !== 'boolean' || (id !== null && typeof id !== 'string') || (account !== null && typeof account !== 'string') || typeof panel !== 'number' || !Number.isInteger(panel) || panel < SIDE_MIN || panel > SIDE_MAX) throw new Error();
     sidePanel = panel; sideAccount = account;
