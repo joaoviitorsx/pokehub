@@ -5,7 +5,7 @@ import { MARKET_SCAN_SCRIPT, MARKET_UNAVAILABLE, sanitizeMarketScan, type Market
 
 /*
  * LEITURA ASSISTIDA DE TODAS AS PÁGINAS DA BUSCA.
- * O clique em "próxima página" (MARKET_NEXT_SCRIPT) é o ÚNICO clique que o PokéHub faz dentro do jogo. Ele só existe para
+ * O clique em "próxima página" (MARKET_NEXT_SCRIPT) é o único clique desta leitura (a Loja, em shop.ts, faz os seus, sempre após confirmação). Ele só existe para
  * o usuário não precisar virar as páginas à mão: não compra, não anuncia, não abre anúncio, não favorita e não escreve nada.
  * Limites: só com a busca preenchida, no máximo 30 páginas, um clique por vez no ritmo de uma pessoa (espera a página mudar
  * + 1,5 s), uma execução por conta, sempre interrompível, e para sozinho em qualquer anomalia.

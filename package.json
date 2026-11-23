@@ -19,7 +19,8 @@
     "release:win": "bun run build && electron-builder --win nsis --publish always",
     "test:electron": "node scripts/run-electron-smoke.cjs",
     "benchmark": "node scripts/benchmark-sessions.cjs",
-    "release:linux": "bun run build && electron-builder --linux AppImage --publish always"
+    "release:linux": "bun run build && electron-builder --linux AppImage --publish always",
+    "check:fuses": "node scripts/check-fuses.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
@@ -57,7 +58,7 @@
         "provider": "github",
         "owner": "joaoviitorsx",
         "repo": "pokehub",
-        "releaseType": "release"
+        "releaseType": "draft"
       }
     ],
     "npmRebuild": false,
@@ -85,6 +86,14 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
     }
   }
 }
