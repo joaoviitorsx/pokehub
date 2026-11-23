@@ -39,7 +39,7 @@ jobs:
         with:
           bun-version: '1.4.4'
       - run: bun install --frozen-lockfile
-      - name: Dependências de sistema (Linux: Electron sob xvfb)
+      - name: 'Dependências de sistema (Linux, Electron sob xvfb)'
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb libnss3 libgtk-3-0t64 libatk-bridge2.0-0t64 libgbm1 libasound2t64 libxss1 libxtst6 libcups2t64 libdrm2 libxkbcommon0
       - run: bun run typecheck
