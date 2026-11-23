@@ -6,7 +6,7 @@ export function openDatabase(path: string): Database {
   try {
     const version = db.prepare('PRAGMA user_version').get()?.user_version;
     if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== 11 && version !== 12 && version !== 13 && version !== 14 && version !== 15) throw new Error('Versão de banco incompatível');
-    db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON'); // as cascatas do Grindolino dependem das FKs em toda conexão
+    db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON'); // NORMAL é o recomendado com WAL: sem corromper, grava bem mais rápido // as cascatas do Grindolino dependem das FKs em toda conexão
     if (version < 15) {
       db.exec('BEGIN IMMEDIATE');
       try {

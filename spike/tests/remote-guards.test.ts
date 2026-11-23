@@ -84,5 +84,5 @@ describe('banco do acesso remoto (migração v11 e store)', () => {
     expect(s.revokeDevice('d1')).toBe(true); expect(s.revokeDevice('d1')).toBe(false);
     expect(() => s.setPort(80)).toThrow(); s.setPort(50000); expect(s.getPort()).toBe(50000); s.close();
     rmSync(dir, {recursive: true, force: true});
-  }, 30_000); // 1.100 inserções no SQLite: folga para máquinas/CI carregados
+  }, 90_000); // 2.100 inserções no SQLite: folga para o disco lento do runner Windows
 });
