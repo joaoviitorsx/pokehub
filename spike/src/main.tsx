@@ -31,8 +31,8 @@ const shortLabels: Record<string,string> = {loading:'Carregando',ready:'',offlin
 function Logo() {
  const id = useId();
  return <svg className="logo" viewBox="62 62 388 388" aria-hidden="true"><defs><clipPath id={`${id}c`}><circle cx="256" cy="256" r="184"/></clipPath><radialGradient id={`${id}s`} cx="34%" cy="28%" r="70%"><stop offset="0" stopColor="#fff" stopOpacity=".35"/><stop offset=".45" stopColor="#fff" stopOpacity="0"/></radialGradient></defs>
-  <g clipPath={`url(#${id}c)`}><rect x="72" y="72" width="184" height="184" fill="#f25f5c"/><rect x="256" y="72" width="184" height="184" fill="#ffca3a"/><rect x="72" y="256" width="184" height="184" fill="#3fa7d6"/><rect x="256" y="256" width="184" height="184" fill="#59cd90"/><rect x="72" y="72" width="368" height="368" fill={`url(#${id}s)`}/><rect x="72" y="238" width="368" height="36" fill="#14171f"/><rect x="253" y="72" width="6" height="368" fill="#14171f"/></g>
-  <circle cx="256" cy="256" r="184" fill="none" stroke="#14171f" strokeWidth="20"/><circle cx="256" cy="256" r="66" fill="#14171f"/><circle cx="256" cy="256" r="44" fill="#eef1f6"/><circle cx="256" cy="256" r="22" fill="none" stroke="#c9ced8" strokeWidth="6"/></svg>;
+  <g clipPath={`url(#${id}c)`}><rect x="72" y="72" width="184" height="184" fill="#f25f5c"/><rect x="256" y="72" width="184" height="184" fill="#ffca3a"/><rect x="72" y="256" width="184" height="184" fill="#3fa7d6"/><rect x="256" y="256" width="184" height="184" fill="#59cd90"/><rect x="72" y="72" width="368" height="368" fill={`url(#${id}s)`}/><rect x="72" y="238" width="368" height="36" fill="#480e1e"/><rect x="253" y="72" width="6" height="368" fill="#480e1e"/></g>
+  <circle cx="256" cy="256" r="184" fill="none" stroke="#480e1e" strokeWidth="20"/><circle cx="256" cy="256" r="66" fill="#480e1e"/><circle cx="256" cy="256" r="44" fill="#fff6ef"/><circle cx="256" cy="256" r="22" fill="none" stroke="#f1d3b7" strokeWidth="6"/></svg>;
 }
 // Sublinhado único das abas: segue a aba ativa lida do DOM (a largura muda com rótulo, estado e media query).
 function placeIndicator(el: HTMLElement | null) {
