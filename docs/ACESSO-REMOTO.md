@@ -92,7 +92,7 @@ Também dá para ligar/desligar pela bandeja ("Acesso remoto: ligado/desligado")
 - CA local própria + certificado do servidor, gerados na primeira ativação (`certs.ts`, só com o `crypto` do Node: ECDSA P-256 e X.509 em DER; **nenhuma dependência nova**). Chaves em `<userData>/remote/`, **cifradas em repouso com o `safeStorage` do Electron** quando disponível.
 - Pareamento, PIN (scrypt assíncrono, bloqueios persistentes e escalonados), lista de aparelhos com **Revogar**, alternância **"Pode agir"** (com confirmação nativa) e **auditoria** (últimos 100) em Gerenciar.
 - API somente leitura, toda autenticada: `GET /api/me`, `/api/state`, `/api/hunt/:id`, `/api/market/:id` (exigem o cabeçalho `X-PH: 1`; 10/min por aparelho; chamadas iguais simultâneas dividem uma execução), `/api/diag`, `/api/events` (SSE) e `POST /api/logout`. O antigo `POST /api/pin/check` **foi removido** (só voltará com elevação de PIN no servidor, ver "Requisitos obrigatórios").
-- App do celular (`spike/remote-ui/`, entrada Vite `remote.html`) **compilado para uma pasta separada** (`dist-remote`, com `sw.js` e manifesto); o desktop (`dist`) não leva nada do celular e o servidor só serve arquivos de `dist-remote`. Barra inferior com 5 abas em pixel art (Contas, Conta, Loja e Alertas em breve, Mercado). Links diretos: `#conta`, `#mercado`, `#saude`.
+- App do celular (`spike/remote-ui/`, entrada Vite `remote.html`) **compilado para uma pasta separada** (`dist-remote`, com `sw.js` e manifesto); o desktop (`dist`) não leva nada do celular e o servidor só serve arquivos de `dist-remote`. Barra inferior com 5 abas em pixel art (Contas, Conta, Loja, Mercado, Alertas; a Loja e as ações chegaram no R4). Links diretos: `#conta`, `#mercado`, `#saude`.
 - `powerSaveBlocker('prevent-app-suspension')` só enquanto o servidor está **de fato escutando** e há ≥1 conta aberta.
 - Banco v12 (não destrutivo): v11 (`remote_enabled`, `remote_port`, `remote_pin_hash`, `remote_daily_cap_gold`, tabelas `remote_devices`, `remote_audit`, `remote_spend`) + v12 (rotação do token, pino da rede, ações desligadas e `remote_pin_state` com os contadores do PIN).
 
@@ -150,6 +150,34 @@ Na primeira vez o Windows pergunta se o PokéHub pode receber conexões: marque 
 - No iPhone o push só funciona com o app instalado na tela inicial (PWA) e a CA instalada; a Apple recusa assuntos VAPID com `localhost`, por isso o assunto genérico é `example.com`.
 - Não há envio por Discord/ntfy (fica para depois).
 
+## Implementado (R4, ações pelo celular)
+
+Só funciona para aparelhos com **"Pode agir"** (liga-se no PC, com confirmação nativa), com **PIN** definido no PC e com as ações não desligadas por erros de PIN. Tudo é decidido **no servidor** (`spike/remote/actions.ts`); o celular só pede.
+
+**Rotas** (POST, JSON ≤ 8 KB, Origin conferido; sem `can_act` = 403; todas auditadas)
+- `POST /api/shop/read {profileIds}` → `{accounts:[{profileId, label, gold, items:[{cat,name,have,price}], error?}]}`. Leitura nova no jogo (`shop.read`, respeita a trava por conta), **só itens do catálogo** da Loja. 10/min por aparelho (junto com `plan`).
+- `POST /api/shop/plan {profileIds, mode:'manual'|'kit', lines?:[{cat,name,qty}], kit?:{name, lines:[{cat,name,target}]}}` → relê os preços no jogo, valida contra o catálogo, monta o plano canônico por conta (itens, quantidade, preço unitário, total, ouro antes/depois, "cabe?", teto restante), calcula `planHash = sha256(JSON canônico)` e guarda `{confirmId (128 bits), aparelho, planHash, plano, expira em 60 s, usada:false}` na memória **e** no banco (`remote_confirms`). Um plano novo invalida o anterior do mesmo aparelho. Sem nada executável: 422 com o plano (sem `confirmId`).
+- `POST /api/shop/confirm {confirmId, planHash, pin?}` + cabeçalho **`Idempotency-Key`** (obrigatório, 8–64 caracteres): mesmo aparelho, não expirada (410), não usada (409), hash igual (senão 409 e a confirmação é queimada), PIN verificado no servidor (ver abaixo). Depois: **marca como usada de forma atômica** (UPDATE condicional) → **reserva o teto diário** (`BEGIN IMMEDIATE`) por conta → **relê os preços no jogo**: se subiu, aborta aquela conta ("Preço mudou", reserva devolvida); se caiu, compra pelo preço novo; falta de ouro também aborta → executa pelo `shop.run` (catálogo, só ouro, `accountLock`) → devolve o que sobrou da reserva → grava cada linha em `remote_purchases`. Resposta 200 com o resumo por conta (ou 409 `compra_abortada` se nada foi comprado). Repetir a mesma `Idempotency-Key` devolve o resultado guardado (também depois de reiniciar o PC), sem comprar de novo. O progresso sai pelo SSE `shop` (`start`, `line`: buying/ok/error, `done`), **só para o aparelho que confirmou**.
+- `POST /api/elevate {pin}` → "lembrar o PIN por 10 min", **na memória do servidor**, por aparelho (nunca no celular). Não renova sozinha. Cai ao revogar/expirar/sair, trocar ou remover o PIN, bloquear o PIN, desligar o acesso remoto, mudar de rede, tirar o "Pode agir" e ao **aumentar o teto**. Compras acima de **50% do teto restante** de qualquer conta pedem o PIN **sempre**, mesmo com a elevação.
+- `POST /api/account/:id/{reload|suspend|resume}`, `POST /api/lite {on}` (corpo com `pin` quando não há elevação): as mesmas funções do IPC do PC. 5 ações/min por aparelho (429), estado inválido = 409 (não gasta o limite), aviso na bandeja/notificação do PC e linha no registro.
+- `GET /api/me` ganhou `actions`: `{canAct, pinSet, actionsDisabled, lockedMs, elevatedMs, dailyCapGold, lite}` para o app mostrar o motivo de cada botão desligado.
+- **Não existe nenhuma rota, seletor ou URL de compra no Mercado da Comunidade (RMT).** Há teste que varre o código das ações e confere os 404.
+
+**PIN, bloqueio e limites.** Os erros de PIN passam pelo mesmo `PinGuard` de antes (scrypt assíncrono; 5 erros = 15 min → 1 h → 24 h → revoga; 10 erros/dia desligam as ações). Erro de PIN **não** queima a confirmação (dá para tentar de novo no mesmo plano) e não gasta o limite de 5 ações/min. 403 `pin_necessario`/`pin_errado`, 423 `pin_bloqueado`/`acoes_desligadas` com `Retry-After`.
+
+**Teto diário.** `remote_daily_cap_gold` (padrão 200.000 de ouro **por conta**, **só editável no PC**). `remote_spend(day, profile_id, gold, tz)`: dia no **fuso local do PC** (o fuso fica gravado). A reserva soma e confere na mesma transação, então dois planos que juntos estourariam o teto nunca passam os dois.
+
+**O que o PC faz a cada compra:** notificação "Compra feita pelo celular: Conta: 100× Poke Ball (−10.000 ouro) · aparelho" (balão da bandeja no Windows), **push** a todos os aparelhos com notificações (`kind: "acao"`, sem dados sensíveis, `url: #alertas`) e entrada no registro (`compra_confirmada`, `compra_abortada`, `compra_preco_mudou`, `compra_recusada_teto`, `compra_hash_diferente`, `acao_recarregar|suspender|retomar`, `modo_leve`, `elevacao_pin`, `teto_diario`). `remote_purchases` **nunca é podada** (id, data, aparelho, conta, confirmação, hash, item, quantidade, preço, total, resultado); o painel mostra as últimas 50.
+
+**No PC (Gerenciar → Acesso remoto):** por aparelho, "Pode agir: sim/não" (confirmação nativa); editor do **teto diário** (aumentar pede confirmação nativa e encerra os PINs lembrados); gasto de hoje por conta; histórico das últimas 50 compras. **No celular:** aba **Loja** (contas, "Ler estoque", tabela, compra manual com ×10/×100, kits em `localStorage` `pokehub.kits` com a mesma validação do PC, "Revisar compra" → plano com ouro depois e uso do teto → teclado de PIN de 6 dígitos, teclas grandes, vibração curta, ou "PIN lembrado (x min)" → progresso ✓/✗ ao vivo → resumo), botões **Recarregar/Suspender/Retomar** na aba Conta e **Modo leve** na aba Contas, sempre com o motivo claro quando algo está desligado (sem "Pode agir", sem PIN, PIN bloqueado, ações desligadas).
+
+**Banco v14** (não destrutivo, aceita 0–14): `remote_confirms` (apagada em cascata com o aparelho), `remote_purchases` e a coluna `tz` de `remote_spend`.
+
+**Limites honestos do R4**
+- Quem tem o celular desbloqueado, "Pode agir" e o PIN pode gastar até o teto do dia por conta. O teto e a confirmação nativa do PC são a rede de proteção; 200.000 por conta/dia é o padrão, não um valor "seguro" universal.
+- A resposta de uma compra longa pode se perder (Wi-Fi): o celular repete com a mesma `Idempotency-Key` e recebe o resultado guardado; se a chave se perder, confira o histórico no PC.
+- A garantia final do preço é a do jogo: o hub relê e o script compara o preço exato antes do clique; uma mudança no meio de um clique não é detectável.
+
 ## SEGURANÇA (R1, o que é garantido de verdade)
 **Garantias reais (testadas):**
 - **Desligado por padrão**; ao desligar (chave, bandeja ou sair do app) todos os listeners fecham na hora. Ligar, desligar e reiniciar passam por **fila serial com contador de geração**: um *listen* lento nunca sobrevive a um "desligar" posterior.
@@ -171,7 +199,7 @@ Na primeira vez o Windows pergunta se o PokéHub pode receber conexões: marque 
 - O acesso remoto **não** protege contra malware no PC ou no celular.
 
 ## Requisitos obrigatórios para R3/R4/R5
-Itens de R4/R5 ainda não existem; **não implemente R4/R5 sem cada item abaixo** (o de Push, R3, já está feito):
+Os itens de R5 ainda não existem; **não implemente R5 sem cada item abaixo** (Push, R3, e Compras/Elevação, R4, já estão feitos: ver "Implementado (R3)" e "Implementado (R4)"):
 - **Compras (R4):** *tokens de confirmação emitidos pelo servidor*, de uso único, ligados ao **hash do plano** (item, quantidade, conta, preço), com validade curta; reserva **atômica** do teto diário em SQLite (`remote_spend`, uma transação que confere e soma antes de agir). O celular nunca decide o valor.
 - **Elevação por PIN no servidor:** ação que muda algo exige o PIN verificado **no servidor** (mesmos bloqueios/escalonamento), gerando uma elevação curta e vinculada ao aparelho e à ação; nada de `pin/check` que só devolve "ok".
 - **Push (R3), implementado:** *allowlist* de endpoints de push (host/esquema/porta) para evitar **SSRF** ao enviar; chave **VAPID** guardada com `safeStorage` e nunca servida; payload sem dados sensíveis; assinaturas presas ao aparelho com cascata; no máximo 2 por aparelho; agrupamento/limite de taxa; sem cache de `/api` no service worker. Ver "Implementado (R3)".
@@ -183,7 +211,7 @@ Itens de R4/R5 ainda não existem; **não implemente R4/R5 sem cada item abaixo*
 
 ## O que falta
 - **R3:** feito (servidor): leitor de capturas, feed, alertas e Web Push (VAPID local). Falta no app do celular a tela de Alertas/assinatura (feita à parte) e, mais tarde, Discord/ntfy.
-- **R4:** ações com PIN (repor kit, recarregar, suspender, Modo leve), teto diário de ouro e a Loja, **com os requisitos acima**.
+- **R4:** feito (ver "Implementado (R4)"): Loja com confirmação do servidor, teto diário atômico, elevação por PIN, recarregar/suspender/retomar e Modo leve.
 - **R5:** tela ao vivo (capturePage) e modo Controlar com PIN e expiração de 10 min, **com os requisitos acima**.
 - **R6:** revisão de segurança (força bruta distribuída, replay, token roubado).
 - Limitações conhecidas: o ranking do Mercado no celular usa o que o PC já leu (o celular não clica nas páginas); a rede fixada usa o nome do perfil do Windows + sub-rede (sem o MAC do gateway).

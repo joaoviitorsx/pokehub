@@ -81,6 +81,6 @@ describe('helpers do app', () => {
   });
   it('links diretos', () => {
     expect(resolveHash('#alertas')).toEqual({tab: 'alertas'}); expect(resolveHash('#contas')).toEqual({tab: 'contas'}); expect(resolveHash(`#conta/${ID}`)).toEqual({tab: 'conta', account: ID});
-    expect(resolveHash('#conta/xx')).toEqual({tab: 'contas'}); expect(resolveHash('#loja')).toEqual({tab: 'contas'}); expect(resolveHash('#saude')).toEqual({tab: 'contas'}); expect(resolveHash('#mercado')).toEqual({tab: 'mercado'}); expect(resolveHash('#conta')).toEqual({tab: 'conta'});
+    expect(resolveHash('#conta/xx')).toEqual({tab: 'contas'}); expect(resolveHash('#loja')).toEqual({tab: 'loja'}); expect(resolveHash('#saude')).toEqual({tab: 'contas'}); expect(resolveHash('#mercado')).toEqual({tab: 'mercado'}); expect(resolveHash('#conta')).toEqual({tab: 'conta'});
   });
 });

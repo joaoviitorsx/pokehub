@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('pokehub', {
     audit: () => ipcRenderer.invoke('remote:audit'),
     pushTest: (id: string) => ipcRenderer.invoke('remote:push-test',id),
     alerts: () => ipcRenderer.invoke('remote:alerts'),
+    purchases: () => ipcRenderer.invoke('remote:purchases'),
+    setCap: (value: number) => ipcRenderer.invoke('remote:set-cap',value),
     allowNetwork: () => ipcRenderer.invoke('remote:allow-network'),
     revealCode: () => ipcRenderer.invoke('remote:reveal-code'),
     setCanAct: (id: string, value: boolean) => ipcRenderer.invoke('remote:set-can-act',id,value),

@@ -1,7 +1,7 @@
 // Cliente da API do PokéHub no celular. Cookie HttpOnly vai sozinho (same-origin); 401 = não pareado.
 export class Unauthorized extends Error {}
 export interface Account { id: string; label: string; color: string; state: string; suspended: boolean }
-export interface Me { name: string; canAct: boolean; pinSet: boolean }
+export interface Me { name: string; canAct: boolean; pinSet: boolean; actions?: import('../contracts/remote').ActionsState }
 async function parse(res: Response): Promise<unknown> { try { return await res.json(); } catch { return null; } }
 export async function get<T>(path: string): Promise<T> {
   const res = await fetch(path, {credentials: 'same-origin', cache: 'no-store', headers: {'X-PH': '1'}}); // X-PH: as consultas caras exigem o cabeçalho (um <img> de outro site não manda)
@@ -9,8 +9,8 @@ export async function get<T>(path: string): Promise<T> {
   if (!res.ok) throw new Error(String((await parse(res) as {error?: string} | null)?.error ?? 'Falha ao consultar o PC.'));
   return await res.json() as T;
 }
-export async function post(path: string, body: unknown): Promise<{ok: boolean; status: number; error?: string; data?: unknown}> {
-  const res = await fetch(path, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+export async function post(path: string, body: unknown, headers: Record<string, string> = {}): Promise<{ok: boolean; status: number; error?: string; data?: unknown}> {
+  const res = await fetch(path, {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', ...headers}, body: JSON.stringify(body)});
   const data = await parse(res) as {error?: string} | null;
   return {ok: res.ok, status: res.status, error: data?.error, data};
 }

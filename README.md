@@ -12,6 +12,7 @@ Segurança, privacidade, o que o app guarda, envia e clica no jogo: leia o **[SE
   - **Mercado**: leitura e pontuação (custo-benefício) da vitrine do Mercado da Comunidade; leitura assistida de várias páginas, a pedido.
   - **Loja**: compra de Pokébolas, Poções e Revives no Market NPC, sempre depois de uma janela de confirmação.
   - **Capturas**: feed e alertas das capturas, com histórico de 7 dias.
+- **Acesso remoto (opcional, desligado por padrão)**: veja as contas, capturas e alertas pelo celular na rede de casa (HTTPS próprio, pareamento por código + confirmação no PC) e, com “Pode agir” e PIN, compre na Loja (só ouro, com teto diário), recarregue/suspenda contas e ligue o Modo leve. Detalhes em `docs/ACESSO-REMOTO.md` e `SECURITY.md`.
 - **Extensões** de navegador (Manifest V3) carregadas nas sessões, com **auditor** estático (Só leitura / Interage com a página / Acessa outros sites / Bloqueada) e aprovação dos hosts externos. A `/hunt` vem catalogada.
 - **Atualizações** automáticas pelo GitHub Releases (verificação a cada 6 h, desligável).
 - **Bandeja** do sistema, **Modo leve** (menos CPU/memória), **suspender** contas e **diagnóstico** local de memória e CPU.
