@@ -9,7 +9,6 @@ export const icons = {
  diagnostics:'M1.5 8h3l2-5 3 10 2-5h3',
  plus:'M8 3v10M3 8h10',
  close:'M4 4l8 8M12 4l-8 8',
- flask:'M6 2h4M6.5 2v4L3 12.4a1 1 0 0 0 .9 1.6h8.2a1 1 0 0 0 .9-1.6L9.5 6V2M5.2 9.5h5.6',
  screen:'M2 3h12v8H2zM6 13.5h4M8 11v2.5',
  stopwatch:'M8 5a4.5 4.5 0 1 0 0 9a4.5 4.5 0 1 0 0-9M8 7.2v2.3l1.5 1M6.5 2.5h3M8 2.5V5',
  warn:'M8 2.5l6 10.5H2zM8 7v3M8 11.7v.1',
@@ -37,61 +36,3 @@ export const elements: Record<Element,{d:string;name:string}> = {
  star:{name:'Estrela',d:'M8 1.5c.5 3.6 2.4 6 6.5 6.5-4.1.5-6 2.9-6.5 6.5-.5-3.6-2.4-6-6.5-6.5 4.1-.5 6-2.9 6.5-6.5z'},
 };
 export const El = ({color}:{color:string}) => <svg className="el" viewBox="0 0 16 16" aria-hidden="true"><path d={elements[elementOf(color)].d}/></svg>;
-
-// Arte original: o Professor Grindolino. O rosto muda com o humor; `busy` agita o frasco (leitura em andamento).
-export type Mood = 'happy' | 'thinking' | 'worried';
-const liquid: Record<Mood,string> = {happy:'#59cd90',thinking:'#5db8e3',worried:'#ffca3a'};
-const faces: Record<Mood,{brows:string; mouth:string; grin:boolean; eyes:[number,number,number][]}> = {
- happy:{brows:'M33 35q5-4 10-1M61 33q5-4 10 0',mouth:'M42 64q10 9 20 0z',grin:true,eyes:[[44.5,49,2.6],[66.5,48,3.4]]},
- thinking:{brows:'M33 36h10M61 31q5-4 10 0',mouth:'M46 67q6-3 11 1',grin:false,eyes:[[44.5,44.5,2.6],[66.5,43.5,2.8]]},
- worried:{brows:'M33 37l10-4M62 33l10 4',mouth:'M44 68q4-4 8 0t8 0',grin:false,eyes:[[41.5,49.5,2],[63.5,49.5,2]]},
-};
-export function Professor({mood = 'happy',busy = false}:{mood?:Mood; busy?:boolean}) {
- const face = faces[mood], tint = liquid[mood];
- return <svg className="prof" data-mood={mood} data-busy={busy || undefined} viewBox="0 0 120 120" aria-hidden="true">
-  <path d="M27 52 17 37l12 3-6-19 14 11 3-21 11 16 9-19 4 21 14-11-5 18 13-3-9 16z" fill="#cfd6e4"/>
-  <path d="M22 120c0-26 12-41 30-41s30 15 30 41z" fill="#eef1f6"/>
-  <path d="M52 79 43 97l9 9 9-9z" fill="#3fa7d6"/>
-  <path d="M52 86l-9-5v10zM52 86l9-5v10z" fill="#ffca3a"/>
-  <circle cx="52" cy="111" r="1.8" fill="#aab3c2"/>
-  <path d="M30 103h10v9H30z" fill="none" stroke="#aab3c2" strokeWidth="1.4"/><path d="M33 103v-6M37 103v-4" stroke="#f25f5c" strokeWidth="1.8" strokeLinecap="round"/>
-  <circle cx="31.5" cy="54" r="4" fill="#e3b48c"/><circle cx="72.5" cy="54" r="4" fill="#e3b48c"/>
-  <ellipse cx="52" cy="52" rx="20" ry="22" fill="#f1c7a0"/>
-  <path d={face.mouth} fill={face.grin ? '#fff' : 'none'} stroke="#1b1f2a" strokeWidth={face.grin ? 1.6 : 2.2} strokeLinecap="round" strokeLinejoin="round"/>
-  <g stroke="#1b1f2a" strokeWidth="3"><circle cx="41.5" cy="48" r="10.5" fill="#d6f0fb"/><circle cx="63.5" cy="48" r="10.5" fill="#d6f0fb"/></g>
-  <g className="eye" fill="#1b1f2a">{face.eyes.map(([x,y,r]) => <circle key={x} cx={x} cy={y} r={r}/>)}</g>
-  <path d={face.brows} fill="none" stroke="#8b95a5" strokeWidth="2.6" strokeLinecap="round"/>
-  {mood === 'happy' && <g className="twk" fill="#ffca3a"><path d="M12 58c.4 2.8 1.9 4.6 5 5-3.1.4-4.6 2.2-5 5-.4-2.8-1.9-4.6-5-5 3.1-.4 4.6-2.2 5-5z"/><path d="M84 12c.3 2 1.4 3.3 3.6 3.6-2.2.3-3.3 1.6-3.6 3.6-.3-2-1.4-3.3-3.6-3.6 2.2-.3 3.3-1.6 3.6-3.600z"/></g>}
-  {mood === 'thinking' && <g className="twk" fill="none" stroke="#5db8e3" strokeWidth="2.6" strokeLinecap="round"><path d="M7 60q0-5 5-5t5 5q0 3-5 5v3"/><path d="M12 73.500v.2"/></g>}
-  {mood === 'worried' && <path d="M79 30q3.5 4.5 3.5 7a3.5 3.5 0 0 1-7 0q0-2.5 3.5-7z" fill="#5db8e3"/>}
-  <g className="arm">
-   <path d="M76 100 92 88" stroke="#eef1f6" strokeWidth="11" strokeLinecap="round"/>
-   <path d="M96 52h8v12l10 22q2 5-3 5H89q-5 0-3-5l10-22z" fill="#eef1f6" fillOpacity=".14" stroke="#cfd6e4" strokeWidth="1.6" strokeLinejoin="round"/>
-   <path d="M92.2 74h15.6l5 11.6q1 3.4-2.4 3.400H89.600q-3.4 0-2.4-3.400z" fill={tint}/>
-   <path d="M94 50h12" stroke="#cfd6e4" strokeWidth="2.4" strokeLinecap="round"/>
-   <circle cx="92" cy="88" r="5.5" fill="#f1c7a0"/>
-   <g fill={tint}><circle className="bub" cx="100" cy="42" r="3.6"/><circle className="bub b2" cx="104.5" cy="32" r="2.8"/><circle className="bub b3" cx="97" cy="25" r="2.2"/></g>
-   <g fill="#eef1f6" fillOpacity=".6"><circle cx="97" cy="80" r="1.5"/><circle cx="103" cy="84" r="1"/></g>
-  </g>
- </svg>;
-}
-// Cenas pequenas dos estados sem equipe: mesma paleta e traço do Professor.
-export type SceneKind = 'plug' | 'empty' | 'broken' | 'sleep' | 'wait';
-const glass = {fill:'#eef1f6',fillOpacity:.08,stroke:'#cfd6e4',strokeWidth:2,strokeLinejoin:'round'} as const;
-const screen = <><rect x="20" y="10" width="50" height="34" rx="4" fill="#1f2531" stroke="#cfd6e4" strokeWidth="2"/><path d="M36 54h18M45 44v10" stroke="#cfd6e4" strokeWidth="2" strokeLinecap="round"/></>;
-const scenes: Record<SceneKind,React.ReactNode> = {
- plug:<>{screen}<path d="M28 28h9l3-6 5 11 3-5h14" fill="none" stroke="#4a556a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-  <path d="M70 34q8 0 8 10t-6 14" fill="none" stroke="#8b95a5" strokeWidth="2" strokeLinecap="round"/><rect x="66" y="57" width="10" height="8" rx="2" fill="#ffca3a"/><path d="M76 59.500h4M76 62.500h4" stroke="#cfd6e4" strokeWidth="1.6" strokeLinecap="round"/>
-  <rect x="86" y="54" width="8" height="14" rx="2" fill="#2c3443" stroke="#8b95a5" strokeWidth="1.4"/><path className="twk" d="M82 50l-2-4M84.5 48l1-5" stroke="#ffca3a" strokeWidth="1.6" strokeLinecap="round"/></>,
- empty:<><path d="M24 60V30a16 16 0 0 1 32 0v30z" {...glass}/><path d="M18 61h44" stroke="#cfd6e4" strokeWidth="3" strokeLinecap="round"/><path d="M36 16h8" stroke="#cfd6e4" strokeWidth="3" strokeLinecap="round"/>
-  <ellipse cx="40" cy="50" rx="9" ry="6" fill="none" stroke="#8b95a5" strokeWidth="1.6" strokeDasharray="3 3.5"/>
-  <circle cx="72" cy="30" r="9" fill="#d6f0fb" fillOpacity=".22" stroke="#ffca3a" strokeWidth="2.4"/><path d="M78.5 36.5 87 45" stroke="#ffca3a" strokeWidth="3.6" strokeLinecap="round"/></>,
- broken:<><path d="M36 10h14v14l13 28q3 8-4 8H27q-7 0-4-8l13-28z" {...glass}/><path d="M34 8h18" stroke="#cfd6e4" strokeWidth="2.4" strokeLinecap="round"/>
-  <path d="M26.5 48h33l2.5 5.500q1.5 4.5-3 4.500H27q-4.5 0-3-4.500z" fill="#f25f5c"/><path d="M47 24l-5 7 6 4-4 9 5 4" fill="none" stroke="#eef1f6" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
-  <ellipse cx="74" cy="63" rx="13" ry="3.5" fill="#f25f5c" fillOpacity=".75"/><path d="M62 52q6 2 8 9" fill="none" stroke="#f25f5c" strokeWidth="2.4" strokeLinecap="round"/>
-  <g fill="#8b95a5"><circle className="bub" cx="72" cy="38" r="4"/><circle className="bub b2" cx="80" cy="28" r="3"/><circle className="bub b3" cx="70" cy="22" r="2.4"/></g></>,
- sleep:<>{screen}<path d="M47 17a10 10 0 1 0 9 14 8 8 0 0 1-9-14z" fill="#ffca3a"/><g className="twk" fill="none" stroke="#aab3c2" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M76 22h7l-7 8h7"/><path d="M86 8h5l-5 6h5"/></g></>,
- wait:<><path d="M34 9h28M34 63h28" stroke="#cfd6e4" strokeWidth="3" strokeLinecap="round"/><path d="M38 9v8q0 8 10 19-10 11-10 19v8h20v-8q0-8-10-19 10-11 10-19V9z" {...glass}/>
-  <path d="M42 20h12q-1 6-6 11-5-5-6-11z" fill="#ffca3a"/><path d="M41 61q1-8 7-10 6 2 7 10z" fill="#ffca3a"/><path d="M48 31v20" stroke="#ffca3a" strokeWidth="1.4" strokeDasharray="2 2"/></>,
-};
-export const Scene = ({kind}:{kind:SceneKind}) => <svg className="scene" viewBox="0 0 96 72" aria-hidden="true">{scenes[kind]}</svg>;

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,7 +9,6 @@ type Handler = (...args: unknown[]) => unknown;
 const handlers = new Map<string, Handler>();
 const created: FakeView[] = [];
 let confirmChoice = 0;
-let saveTarget: string | null = null; // caminho devolvido pelo diálogo de salvar; null = cancelado
 const openedExternal: string[] = [];
 const notices: string[] = [];
 let noticeChoice = 0;
@@ -83,7 +82,7 @@ const fakeApp = Object.assign(new EventEmitter(), {
   getAppMetrics: () => [{pid:123,creationTime:100,memory:{workingSetSize:2048},cpu:{percentCPUUsage:3}}],
   quit: () => {},
 });
-vi.doMock('electron', () => ({app: fakeApp, BrowserWindow:FakeWindow, WebContentsView:FakeView, ipcMain:{handle: (name:string, handler:Handler) => handlers.set(name,handler)}, shell:{openExternal:async (url:string) => {openedExternal.push(url);}}, dialog:{showSaveDialog:async () => ({canceled:saveTarget === null,filePath:saveTarget ?? ''}),showOpenDialog:async () => ({canceled:chosenFolder === null,filePaths:chosenFolder === null ? [] : [chosenFolder]}),showErrorBox() {},showMessageBoxSync:()=>confirmChoice,showMessageBox:async (_window:unknown, options:{message:string}) => {notices.push(options.message);return {response:noticeChoice};}}}));
+vi.doMock('electron', () => ({app: fakeApp, BrowserWindow:FakeWindow, WebContentsView:FakeView, ipcMain:{handle: (name:string, handler:Handler) => handlers.set(name,handler)}, shell:{openExternal:async (url:string) => {openedExternal.push(url);}}, dialog:{showOpenDialog:async () => ({canceled:chosenFolder === null,filePaths:chosenFolder === null ? [] : [chosenFolder]}),showErrorBox() {},showMessageBoxSync:()=>confirmChoice,showMessageBox:async (_window:unknown, options:{message:string}) => {notices.push(options.message);return {response:noticeChoice};}}}));
 afterAll(() => { shell?.emit('closed'); vi.doUnmock('electron'); rmSync(directory,{recursive:true,force:true}); });
 
 describe('processo principal', () => {
@@ -114,37 +113,14 @@ describe('processo principal', () => {
   expect(new Set(created.map(view => view.options.webPreferences.partition)).size).toBe(4);
   expect(created.map(view => view.webContents.loadedUrl)).toEqual(Array(4).fill('https://pokeidle.io/app'));
   expect(invoke('profiles:create',input).ok).toBe(false);
-  // só GrindolinoError chega à interface; o resto (aqui, a violação de PK) vira mensagem genérica
-  expect(invoke('grindolino:createHunt',{name:'',region:'',requiredTrainerLevel:null})).toEqual({ok:false,error:'Nome da hunt deve ter de 1 a 60 caracteres'});
-  expect(invoke('grindolino:addForecast',{accountId:saved.id,huntId:'550e8400-e29b-41d4-a716-446655440000',xpPerHour:1,coinsPerHour:null})).toEqual({ok:false,error:'Hunt não encontrada'});
+  // erros inesperados viram mensagem genérica
   expect(invoke('profiles:update',1,input)).toEqual({ok:false,error:'Não foi possível concluir a operação. Confira os dados e tente novamente.'});
-  expect(invoke('grindolino:compare',{objective:'xp'})).toEqual({ok:true,data:[]});
-  // histórico: pedido validado no main; a exportação só grava no caminho que o diálogo nativo devolveu
-  const scope = {accountId:null,huntId:null,range:'7d'};
-  expect(invoke('analytics:series',{...scope,metric:'xp'})).toMatchObject({ok:true,data:{granularity:'day',series:ids.map(accountId => ({accountId,points:[]}))}});
-  expect(invoke('analytics:series',{...scope,metric:'dps'})).toEqual({ok:false,error:'Métrica inválida'});
-  expect(await invoke('analytics:export',{format:'exe',scope})).toEqual({ok:false,error:'Formato inválido'});
-  expect(await invoke('analytics:export',{format:'csv',scope})).toEqual({ok:true,data:{saved:false,fileName:null,rows:0}});
-  saveTarget = join(directory,'saida.csv');
-  expect(await invoke('analytics:export',{format:'csv',scope})).toEqual({ok:true,data:{saved:true,fileName:'saida.csv',rows:0}});
-  expect(readFileSync(saveTarget,'utf8').startsWith('\uFEFFtipo;data;conta;hunt')).toBe(true);
-  saveTarget = join(directory,'pasta-inexistente','saida.json');
-  expect(await invoke('analytics:export',{format:'json',scope})).toEqual({ok:false,error:'Não foi possível exportar. Confira a pasta escolhida e tente novamente.'});
-  expect(await handlers.get('analytics:export')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame},{format:'csv',scope})).toEqual({ok:false,error:'Origem não autorizada.'});
   const untrusted = handlers.get('profiles:list')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame}) as {ok:boolean};
   expect(untrusted.ok).toBe(false);
   // /hunt: id desconhecido, tipo errado, origem não confiável e sessão ainda carregando não executam nada na página
   const huntFail = {ok:false,error:'Dados do /hunt indisponíveis nesta conta'};
   for (const id of ['nao-existe',null,42,{id:saved.id},saved.id]) expect(await invoke('hunt:snapshot',id)).toEqual(huntFail);
   expect(await handlers.get('hunt:snapshot')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame},saved.id)).toEqual(huntFail);
-  for (const id of ['nao-existe',null,saved.id]) expect(await invoke('hunt:team',id)).toEqual(huntFail);
-  expect(await handlers.get('hunt:team')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame},saved.id)).toEqual(huntFail);
-  // medição ao vivo: mesma fronteira; sessão ainda carregando e origem não confiável não executam nada na página
-  expect(invoke('live:status')).toEqual({ok:true,data:{active:[],ended:[]}});
-  expect(await invoke('live:start',saved.id,null)).toEqual({ok:false,error:'Abra o jogo nesta conta e espere carregar para iniciar a medição.'});
-  expect(await invoke('live:start','nao-existe',null)).toEqual({ok:false,error:'Conta inválida'});
-  expect(await invoke('live:stop',saved.id)).toEqual({ok:false,error:'Esta conta não está em medição.'});
-  expect(await handlers.get('live:start')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame},saved.id,null)).toEqual({ok:false,error:'Origem não autorizada.'});
   expect(invoke('session:layout',null,false,'sim').ok).toBe(false);
   expect(invoke('session:layout',null,false,true).ok).toBe(true);
   for (const panel of [279,521,300.5,'340',null,NaN]) expect(invoke('session:layout',null,false,true,panel).ok).toBe(false);

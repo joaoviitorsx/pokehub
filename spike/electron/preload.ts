@@ -10,7 +10,6 @@ contextBridge.exposeInMainWorld('pokehub', {
   layout: (id: string | null,hide: boolean,side: boolean,panel?: number) => ipcRenderer.invoke('session:layout',id,hide,side,panel),
   drag: (active: boolean) => ipcRenderer.invoke('session:drag',active),
   huntSnapshot: (id: string,soLiberadas?: boolean) => ipcRenderer.invoke('hunt:snapshot',id,soLiberadas),
-  huntTeam: (id: string) => ipcRenderer.invoke('hunt:team',id),
   onToggleSide: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on('workspace:toggle-side', listener);
@@ -27,27 +26,6 @@ contextBridge.exposeInMainWorld('pokehub', {
     detect: () => ipcRenderer.invoke('extension:detect'),
     choose: () => ipcRenderer.invoke('extension:choose'),
     set: (enabled: unknown) => ipcRenderer.invoke('extension:set',enabled),
-  },
-  grindolino: {
-    listHunts: () => ipcRenderer.invoke('grindolino:listHunts'),
-    createHunt: (input: unknown) => ipcRenderer.invoke('grindolino:createHunt',input),
-    updateHunt: (id: string,input: unknown) => ipcRenderer.invoke('grindolino:updateHunt',id,input),
-    removeHunt: (id: string) => ipcRenderer.invoke('grindolino:removeHunt',id),
-    addForecast: (input: unknown) => ipcRenderer.invoke('grindolino:addForecast',input),
-    addMeasurement: (input: unknown) => ipcRenderer.invoke('grindolino:addMeasurement',input),
-    removeMeasurement: (id: string) => ipcRenderer.invoke('grindolino:removeMeasurement',id),
-    listMeasurements: (accountId: string) => ipcRenderer.invoke('grindolino:listMeasurements',accountId),
-    rank: (request: unknown) => ipcRenderer.invoke('grindolino:rank',request),
-    compare: (request: unknown) => ipcRenderer.invoke('grindolino:compare',request),
-  },
-  analytics: {
-    series: (request: unknown) => ipcRenderer.invoke('analytics:series',request),
-    export: (request: unknown) => ipcRenderer.invoke('analytics:export',request),
-  },
-  live: {
-    status: () => ipcRenderer.invoke('live:status'),
-    start: (accountId: string,huntId: string | null) => ipcRenderer.invoke('live:start',accountId,huntId),
-    stop: (accountId: string) => ipcRenderer.invoke('live:stop',accountId),
   },
   onAutoFocus: (callback: (id: string | null) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, id: string | null) => callback(id);

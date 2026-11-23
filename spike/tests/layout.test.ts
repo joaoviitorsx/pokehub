@@ -1,66 +1,132 @@
 import { describe, expect, it } from 'vitest';
-import { layout } from '../electron/layout';
+import { COL_HEAD, COL_MIN, columns, effectiveFocus, gridShape, initialFocus, layout, MAX_PROFILES, SIDE_PANEL, sideMinWidth, sideWidth, TOP_BAR, type Bounds } from '../electron/layout';
 
-describe('layout do experimento', () => {
-  it('divide a área sem sobreposição mesmo com dimensões ímpares', () => {
-    const result = layout(1001, 701, 4, null);
-    expect(result).toEqual([{x:0,y:48,width:500,height:326},{x:500,y:48,width:501,height:326},{x:0,y:374,width:500,height:327},{x:500,y:374,width:501,height:327}]);
+const sum = (values: number[]) => values.reduce((a, b) => a + b, 0);
+// Sem lacunas nem sobreposição: as colunas cobrem exatamente a área (largura × altura abaixo da barra) e nenhuma se cruza.
+function expectExactCover(rects: (Bounds | null)[], width: number, height: number) {
+  const list = rects.filter((rect): rect is Bounds => rect !== null);
+  expect(sum(list.map(r => r.width * r.height))).toBe(width * (height - TOP_BAR));
+  for (const [i, a] of list.entries()) {
+    expect(a.x >= 0 && a.y >= TOP_BAR && a.x + a.width <= width && a.y + a.height <= height && a.width > 0 && a.height > 0).toBe(true);
+    for (const b of list.slice(i + 1)) expect(a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height).toBe(false);
+  }
+}
+
+describe('layout em colunas', () => {
+  it('1 a 4 contas lado a lado quando cada coluna tem COL_MIN', () => {
+    expect(columns(1400, 800, 1, null)).toEqual([{x:0,y:48,width:1400,height:752}]);
+    expect(columns(1400, 800, 2, null)).toEqual([{x:0,y:48,width:700,height:752},{x:700,y:48,width:700,height:752}]);
+    expect(columns(1400, 800, 3, null).map(b => b?.width)).toEqual([466,466,468]);
+    expect(columns(1400, 800, 4, null)).toEqual([0,350,700,1050].map(x => ({x,y:48,width:350,height:752})));
   });
-  it('mostra somente a sessão focada sem destruir as demais', () => {
-    expect(layout(800, 600, 2, 1)).toEqual([null,{x:0,y:48,width:800,height:552}]);
+  it('a view do jogo começa COL_HEAD abaixo do topo da coluna', () => {
+    expect(COL_HEAD).toBe(30);
+    expect(layout(1400, 800, 2, null)).toEqual([{x:0,y:78,width:700,height:722},{x:700,y:78,width:700,height:722}]);
+    expect(layout(1400, 800, 1, null)).toEqual([{x:0,y:78,width:1400,height:722}]);
+  });
+  it('quebra em linhas quando a coluna ficaria abaixo de COL_MIN, sem desperdiçar largura', () => {
+    expect(gridShape(1400, 4)).toEqual({cols:4,rows:1});
+    expect(gridShape(1000, 4)).toEqual({cols:2,rows:2});
+    expect(gridShape(1060, 4)).toEqual({cols:2,rows:2}); // 3+1 vira 2×2
+    expect(gridShape(700, 3)).toEqual({cols:2,rows:2});
+    expect(gridShape(339, 3)).toEqual({cols:1,rows:3});
+    expect(gridShape(1100, 5)).toEqual({cols:3,rows:2});
+    expect(columns(700, 800, 4, null)).toEqual([{x:0,y:48,width:350,height:376},{x:350,y:48,width:350,height:376},{x:0,y:424,width:350,height:376},{x:350,y:424,width:350,height:376}]);
+  });
+  it('a última linha, se menor, divide a largura inteira', () => {
+    expect(columns(700, 800, 3, null)).toEqual([{x:0,y:48,width:350,height:376},{x:350,y:48,width:350,height:376},{x:0,y:424,width:700,height:376}]);
+    const five = columns(1100, 800, 5, null) as Bounds[];
+    expect(five.slice(0,3).map(b => b.width)).toEqual([366,366,368]);
+    expect(five.slice(3).map(b => [b.x,b.width])).toEqual([[0,550],[550,550]]);
+  });
+  it('funciona para qualquer quantidade, sem teto em 4', () => {
+    expect(MAX_PROFILES).toBe(4);
+    const six = columns(1400, 800, 6, null);
+    expect(six).toHaveLength(6);
+    expectExactCover(six, 1400, 800);
+  });
+  it('não deixa lacunas nem sobreposição em nenhuma combinação, mesmo com medidas ímpares', () => {
+    for (const width of [700, 701, 899, 1001, 1279, 1366, 1920]) for (const height of [480, 601, 701, 1080]) for (const count of [1, 2, 3, 4, 5, 6]) for (const side of [0, 340, 281]) {
+      const rects = columns(width, height, count, null, side);
+      expect(rects).toHaveLength(count);
+      expectExactCover(rects, width - side, height); // a lateral ocupa a faixa à direita: as colunas cobrem só width - side
+      for (const g of layout(width, height, count, null, side)) expect(g && g.y >= TOP_BAR + COL_HEAD && g.height >= 0).toBe(true);
+    }
+  });
+  it('divide a largura com o resto na última coluna', () => {
+    const rects = columns(1361, 701, 4, null) as Bounds[];
+    expect(rects.map(r => r.width)).toEqual([340,340,340,341]);
+    expect(rects.map(r => r.x)).toEqual([0,340,680,1020]);
+    expect((columns(1001, 701, 2, null) as Bounds[]).map(r => r.width)).toEqual([500,501]);
+  });
+  it('divide a altura entre linhas com o resto na última', () => {
+    const rects = columns(700, 701, 4, null) as Bounds[];
+    expect(rects.map(r => r.height)).toEqual([326,326,327,327]);
+    expect(rects.map(r => r.y)).toEqual([48,48,374,374]);
   });
   it('a lateral reduz a largura só na grade', () => {
-    expect(layout(1400, 800, 4, null, 340)).toEqual([{x:0,y:48,width:530,height:376},{x:530,y:48,width:530,height:376},{x:0,y:424,width:530,height:376},{x:530,y:424,width:530,height:376}]);
-    expect(layout(1400, 800, 1, null, 340)).toEqual([{x:0,y:48,width:1060,height:752}]);
-    expect(layout(1400, 800, 2, 1, 340)).toEqual([null,{x:0,y:48,width:1400,height:752}]);
-    expect(layout(1400, 800, 2, null, 0)).toEqual(layout(1400, 800, 2, null));
+    expect(columns(1400, 800, 4, null, 340).map(b => b?.width)).toEqual([530,530,530,530]);
+    expect(columns(1400, 800, 2, null, 340).map(b => b?.width)).toEqual([530,530]);
+    expect(columns(1400, 800, 1, null, 340)).toEqual([{x:0,y:48,width:1060,height:752}]);
+    expect(columns(1400, 800, 2, 1, 340)).toEqual([null,{x:0,y:48,width:1400,height:752}]);
+    expect(columns(1400, 800, 2, null, 0)).toEqual(columns(1400, 800, 2, null));
   });
-  it('a lateral só ocupa espaço na grade e com janela larga', async () => {
-    const { sideWidth, SIDE_PANEL } = await import('../electron/layout');
-    expect(sideWidth(1400, true, null)).toBe(SIDE_PANEL);
-    expect(sideWidth(1060, true, null)).toBe(SIDE_PANEL);
-    expect(sideWidth(1059, true, null)).toBe(0);
-    expect(sideWidth(1400, false, null)).toBe(0);
-    expect(sideWidth(1400, true, 0)).toBe(0);
+  it('mostra somente a sessão focada sem destruir as demais, com cabeçalho', () => {
+    expect(columns(800, 600, 2, 1)).toEqual([null,{x:0,y:48,width:800,height:552}]);
+    expect(layout(800, 600, 2, 1)).toEqual([null,{x:0,y:78,width:800,height:522}]);
   });
-  it('a largura escolhida vale de 280 a 520 px e cede espaço para a grade', async () => {
-    const { sideWidth } = await import('../electron/layout');
-    expect(sideWidth(1400, true, null, 280)).toBe(280);
-    expect(sideWidth(1400, true, null, 520)).toBe(520);
-    expect(sideWidth(1100, true, null, 520)).toBe(380); // 1100 - 720 da grade
-    expect(sideWidth(1060, true, null, 280)).toBe(280);
-    expect(sideWidth(1059, true, null, 280)).toBe(0);
-    expect(sideWidth(1400, false, null, 520)).toBe(0);
-    for (const panel of [279, 521, 300.5, NaN, Infinity, -340]) expect(() => sideWidth(1400, true, null, panel)).toThrow();
-    expect(layout(1400, 800, 2, null, sideWidth(1400, true, null, 400))).toEqual([{x:0,y:48,width:500,height:752},{x:500,y:48,width:500,height:752}]);
-  });
-  it('rejeita lateral inválida', () => {
+  it('rejeita entradas inválidas', () => {
     for (const side of [-1, 1.5, NaN, 801]) expect(() => layout(800, 600, 2, null, side)).toThrow();
-  });
-  it('rejeita quantidade e foco inválidos', () => {
-    expect(() => layout(800, 600, 5, null)).toThrow();
+    expect(() => layout(800, 600, 0, null)).toThrow();
     expect(() => layout(800, 600, 2, 2)).toThrow();
+    expect(() => layout(800, 600, 2, -1)).toThrow();
+    expect(() => layout(800.5, 600, 2, null)).toThrow();
+    expect(() => layout(800, 40, 2, null)).toThrow();
   });
 });
 
 describe('layout em janela pequena', () => {
- it('usa foco temporário quando a grade não tem espaço útil', async () => {
-  const { effectiveFocus } = await import('../electron/layout');
-  expect(effectiveFocus(700,800,4,null)).toEqual({index:0,automatic:true});
-  expect(effectiveFocus(1000,500,4,null)).toEqual({index:0,automatic:true});
-  expect(effectiveFocus(1000,800,4,null)).toEqual({index:null,automatic:false});
- });
- it('respeita foco escolhido e não altera visualização de uma sessão', async () => {
-  const { effectiveFocus } = await import('../electron/layout');
-  expect(effectiveFocus(700,480,4,2)).toEqual({index:2,automatic:false});
-  expect(effectiveFocus(700,480,1,null)).toEqual({index:null,automatic:false});
-  expect(effectiveFocus(800,480,2,null)).toEqual({index:null,automatic:false});
- });
+  it('usa foco temporário quando nem uma coluna cabe ou as linhas ficam baixas demais', () => {
+    expect(effectiveFocus(339, 800, 2, null)).toEqual({index:0,automatic:true});
+    expect(effectiveFocus(1000, 500, 4, null)).toEqual({index:0,automatic:true}); // 2 linhas × 270 > 452
+    expect(effectiveFocus(700, 400, 3, null)).toEqual({index:0,automatic:true});
+    expect(effectiveFocus(700, 800, 4, null)).toEqual({index:null,automatic:false});
+    expect(effectiveFocus(1400, 400, 4, null)).toEqual({index:null,automatic:false}); // 1 linha de 352 px
+    expect(effectiveFocus(1000, 800, 4, null)).toEqual({index:null,automatic:false});
+  });
+  it('respeita foco escolhido e não altera visualização de uma sessão', () => {
+    expect(effectiveFocus(300, 300, 4, 2)).toEqual({index:2,automatic:false});
+    expect(effectiveFocus(300, 300, 1, null)).toEqual({index:null,automatic:false});
+    expect(effectiveFocus(800, 480, 2, null)).toEqual({index:null,automatic:false});
+  });
 });
 
-it('restaura foco inicial apenas quando há perfis e a preferência pede foco', async () => {
- const { initialFocus } = await import('../electron/layout');
- expect(initialFocus('grid',['a','b'])).toBeNull();
- expect(initialFocus('focus-first',['a','b'])).toBe('a');
- expect(initialFocus('focus-first',[])).toBeNull();
+describe('lateral "Onde caçar?"', () => {
+  it('só ocupa espaço na grade e quando a grade mínima cabe ao lado', () => {
+    expect(sideMinWidth(1)).toBe(COL_MIN + SIDE_PANEL);
+    expect(sideMinWidth(2)).toBe(2 * COL_MIN + SIDE_PANEL);
+    expect(sideMinWidth(4)).toBe(sideMinWidth(2));
+    expect(sideWidth(1400, true, null)).toBe(SIDE_PANEL);
+    expect(sideWidth(1020, true, null)).toBe(SIDE_PANEL);
+    expect(sideWidth(1019, true, null)).toBe(0);
+    expect(sideWidth(680, true, null, SIDE_PANEL, 1)).toBe(SIDE_PANEL);
+    expect(sideWidth(679, true, null, SIDE_PANEL, 1)).toBe(0);
+    expect(sideWidth(1400, false, null)).toBe(0);
+    expect(sideWidth(1400, true, 0)).toBe(0);
+  });
+  it('a largura escolhida vale de 280 a 520 px e cede espaço para a grade', () => {
+    expect(sideWidth(1400, true, null, 280)).toBe(280);
+    expect(sideWidth(1400, true, null, 520)).toBe(520);
+    expect(sideWidth(1100, true, null, 520)).toBe(420); // 1100 - 680 da grade
+    expect(sideWidth(1020, true, null, 280)).toBe(280);
+    expect(sideWidth(1400, false, null, 520)).toBe(0);
+    for (const panel of [279, 521, 300.5, NaN, Infinity, -340]) expect(() => sideWidth(1400, true, null, panel)).toThrow();
+    expect(layout(1400, 800, 2, null, sideWidth(1400, true, null, 400))).toEqual([{x:0,y:78,width:500,height:722},{x:500,y:78,width:500,height:722}]);
+  });
+});
+
+it('restaura foco inicial apenas quando há perfis e a preferência pede foco', () => {
+  expect(initialFocus('grid',['a','b'])).toBe(null);
+  expect(initialFocus('focus-first',['a','b'])).toBe('a');
+  expect(initialFocus('focus-first',[])).toBe(null);
 });

@@ -1,7 +1,7 @@
 import type { DatabaseSync as Database } from 'node:sqlite';
 import { openDatabase } from './database';
 import { randomUUID } from 'node:crypto';
-import { createProfile, updateProfile, ProfileLimitError, type Profile, type ProfileInput } from '../domain/profiles';
+import { createProfile, updateProfile, ProfileLimitError, MAX_PROFILES, type Profile, type ProfileInput } from '../domain/profiles';
 
 export class ProfileStore {
   private db: Database;
@@ -10,7 +10,7 @@ export class ProfileStore {
   }
   list(): Profile[] {
     const profiles = this.db.prepare('SELECT * FROM profiles ORDER BY createdAt, rowid').all() as unknown as Profile[];
-    if (profiles.length > 4) throw new ProfileLimitError('Número de perfis inválido');
+    if (profiles.length > MAX_PROFILES) throw new ProfileLimitError('Número de perfis inválido');
     return profiles;
   }
   create(input: ProfileInput): Profile {

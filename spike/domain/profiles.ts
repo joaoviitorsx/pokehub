@@ -1,5 +1,7 @@
 export interface ProfileInput { label: string; emailLabel: string; characterName: string; colorToken: string }
 export interface Profile extends ProfileInput { id: string; createdAt: string; updatedAt: string }
+// Limite de cadastro (termos do jogo); o layout em colunas funciona para qualquer quantidade.
+export const MAX_PROFILES = 4;
 export class ProfileLimitError extends Error {}
 export function isProfileId(id: unknown): id is string {
   return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
@@ -12,7 +14,7 @@ function validate(input: ProfileInput): ProfileInput {
   return clean;
 }
 export function createProfile(existing: readonly Profile[], input: ProfileInput, id: string, now: string): Profile {
-  if (existing.length >= 4 || !isProfileId(id) || existing.some(profile => profile.id === id)) throw new Error('Não foi possível criar o perfil');
+  if (existing.length >= MAX_PROFILES || !isProfileId(id) || existing.some(profile => profile.id === id)) throw new Error('Não foi possível criar o perfil');
   return {...validate(input),id,createdAt:now,updatedAt:now};
 }
 export function updateProfile(profile: Profile, input: ProfileInput, now: string): Profile {

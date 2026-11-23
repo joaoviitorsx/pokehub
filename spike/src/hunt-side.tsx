@@ -3,7 +3,6 @@ import type { Profile } from '../domain/profiles';
 import type { HuntRow, HuntSnapshot, HuntSprite } from '../contracts/hunt';
 import { El, Icon, icons } from './icons';
 import { HUNT_REFRESH_MS, huntFetchable, huntQueue } from './hunt-queue';
-import { LivePanel } from './live';
 
 type Mode = 'xp' | 'ouro' | 'shiny';
 type Entry = {data: HuntSnapshot} | {error: string};
@@ -201,7 +200,6 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings}:{pro
     <p className="side-foot">{ok.liberadas} de {ok.total} hunts liberadas{ok.versaoJogo && ` · jogo v${ok.versaoJogo}`}. Atualiza a cada 5 s.{busy === slot && <span className="side-sync" aria-hidden="true"> Atualizando…</span>}</p>
    </>}
   </div>
-  {account && <LivePanel key={account.id} account={account} rows={ok?.hunts ?? null} compact/>}
   <p className="side-credit">Dados: extensão /hunt (Liang){ok?.versaoExtensao && ` ${ok.versaoExtensao}`}</p>
  </aside>;
 }

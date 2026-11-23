@@ -39,7 +39,7 @@ describe('fronteira do domínio', () => {
   it('recusa infraestrutura e dependências fora do domínio', () => {
     const file=resolve(domainDir,'example.ts');
     expect(allowedDomainImport(file,'./value')).toBe(true);
-    expect(allowedDomainImport(file,'../contracts/grindolino')).toBe(true);
+    expect(allowedDomainImport(file,'../contracts/hunt')).toBe(true);
     for (const specifier of ['electron','node:sqlite','react','../electron/main','<dinâmico>']) expect(allowedDomainImport(file,specifier)).toBe(false);
   });
   it('mantém os arquivos de domínio independentes de infraestrutura', () => {

@@ -1,16 +1,12 @@
 import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, type IpcMainInvokeEvent } from 'electron';
-import { basename, join } from 'node:path';
-import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { effectiveFocus, initialFocus, layout, SIDE_MAX, SIDE_MIN, SIDE_PANEL, sideWidth, TOP_BAR } from './layout';
 import { huntSnapshot, HUNT_UNAVAILABLE, type HuntTarget } from './hunt-snapshot';
-import { huntTeam } from './hunt-team';
-import { LiveMeasure } from './live-measure';
 import { isAllowedSessionNavigation, isOAuthProviderUrl } from './navigation';
 import { ProfileStore } from './profile-store';
 import { partitionFor } from './partition';
 import { PreferencesStore } from './preferences-store';
-import { GrindolinoStore } from './grindolino-store';
 import { closeContents } from './close-contents';
 import { summarizeMetrics, type DiagnosticsBaseline } from './diagnostics';
 import { canReadHunt, classifyLoadFailure, classifyLoadRejection, offlineRetryDelay } from './session-status';
@@ -19,14 +15,11 @@ import { acquireSingleInstance } from './single-instance';
 import { resetSession, restartSession, openSessionSafely, mountSessionView } from './session-recovery';
 import { checkExtension, findInstalledHunt, resolveHuntPath } from './extension-check';
 import type { HuntExtensionStatus } from '../contracts/preferences';
-import { GrindolinoError } from '../domain/grindolino';
 import { ProfileLimitError, type ProfileInput } from '../domain/profiles';
 
 let window: BrowserWindow;
 let store: ProfileStore;
 let preferences: PreferencesStore;
-let grindolino: GrindolinoStore;
-let live: LiveMeasure;
 const views = new Map<string, WebContentsView>();
 const huntDocuments = new WeakMap<Electron.WebContents, object>();
 const states = new Map<string, string>();
@@ -141,7 +134,7 @@ function arrange() {
   const effective = effectiveFocus(width, height, profiles.length, index !== null && index >= 0 ? index : null);
   const nextAuto = effective.automatic ? profiles[effective.index ?? 0]?.id ?? null : null;
   if (nextAuto !== autoFocused) { autoFocused = nextAuto; if (!window.isDestroyed()) window.webContents.send('workspace:auto-focus', nextAuto); }
-  const bounds = layout(width, Math.max(height,TOP_BAR), profiles.length, effective.index, sideWidth(width, sideOpen, effective.index, sidePanel));
+  const bounds = layout(width, Math.max(height,TOP_BAR), profiles.length, effective.index, sideWidth(width, sideOpen, effective.index, sidePanel, profiles.length));
   profiles.forEach((profile,i) => { const view = views.get(profile.id); const b = bounds[i]; if (view) { view.setVisible(!editing && !dragging && Boolean(b)); if (b) view.setBounds(b); } });
 }
 function setDrag(active: boolean) {
@@ -237,13 +230,9 @@ function openView(id: string) {
 }
 function invoke<T>(event: IpcMainInvokeEvent, action: () => T) {
   if (!trusted(event)) return {ok:false, error:'Origem não autorizada.'};
-  try { return {ok:true,data:action()}; } catch (error) { return {ok:false,error:error instanceof GrindolinoError ? error.message : 'Não foi possível concluir a operação. Confira os dados e tente novamente.'}; }
+  try { return {ok:true,data:action()}; } catch { return {ok:false,error:'Não foi possível concluir a operação. Confira os dados e tente novamente.'}; }
 }
-async function invokeLive<T>(event: IpcMainInvokeEvent, action: () => Promise<T>) {
-  if (!trusted(event)) return {ok:false, error:'Origem não autorizada.'};
-  try { return {ok:true,data:await action()}; } catch (error) { return {ok:false,error:error instanceof GrindolinoError ? error.message : 'Não foi possível concluir a medição. Tente novamente.'}; }
-}
-// Página de uma conta pronta para leitura (ranking do /hunt e medição ao vivo); null se a sessão não está utilizável.
+// Página de uma conta pronta para leitura (ranking do /hunt); null se a sessão não está utilizável.
 function readable(profileId: string): Electron.WebContents | null {
   const view = views.get(profileId);
   if (!view || view.webContents.isDestroyed() || resetting.has(profileId)) return null;
@@ -258,7 +247,6 @@ if (primary) app.whenReady().then(() => {
   const databasePath = join(app.getPath('userData'),'pokehub.sqlite');
   store = new ProfileStore(databasePath);
   preferences = new PreferencesStore(databasePath);
-  grindolino = new GrindolinoStore(databasePath);
   try { refreshHunt(); } catch { huntError = 'Não foi possível ler a configuração da extensão.'; }
   focused = initialFocus(preferences.getStartupMode(), store.list().map(profile => profile.id));
   window = new BrowserWindow({title:'PokéHub',backgroundColor:'#0f1218',width:1280,height:800,minWidth:700,minHeight:480,webPreferences:{preload:join(__dirname,'preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
@@ -277,32 +265,6 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('extension:detect', event => invokeHunt(event, detectHunt));
   ipcMain.handle('extension:choose', event => invokeHunt(event, chooseHunt));
   ipcMain.handle('extension:set', (event,enabled: unknown) => invokeHunt(event, () => { if (typeof enabled !== 'boolean') throw new Error(); return enabled ? detectHunt() : setHunt(null); }));
-  ipcMain.handle('grindolino:listHunts', event => invoke(event, () => grindolino.listHunts()));
-  ipcMain.handle('grindolino:createHunt', (event,input: unknown) => invoke(event, () => grindolino.createHunt(input)));
-  ipcMain.handle('grindolino:updateHunt', (event,id: unknown,input: unknown) => invoke(event, () => grindolino.updateHunt(id,input)));
-  ipcMain.handle('grindolino:removeHunt', (event,id: unknown) => invoke(event, () => grindolino.removeHunt(id)));
-  ipcMain.handle('grindolino:addForecast', (event,input: unknown) => invoke(event, () => grindolino.addForecast(input)));
-  ipcMain.handle('grindolino:addMeasurement', (event,input: unknown) => invoke(event, () => grindolino.addMeasurement(input)));
-  ipcMain.handle('grindolino:removeMeasurement', (event,id: unknown) => invoke(event, () => grindolino.removeMeasurement(id)));
-  ipcMain.handle('grindolino:listMeasurements', (event,accountId: unknown) => invoke(event, () => grindolino.listMeasurements(accountId)));
-  ipcMain.handle('grindolino:rank', (event,request: unknown) => invoke(event, () => grindolino.rank(request)));
-  ipcMain.handle('grindolino:compare', (event,request: unknown) => invoke(event, () => grindolino.compare(request)));
-  ipcMain.handle('analytics:series', (event,request: unknown) => invoke(event, () => grindolino.series(request)));
-  // RF-12: o renderer só escolhe formato e filtros; o caminho vem do diálogo nativo e não volta para ele.
-  ipcMain.handle('analytics:export', async (event,request: unknown) => {
-    if (!trusted(event)) return {ok:false, error:'Origem não autorizada.'};
-    try {
-      const file = grindolino.exportFile(request);
-      const {canceled, filePath} = await dialog.showSaveDialog(window,{title:'Exportar histórico',defaultPath:`pokehub-historico-${new Date().toLocaleDateString('sv-SE')}.${file.format}`,filters:[file.format === 'csv' ? {name:'CSV (Excel)',extensions:['csv']} : {name:'JSON',extensions:['json']}]});
-      if (canceled || !filePath) return {ok:true, data:{saved:false, fileName:null, rows:file.rows}};
-      await writeFile(filePath,file.content,'utf8');
-      return {ok:true, data:{saved:true, fileName:basename(filePath), rows:file.rows}};
-    } catch (error) { return {ok:false, error:error instanceof GrindolinoError ? error.message : 'Não foi possível exportar. Confira a pasta escolhida e tente novamente.'}; }
-  });
-  live = new LiveMeasure({accounts:() => store.list().map(profile => profile.id), store:grindolino, target:profileId => { const contents = readable(profileId); return contents && {url:contents.getURL(), run:script => contents.executeJavaScript(script)}; }});
-  ipcMain.handle('live:status', event => invoke(event, () => live.status()));
-  ipcMain.handle('live:start', (event,id: unknown,huntId: unknown = null) => invokeLive(event, () => live.start(id,huntId)));
-  ipcMain.handle('live:stop', (event,id: unknown) => invokeLive(event, () => live.stop(id)));
   ipcMain.handle('workspace:initial-focus', event => invoke(event, () => focused));
   ipcMain.handle('profiles:create', (event,input: ProfileInput) => invoke(event, () => { const profile = store.create(input); openView(profile.id); arrange(); return profile; }));
   ipcMain.handle('profiles:update', (event,id: unknown,input: ProfileInput) => invoke(event, () => { if (typeof id !== 'string') throw new Error(); return store.update(id,input); }));
@@ -327,10 +289,6 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('hunt:snapshot', async (event,id: unknown,soLiberadas: unknown = true) => {
     if (!trusted(event)) return {ok:false,error:HUNT_UNAVAILABLE};
     return huntSnapshot(id, store.list().map(profile => profile.id), huntTarget, undefined, soLiberadas);
-  });
-  ipcMain.handle('hunt:team', async (event,id: unknown) => {
-    if (!trusted(event)) return {ok:false,error:HUNT_UNAVAILABLE};
-    return huntTeam(id, store.list().map(profile => profile.id), huntTarget);
   });
   ipcMain.handle('session:layout', (event,id: unknown,hide: unknown,side: unknown = false,panel: unknown = sidePanel) => invoke(event, () => {
     if (typeof hide !== 'boolean' || typeof side !== 'boolean' || (id !== null && typeof id !== 'string') || typeof panel !== 'number' || !Number.isInteger(panel) || panel < SIDE_MIN || panel > SIDE_MAX) throw new Error();
@@ -385,7 +343,7 @@ if (primary) app.whenReady().then(() => {
   window.on('closed', () => {
     clearTimeout(dragTimer);
     for (const view of views.values()) { try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { console.error('Falha ao encerrar uma sessão.'); } }
-    views.clear(); try { live.dispose(); } catch { console.error('Falha ao encerrar as medições.'); } grindolino.close(); preferences.close(); store.close();
+    views.clear(); preferences.close(); store.close();
   });
   for (const profile of store.list()) openView(profile.id);
   arrange();
@@ -393,7 +351,6 @@ if (primary) app.whenReady().then(() => {
 }).catch((error: unknown) => {
   console.error('Falha ao iniciar o PokéHub.');
   if (!window) {
-    try { grindolino?.close(); } catch { console.error('Falha ao fechar o Grindolino.'); }
     try { preferences?.close(); } catch { console.error('Falha ao fechar configurações.'); }
     try { store?.close(); } catch { console.error('Falha ao fechar perfis.'); }
   }
