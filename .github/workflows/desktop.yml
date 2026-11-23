@@ -39,6 +39,9 @@ jobs:
         with:
           bun-version: '1.4.4'
       - run: bun install --frozen-lockfile
+      # o bun não roda o postinstall do pacote electron (dependência não confiável): baixa o binário de desenvolvimento aqui
+      - name: 'Baixar o binário do Electron (smoke de desenvolvimento)'
+        run: node node_modules/electron/install.js
       - name: 'Dependências de sistema (Linux, Electron sob xvfb)'
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends xvfb libnss3 libgtk-3-0t64 libatk-bridge2.0-0t64 libgbm1 libasound2t64 libxss1 libxtst6 libcups2t64 libdrm2 libxkbcommon0
