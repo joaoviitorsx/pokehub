@@ -1,6 +1,7 @@
 // Prévia no navegador: finge o window.pokehub exposto por spike/electron/preload.ts. Só para desenvolvimento.
 import type { Profile, ProfileInput } from '../domain/profiles';
 import type { ExtensionInfo } from '../contracts/extensions';
+import type { NetworkInfo, NetworkMode } from '../contracts/network';
 import type { HuntRow, HuntSnapshot, HuntSprite } from '../contracts/hunt';
 import type { MarketListing, MarketScan } from '../domain/market';
 import type { UpdateInfo, UpdateStatus } from '../contracts/update';
@@ -82,6 +83,8 @@ export const onLayoutChange = (cb: () => void) => { layoutListeners.add(cb); ret
 const bus = new EventTarget();
 export const emit = (type: string, detail?: unknown) => bus.dispatchEvent(new CustomEvent(type, {detail}));
 const on = <T>(type: string, cb: (value: T) => void) => { const l = (e: Event) => cb((e as CustomEvent<T>).detail); bus.addEventListener(type, l); return () => bus.removeEventListener(type, l); };
+let net: NetworkInfo = {mode: 'registrar', allowlist: [], unknown: [{host: 'cdn.exemplo.net', count: 12, firstSeen: Date.now() - 60000, account: 'a', accountName: 'Conta 1'}]};
+const network = (): NetworkInfo => ({...net, allowlist: [...net.allowlist], unknown: net.unknown.map(row => ({...row}))});
 const withExt = () => ok(extensions.map(e => ({...e})));
 const setUpdate = (status: UpdateStatus) => { update = {...update, status}; emit('update', status); };
 
@@ -162,6 +165,12 @@ window.pokehub = {
     remove: id => { extensions = extensions.filter(e => e.id !== id); return withExt(); },
     approve: (id, hosts) => { extensions = extensions.map(e => e.id === id ? {...e, approvedHosts: hosts, pending: false} : e); return withExt(); },
     openStore: () => ok(undefined),
+  },
+  network: {
+    get: () => ok(network()),
+    setMode: mode => { net = {...net, mode: mode as NetworkMode}; return ok(network()); },
+    allow: host => { net = {...net, allowlist: [...net.allowlist, host], unknown: net.unknown.filter(row => row.host !== host)}; return ok(network()); },
+    disallow: host => { net = {...net, allowlist: net.allowlist.filter(item => item !== host)}; return ok(network()); },
   },
   updates: {
     get: () => ok(update),

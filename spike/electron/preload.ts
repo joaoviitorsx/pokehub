@@ -89,6 +89,12 @@ contextBridge.exposeInMainWorld('pokehub', {
     approve: (id: string,hosts: string[]) => ipcRenderer.invoke('extensions:approve',id,hosts),
     openStore: (id: string) => ipcRenderer.invoke('extensions:store',id),
   },
+  network: {
+    get: () => ipcRenderer.invoke('network:get'),
+    setMode: (mode: string) => ipcRenderer.invoke('network:mode',mode),
+    allow: (host: string) => ipcRenderer.invoke('network:allow',host),
+    disallow: (host: string) => ipcRenderer.invoke('network:disallow',host),
+  },
   updates: {
     get: () => ipcRenderer.invoke('update:get'),
     check: () => ipcRenderer.invoke('update:check'),

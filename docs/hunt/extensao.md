@@ -72,6 +72,15 @@ A visão "Equipe" do Professor usa o canal `hunt:team(profileId)` (`spike/electr
 
 A medição ao vivo (`spike/electron/live-measure.ts`) lê o log de mensagens do jogo, não a extensão; funciona sem ela. Com a extensão carregada, usa o barramento só para duas coisas, em leitura: o `slug` de `campo.init` (troca de hunt) e o Pokémon em campo do último `estado` (`id`, `nome`, `level`). Nada é copiado da extensão. Fonte, campos e riscos em `docs/data-sources.md`, "Medição ao vivo".
 
+## Auditoria, catálogo e rede (regras de segurança)
+
+- **A auditoria é heurística: confira a origem da extensão.** Ela é estática (nada é executado) e ofuscação pesada pode escapar.
+- Tudo que a auditoria não consegue ler ou entender vira `skipped` e o veredito é `bloqueada`: arquivo citado em `content_scripts[].js/.css` ou `web_accessible_resources` que não existe, tem extensão fora de `.js/.mjs/.cjs/.css` (em `web_accessible_resources` também passam imagens, fontes, áudio e `.json`; `.html`, `.svg`, `.wasm` etc. não), pasta com mais de 6 níveis, mais de 2000 itens, arquivo grande demais e qualquer link simbólico ou junção dentro da pasta.
+- CSS é auditado: `url(...)` e `@import` para hosts fora do jogo viram achado de rede (`externa`). Padrões novos: `new Image()`, `.src =`, `setTimeout/setInterval` com texto, `.constructor(`, acesso por colchetes a `fetch`/`XMLHttpRequest`/`WebSocket`/`sendBeacon`, `import()`; `atob()` e `fromCharCode` contam como ofuscação (no mínimo `interage`); `world: "MAIN"` aparece como informação.
+- Privilégios do catálogo (hosts pré-aprovados, tratar como /hunt) só valem se o caminho **real** (`realpath`) estiver em `<pasta de navegador>/<Default|Profile N>/Extensions/<id>/<versão>`. Uma pasta qualquer com o nome do id não herda nada e recebe um id aleatório.
+- O cache da auditoria compara o sha256 do conteúdo (não só tamanho/data). Logo antes de cada `loadExtension` há uma checagem barata (`lstat`: nome, tamanho, mtime, ctime, inode, links); se algo mudou, audita de novo e só carrega se continuar válida e com os hosts aprovados.
+- **Rede das contas** (`spike/electron/network-policy.ts`): cada sessão de jogo tem `webRequest.onBeforeRequest` que só deixa passar `pokeidle.io` (e `*.pokeidle.io`), o login Google/Discord (lista `BASE_HOSTS`), `chrome-extension:`, `devtools:`, `data:`, `blob:` e os hosts aprovados das extensões carregadas naquela sessão. O resto segue o modo: `registrar` (padrão desta versão: permite e anota host, contagem e conta, só em memória) ou `bloquear` (cancela). Em Gerenciar → Extensões, o cartão "Rede das contas" troca o modo e permite hosts, que vão para `network-policy.json` em userData (escrita atômica; entradas exatas ou `*.dominio`).
+
 ## Riscos e limites
 
 - **Compatibilidade depende das versões futuras da extensão.** Se uma atualização passar a declarar `background`, permissões ou sites fora do pokeidle.io, a validação recusa a nova versão e as sessões abrem sem ela.

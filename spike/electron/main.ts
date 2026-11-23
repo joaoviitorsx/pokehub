@@ -23,6 +23,8 @@ import { debounced, runningCount, TRAY_HINT, trayAction, trayIconSize, trayMenuI
 import { resetSession, restartSession, openSessionSafely, mountSessionView } from './session-recovery';
 import { approvedHostsOf, catalogIdOf, createAuditCache, CATALOG, checkExtension, findInstalled, HUNT_ID, hostsCovered, resolveExtensionPath } from './extension-check';
 import type { AuditFinding, AuditVerdict, ExtensionInfo } from '../contracts/extensions';
+import { createNetworkPolicyStore, createUnknownLog, decide, hostOf } from './network-policy';
+import type { NetworkInfo } from '../contracts/network';
 import { createUpdater, type Updater } from './updater';
 import type { UpdateInfo } from '../contracts/update';
 import type { PerformancePrefs, TrayPrefs } from '../contracts/preferences';
@@ -73,17 +75,19 @@ let extensionsReady: Promise<void> = Promise.resolve();
 const extLoaded = new WeakMap<Electron.Session, Map<string, {id: string; path: string}>>();
 const catalogName = (id: string | null) => CATALOG.find(entry => entry.id === id)?.name;
 const BLOCKED_PREFIX = 'Bloqueada pela auditoria: ';
-const findingText = (finding: AuditFinding) => finding.kind === 'skipped' ? finding.detail : `${finding.detail} em ${finding.file}`;
+const findingText = (finding: AuditFinding) => finding.kind === 'skipped' ? (finding.file ? `${finding.detail} (${finding.file})` : finding.detail) : `${finding.detail} em ${finding.file}`;
+const machine = () => ({platform:process.platform, home:app.getPath('home'), localAppData:process.env.LOCALAPPDATA});
 type RefreshMode = 'cached' | 'verify' | 'force';
 // A auditoria roda assíncrona e é guardada por (pasta, versão, .js com tamanho/mtime): 'verify' só faz stat, 'force' relê.
 async function refreshExtensions(mode: RefreshMode = 'verify') {
   const next: ExtState[] = [];
   for (const row of preferences.listExtensions()) {
-    const catalogId = CATALOG.some(entry => entry.id === row.id) ? row.id : null;
-    const path = catalogId ? resolveExtensionPath(row.path) : row.path; // o Chrome troca a pasta da versão ao atualizar
+    const rowCatalog = CATALOG.some(entry => entry.id === row.id) ? row.id : null;
+    const path = rowCatalog ? resolveExtensionPath(row.path) : row.path; // o Chrome troca a pasta da versão ao atualizar
     if (path !== row.path) { try { preferences.setExtensionPath(row.id,path); } catch { /* caminho já usado por outra linha: segue com o antigo na lista */ } }
-    // a pré-aprovação do catálogo só vale quando o id e a pasta (…/Extensions/<id>/<versão>) batem com a entrada
-    const approvedHosts = approvedHostsOf(catalogId && catalogIdOf(path) === catalogId ? catalogId : '',row.approvedHosts);
+    // privilégios do catálogo (hosts pré-aprovados, /hunt) só quando o caminho REAL está na pasta de extensões de um navegador
+    const catalogId = rowCatalog && catalogIdOf(path,machine()) === rowCatalog ? rowCatalog : null;
+    const approvedHosts = approvedHostsOf(catalogId ?? '',row.approvedHosts);
     const base = {id:row.id, catalogId, path, enabled:row.enabled, findings:[] as AuditFinding[], hosts:[] as string[], approvedHosts, pending:false};
     const check = checkExtension(path);
     if (!check.ok) { next.push({...base, name:catalogName(catalogId) ?? (path.split(/[\\/]/).filter(Boolean).pop() ?? 'Extensão'), version:null, verdict:'bloqueada' as const, error:check.error, loadable:false}); continue; }
@@ -106,6 +110,31 @@ function hasHunt(session: Electron.Session) {
   const hunt = extensions.find(extension => extension.catalogId === HUNT_ID);
   return Boolean(hunt && hunt.enabled && hunt.loadable && loadedIn(session,hunt));
 }
+// Revalida logo antes de carregar (stat barato; se algo mudou, audita de novo): fecha a janela entre auditar e carregar.
+async function stillAudited(extension: ExtState): Promise<boolean> {
+  if (await auditCache.unchanged(extension.path,extension.version)) return true;
+  const audit = await auditCache.get(extension.path,extension.version,true);
+  if (audit.verdict !== 'bloqueada' && hostsCovered(audit.hosts,extension.approvedHosts)) return true;
+  extension.loadable = false;
+  return false;
+}
+// Rede das contas: só o jogo, o login e os hosts aprovados das extensões carregadas nesta sessão; o resto é registrado ou cancelado.
+let networkStore: ReturnType<typeof createNetworkPolicyStore>;
+const unknownHosts = createUnknownLog();
+function installNetworkPolicy(session: Electron.Session, account: string) {
+  session.webRequest.onBeforeRequest((details, callback) => {
+    try {
+      const approved = extensions.filter(extension => extension.enabled && extension.loadable && loadedIn(session,extension)).flatMap(extension => extension.approvedHosts);
+      const verdict = decide(details.url,networkStore.policy(),approved);
+      if (verdict === 'record') { const host = hostOf(details.url); if (host) unknownHosts.record(account,host); }
+      callback({cancel:verdict === 'block'});
+    } catch { callback({cancel:networkStore?.policy().mode === 'bloquear'}); }
+  });
+}
+function networkInfo(): NetworkInfo {
+  const {mode,allowlist} = networkStore.policy();
+  return {mode, allowlist:[...allowlist], unknown:unknownHosts.list(account => store.list().find(profile => profile.id === account)?.label ?? 'Conta removida')};
+}
 // Deixa a sessão só com as extensões habilitadas e válidas. Nunca rejeita: falha de extensão não pode impedir a sessão de abrir.
 function syncExtensions(session: Electron.Session): Promise<void> | null {
   try {
@@ -119,8 +148,10 @@ function syncExtensions(session: Electron.Session): Promise<void> | null {
     if (pending.length === 0) return null;
     return (async () => {
       for (const extension of pending) {
-        try { const loaded = await session.extensions.loadExtension(extension.path,{allowFileAccess:false}); kept.set(extension.id,{id:loaded.id,path:extension.path}); extErrors.delete(extension.id); }
-        catch { extErrors.set(extension.id,'Não foi possível carregar a extensão em uma sessão. A sessão segue aberta sem ela.'); console.error('Falha ao carregar uma extensão.'); }
+        try {
+          if (!await stillAudited(extension)) { extErrors.set(extension.id,'A extensão mudou depois da auditoria e não foi carregada. Abra Extensões para auditar de novo.'); continue; }
+          const loaded = await session.extensions.loadExtension(extension.path,{allowFileAccess:false}); kept.set(extension.id,{id:loaded.id,path:extension.path}); extErrors.delete(extension.id);
+        } catch { extErrors.set(extension.id,'Não foi possível carregar a extensão em uma sessão. A sessão segue aberta sem ela.'); console.error('Falha ao carregar uma extensão.'); }
       }
     })();
   } catch { console.error('Falha ao sincronizar as extensões.'); return null; }
@@ -157,7 +188,7 @@ async function addExtension(): Promise<ExtensionInfo[]> {
   const rows = preferences.listExtensions();
   if (rows.some(row => row.path === path)) throw new ExtensionRefused('Essa pasta já está na lista.');
   if (rows.length >= MAX_EXTENSIONS) throw new ExtensionRefused(`O limite é de ${MAX_EXTENSIONS} extensões. Remova alguma antes de adicionar outra.`);
-  const catalogId = catalogIdOf(path);
+  const catalogId = catalogIdOf(path,machine());
   preferences.addExtension({id:catalogId && !rows.some(row => row.id === catalogId) ? catalogId : randomUUID(),path,enabled:true});
   return applyExtensions('force');
 }
@@ -274,6 +305,7 @@ function addView(id: string) {
       view.webContents.setWindowOpenHandler(() => { void explainBlockedPopup(); return {action:'deny'}; });
       view.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
       view.webContents.session.setPermissionCheckHandler(() => false);
+      installNetworkPolicy(view.webContents.session,id);
       view.webContents.on('will-navigate', (event, url) => { if (!isAllowedSessionNavigation(url)) event.preventDefault(); });
       view.webContents.on('will-redirect', (event, url) => { if (!isAllowedSessionNavigation(url)) event.preventDefault(); });
       view.webContents.once('destroyed', () => clearTimeout(retry));
@@ -383,6 +415,7 @@ if (primary) app.whenReady().then(() => {
   const databasePath = join(app.getPath('userData'),'pokehub.sqlite');
   store = new ProfileStore(databasePath);
   preferences = new PreferencesStore(databasePath);
+  networkStore = createNetworkPolicyStore(join(app.getPath('userData'),'network-policy.json'));
   perf = preferences.getPerformance();
   trayPrefs = preferences.getTray();
   focused = initialFocus(perf.lite ? 'focus-first' : preferences.getStartupMode(), store.list().map(profile => profile.id)); // Modo leve começa em Foco
@@ -426,6 +459,10 @@ if (primary) app.whenReady().then(() => {
     preferences.setApprovedHosts(id,extension.hosts);
     return applyExtensions();
   }));
+  ipcMain.handle('network:get', event => invoke(event, networkInfo));
+  ipcMain.handle('network:mode', (event,mode: unknown) => invoke(event, () => { networkStore.setMode(mode); return networkInfo(); }));
+  ipcMain.handle('network:allow', (event,host: unknown) => invoke(event, () => { unknownHosts.forget(networkStore.allow(host)); return networkInfo(); }));
+  ipcMain.handle('network:disallow', (event,host: unknown) => invoke(event, () => { networkStore.disallow(host); return networkInfo(); }));
   ipcMain.handle('extensions:store', async (event,id: unknown) => { // só as lojas do catálogo, por id: o renderer nunca envia URL
     const entry = CATALOG.find(item => item.id === id);
     if (!trusted(event) || !entry) return {ok:false,error:'Extensão desconhecida.'};
