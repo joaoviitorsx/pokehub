@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
 import type { Profile } from '../domain/profiles';
 import type { HuntRow, HuntSnapshot, HuntSprite } from '../contracts/hunt';
 import { Ball, El, Icon, icons } from './icons';
-import { HUNT_REFRESH_MS, huntFetchable, huntQueue } from './hunt-queue';
+import { huntFetchable, huntQueue, huntRefreshMs, signature } from './hunt-queue';
 import { MarketPanel } from './market-side';
 
 type Mode = 'xp' | 'ouro' | 'shiny';
@@ -93,7 +93,7 @@ const waiting: Record<string,[string,string]> = {
 const skeleton = (label:string) => <div className="side-skel" role="status"><span className="sr">{label}</span><i data-k="poke"/><i data-k="seg"/><i data-k="card"><Ball className="wobble"/></i><i/><i/><i/><i/></div>;
 
 // focusId: conta em foco/expandida (a lateral a seleciona ao abrir e quando ela muda); onAccount: devolve a conta mostrada (o processo principal a usa no foco automático).
-export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focusId,onAccount}:{profiles:Profile[]; states:Record<string,string>; prefs:SidePrefs; onPrefs:Dispatch<SetStateAction<SidePrefs>>; onClose:() => void; onSettings:() => void; focusId:string|null; onAccount:(id:string|null) => void}) {
+export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focusId,onAccount,lite=false}:{profiles:Profile[]; states:Record<string,string>; prefs:SidePrefs; onPrefs:Dispatch<SetStateAction<SidePrefs>>; onClose:() => void; onSettings:() => void; focusId:string|null; onAccount:(id:string|null) => void; lite?:boolean}) {
  const [pick,setPick] = useState<string|null>(focusId);
  const [seenFocus,setSeenFocus] = useState(focusId);
  if (seenFocus !== focusId) { setSeenFocus(focusId); if (focusId) setPick(focusId); }
@@ -114,7 +114,13 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
  const slot = `${id}|${liberadas}`;
  const readAt = useRef<Record<string,number>>({});
  const [busy,setBusy] = useState<string|null>(null);
- const pool = profiles.filter(profile => huntFetchable(states[profile.id])).map(profile => profile.id).join(',');
+ // As contas pré-aquecidas vêm de uma chave em texto: só uma mudança real (quem pode ser lido) a altera, e o ciclo não reinicia por ela.
+ const pool = useMemo(() => profiles.filter(profile => huntFetchable(states[profile.id])).map(profile => profile.id).join(','),[profiles,states]);
+ const poolRef = useRef(pool);
+ useEffect(() => { poolRef.current = pool; },[pool]);
+ const live = huntFetchable(state);
+ const seen = useRef<Record<string,string>>({}); // assinatura do último retrato por conta: igual = sem setState
+ const refreshMs = huntRefreshMs(lite);
  useEffect(() => {
    if (!id || tab !== 'cacar') return;
    let alive = true, timer = 0;
@@ -126,19 +132,21 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
      const result = await Promise.race([window.pokehub.huntSnapshot(account,liberadas),new Promise<never>((_resolve,reject) => {timeout = setTimeout(reject,READ_TIMEOUT_MS);})]).catch(() => ({ok:false as const,error:unavailable})).finally(() => clearTimeout(timeout));
      if (!alive) return;
      setBusy(old => old === key ? null : old);
-     if (result.ok) setEntries(old => ({...old,[key]:{data:result.data}}));
-     else if (account === id) setEntries(old => ({...old,[key]:{error:result.error}})); // falha no pré-aquecimento não apaga o último retrato
+     const next = result.ok ? signature(result.data) : account === id ? `E${result.error}` : null; // falha no pré-aquecimento não apaga o último retrato
+     if (next === null || seen.current[key] === next) return;
+     seen.current[key] = next;
+     setEntries(old => ({...old,[key]:result.ok ? {data:result.data} : {error:result.error}}));
    };
    // uma conta por vez: o cálculo roda dentro da página do jogo
    const cycle = async () => {
-     if (!document.hidden) for (const account of huntQueue(pool ? pool.split(',') : [],id,item => readAt.current[`${item}|${liberadas}`],Date.now())) { if (!alive) return; await read(account); }
-     if (alive) timer = window.setTimeout(() => void cycle(),HUNT_REFRESH_MS);
+     const pooled = poolRef.current;
+     if (!document.hidden) for (const account of huntQueue(pooled ? pooled.split(',') : [],id,item => readAt.current[`${item}|${liberadas}`],Date.now(),!lite)) { if (!alive) return; await read(account); }
+     if (alive) timer = window.setTimeout(() => void cycle(),refreshMs);
    };
    void cycle();
    return () => {alive = false;clearTimeout(timer);};
- },[id,stamp,liberadas,pool,tab]);
+ },[id,stamp,liberadas,live,tab,lite,refreshMs]);
  useEffect(() => () => { cancelAnimationFrame(frame.current); stop.current?.abort(); if (dragging.current !== null) void window.pokehub.drag(false).catch(() => {}); },[]);
- const live = huntFetchable(state);
  const cached = id && live ? entries[slot] : undefined;
  // A página pode continuar em "carregando" mesmo depois de responder; mostre também erros e estados vazios da leitura.
  const entry = cached;
@@ -188,6 +196,7 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
   <div className="side-accounts" role="group" aria-label="Conta">{profiles.map(profile => {const s=states[profile.id] ?? '';return <button key={profile.id} className="tab" style={{'--c':profile.colorToken} as CSSProperties} aria-pressed={profile.id === id} title={profile.label} onClick={() => setPick(profile.id)}><El color={profile.colorToken}/><span className="name">{profile.label}</span><span className="st" data-state={s}><b/></span></button>;})}</div>
   <div className="seg side-tabs" role="group" aria-label="Seção" style={{'--n':2,'--i':tab === 'cacar' ? 0 : 1} as CSSProperties}><button aria-pressed={tab === 'cacar'} onClick={() => setTab('cacar')}>Caçar</button><button aria-pressed={tab === 'mercado'} onClick={() => setTab('mercado')}>Mercado</button></div>
   {tab === 'mercado' && <MarketPanel id={id} state={state}/>}
+  {lite && tab === 'cacar' && <p className="lite-tip" role="note">Nas contas que você não está olhando, ative o Modo economia do próprio jogo (botão na tela de sessão) — economiza CPU/GPU.</p>}
   <div className="side-body" hidden={tab === 'mercado'} aria-busy={state === 'ready' && !entry}>
    {!entry && state !== 'ready' ? message(...(waiting[state] ?? waiting.loading!))
    : !entry ? skeleton('Lendo o jogo…')
@@ -211,7 +220,7 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
      </section>
      <ol className="side-list" start={2}>{rows.slice(1).map((row,index) => <li key={`${row.nome}-${row.nivel}`} style={{'--i':index,'--p':top > 0 ? Math.max(.02,modes[current].value(row) / top) : 0} as CSSProperties}><span className="pos">{index + 2}</span><Sprite sprite={row.sprite} name={row.nome} size={sprite}/><div className="who"><strong title={row.nome}>{row.nome}</strong><small>{region(row)}{!row.liberada && <Locked/>}</small></div><div className="val"><b>{main(row,current)}</b><Risk row={row}/></div><small className="more">{current === 'xp' ? `${short(row.ouroPorHora)} ouro/h` : `${short(row.xpPorHora)} XP/h`} · {kills(row)}</small><i className="meter" aria-hidden="true"/></li>)}</ol>
     </div>}
-    <p className="side-foot">{ok.liberadas} de {ok.total} hunts liberadas{ok.versaoJogo && ` · jogo v${ok.versaoJogo}`}. Atualiza a cada 5 s.<span className="side-sync" data-on={busy === slot || undefined} aria-hidden="true">Atualizando…</span></p>
+    <p className="side-foot">{ok.liberadas} de {ok.total} hunts liberadas{ok.versaoJogo && ` · jogo v${ok.versaoJogo}`}. Atualiza a cada {refreshMs / 1000} s.<span className="side-sync" data-on={busy === slot || undefined} aria-hidden="true">Atualizando…</span></p>
    </>}
   </div>
   <p className="side-credit" hidden={tab === 'mercado'}>Dados: extensão /hunt (Liang){ok?.versaoExtensao && ` ${ok.versaoExtensao}`}</p>

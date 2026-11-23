@@ -35,6 +35,8 @@ class FakeSession {
   async clearStorageData() { this.clearCount++; await this.block; }
   async clearCache() { this.cacheCount++; }
 }
+let nextPid = 5000;
+let richMetrics = false;
 class FakeContents extends EventEmitter {
   mainFrame = {};
   destroyed = false;
@@ -45,12 +47,17 @@ class FakeContents extends EventEmitter {
   session = new FakeSession();
   windowOpenHandler?: () => {action:string};
   setWindowOpenHandler(handler: () => {action:string}) { this.windowOpenHandler = handler; }
-  send() {}
+  sent: [string, {id?: string; state?: string}][] = [];
+  send(channel: string, payload: {id?: string; state?: string}) { this.sent.push([channel, payload]); }
   loadURL(url: string) { order.push('url'); this.loadedUrl = url; this.emit('did-start-loading'); return Promise.resolve(); }
   reload() {}
   close() { if (this.destroyBeforeThrow) {this.destroyed=true;throw new Error('fechamento parcial');} if (this.failClose) throw new Error('não fechou'); if (!this.deferClose) this.completeClose(); }
   completeClose() { this.destroyed = true; this.emit('destroyed'); }
   loadingMainFrame = true;
+  muted: boolean[] = [];
+  setAudioMuted(value: boolean) { this.muted.push(value); }
+  pid = nextPid++;
+  getOSProcessId() { return this.pid; }
   isLoadingMainFrame() { return this.loadingMainFrame; }
   getURL() { return this.loadedUrl; }
   isDestroyed() { return this.destroyed; }
@@ -67,20 +74,28 @@ class FakeWindow extends EventEmitter {
   webContents = new FakeContents();
   children = new Set<FakeView>();
   contentView = {addChildView:(view:FakeView) => {this.children.add(view);}, removeChildView:(view:FakeView) => {if (!this.children.delete(view)) throw new Error('view não anexada');}};
-  constructor() { super(); shell = this; }
-  getContentSize() { return [1280,800]; }
+  options: Record<string, unknown>;
+  constructor(options: Record<string, unknown> = {}) { super(); this.options = options; shell = this; }
+  sizeCalls = 0;
+  getContentSize() { this.sizeCalls++; return [1280,800]; }
   removeMenu() {}
   isDestroyed() { return false; }
   isMinimized() { return false; }
   focus() {}
   loadFile() { return Promise.resolve(); }
 }
+const switches: [string, string][] = [];
+const appIds: string[] = [];
 const fakeApp = Object.assign(new EventEmitter(), {
   requestSingleInstanceLock: () => true,
+  commandLine: {getSwitchValue: () => 'Existente', appendSwitch: (name: string, value: string) => { switches.push([name,value]); }},
   whenReady: () => Promise.resolve(),
   getPath: () => directory,
   getVersion: () => '0.1.0',
-  getAppMetrics: () => [{pid:123,creationTime:100,memory:{workingSetSize:2048},cpu:{percentCPUUsage:3}}],
+  setAppUserModelId: (id: string) => { appIds.push(id); },
+  getAppMetrics: () => richMetrics
+    ? [{pid:123,type:'Browser',creationTime:100,memory:{workingSetSize:2048},cpu:{percentCPUUsage:3}},{pid:99,type:'GPU',creationTime:101,memory:{workingSetSize:500},cpu:{percentCPUUsage:1}},...created.filter(view => !view.webContents.isDestroyed()).map(view => ({pid:view.webContents.pid,type:'Tab',creationTime:200 + view.webContents.pid,memory:{workingSetSize:4000,privateBytes:3000},cpu:{percentCPUUsage:2}}))]
+    : [{pid:123,creationTime:100,memory:{workingSetSize:2048},cpu:{percentCPUUsage:3}}],
   quit: () => {},
 });
 vi.doMock('electron', () => ({app: fakeApp, BrowserWindow:FakeWindow, WebContentsView:FakeView, ipcMain:{handle: (name:string, handler:Handler) => handlers.set(name,handler)}, shell:{openExternal:async (url:string) => {openedExternal.push(url);}}, dialog:{showOpenDialog:async () => ({canceled:chosenFolder === null,filePaths:chosenFolder === null ? [] : [chosenFolder]}),showErrorBox() {},showMessageBoxSync:()=>confirmChoice,showMessageBox:async (_window:unknown, options:{message:string}) => {notices.push(options.message);return {response:noticeChoice};}}}));
@@ -96,6 +111,10 @@ describe('processo principal', () => {
   const savedPreferences = new PreferencesStore(path); savedPreferences.setStartupMode('focus-first'); savedPreferences.close();
   await import('../electron/main');
   await vi.waitFor(() => expect(handlers.has('profiles:create')).toBe(true));
+  expect(switches).toEqual([['disable-features','Existente,SpareRendererForSitePerProcess']]);
+  await vi.waitFor(() => expect(created).toHaveLength(1)); // início escalonado: a primeira conta abre depois da leitura assíncrona das extensões
+  expect(created[0]?.webContents.loadedUrl).toBe('https://pokeidle.io/app');
+  expect(created[0]?.options.webPreferences).toMatchObject({spellcheck:false,devTools:true});
   const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
   const preventUnload = vi.fn();
   shell.webContents.emit('will-prevent-unload',{preventDefault:preventUnload});
@@ -377,5 +396,109 @@ describe('processo principal', () => {
   expect((await call('update:check')).data?.status).toEqual({state:'disabled'});
   expect((await call('update:download')).data?.status).toEqual({state:'disabled'});
   expect((await call('update:install')).ok).toBe(false);
+ });
+ it('a janela usa a barra de título escondida com overlay nas cores do app, ícone do app e AppUserModelId', () => {
+  expect(shell.options).toMatchObject({title:'PokéHub',backgroundColor:'#0f1218',webPreferences:{spellcheck:false,sandbox:true,contextIsolation:true,nodeIntegration:false}});
+  expect(String(shell.options.icon).replace(/\\/g,'/')).toMatch(/\/build\/icon\.png$/);
+  if (process.platform === 'darwin') expect(shell.options.titleBarStyle).toBe('hiddenInset');
+  else expect(shell.options).toMatchObject({titleBarStyle:'hidden',titleBarOverlay:{color:'#bd6951',symbolColor:'#fff6ef',height:48}});
+  if (process.platform === 'win32') expect(appIds).toEqual(['local.pokehub.desktop']);
+ });
+ it('só avisa a interface quando o estado muda e ignora o carregamento de subframes', async () => {
+  const { partitionFor } = await import('../electron/partition');
+  const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
+  const id = (handlers.get('profiles:list')?.(sender) as {data:{id:string}[]}).data[0]!.id;
+  const view = [...shell.children].find(item => item.options.webPreferences.partition === partitionFor(id))!;
+  const sentFor = () => shell.webContents.sent.filter(([channel,payload]) => channel === 'session:status' && payload.id === id).map(([,payload]) => payload.state);
+  view.webContents.loadingMainFrame = true; view.webContents.emit('did-start-loading'); view.webContents.emit('did-stop-loading');
+  shell.webContents.sent.length = 0;
+  view.webContents.loadingMainFrame = false; view.webContents.emit('did-start-loading'); // iframe/anúncio: não vira "carregando"
+  expect(sentFor()).toEqual([]);
+  view.webContents.loadingMainFrame = true; view.webContents.emit('did-start-loading'); view.webContents.emit('did-start-loading');
+  expect(sentFor()).toEqual(['loading']); // a repetição não gera outro evento
+  view.webContents.emit('did-stop-loading'); view.webContents.emit('did-stop-loading');
+  expect(sentFor()).toEqual(['loading','ready']);
+ });
+ it('suspende e retoma só a view, sem tocar nos dados da sessão', async () => {
+  const { partitionFor } = await import('../electron/partition');
+  const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
+  const ids = (handlers.get('profiles:list')?.(sender) as {data:{id:string}[]}).data.map(item => item.id);
+  const id = ids[0]!;
+  const viewOf = () => [...shell.children].filter(item => item.options.webPreferences.partition === partitionFor(id)).at(-1);
+  const call = async (channel:string,...args:unknown[]) => await handlers.get(channel)?.(sender,...args) as {ok:boolean};
+  const states = () => (handlers.get('session:states')?.(sender) as {data:Record<string,string>}).data;
+  const foreign = {sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame};
+  for (const channel of ['session:suspend','session:resume']) { expect((await handlers.get(channel)?.(foreign,id) as {ok:boolean}).ok).toBe(false); for (const bad of ['nao-existe',null,42,{id}]) expect((await call(channel,bad)).ok).toBe(false); }
+  expect((await call('session:resume',id)).ok).toBe(false); // só retoma o que está suspenso
+  const before = viewOf()!;
+  expect((await call('session:suspend',id)).ok).toBe(true);
+  expect(before.webContents.isDestroyed()).toBe(true); expect(viewOf()).toBeUndefined();
+  expect(before.webContents.session.clearCount).toBe(0); // login e partição intactos
+  expect(states()[id]).toBe('suspended');
+  expect(shell.webContents.sent.filter(([channel,payload]) => channel === 'session:status' && payload.id === id).at(-1)?.[1].state).toBe('suspended');
+  expect((await call('session:suspend',id)).ok).toBe(false);
+  expect(await handlers.get('hunt:snapshot')?.(sender,id)).toEqual({ok:false,error:'Dados do /hunt indisponíveis nesta conta'}); // suspensa não é legível
+  expect((handlers.get('profiles:list')?.(sender) as {data:unknown[]}).data).toHaveLength(ids.length); // continua na lista (ganha coluna com o marcador)
+  expect((await call('session:resume',id)).ok).toBe(true);
+  const again = viewOf()!;
+  expect(again).not.toBe(before); expect(again.options.webPreferences.partition).toBe(before.options.webPreferences.partition);
+  await vi.waitFor(() => expect(again.webContents.loadedUrl).toBe('https://pokeidle.io/app')); expect(states()[id]).toBe('loading');
+  expect((await call('session:resume',id)).ok).toBe(false);
+ });
+ it('Modo leve e som só no foco: preferências validadas e áudio mutado fora do foco', async () => {
+  const { partitionFor } = await import('../electron/partition');
+  const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
+  const call = (channel:string,...args:unknown[]) => handlers.get(channel)?.(sender,...args) as {ok:boolean;data?:unknown};
+  const ids = (call('profiles:list') as {data:{id:string}[]}).data.map(item => item.id);
+  const viewOf = (id:string) => [...shell.children].find(item => item.options.webPreferences.partition === partitionFor(id))!;
+  const last = (id:string) => viewOf(id).webContents.muted.at(-1);
+  expect(call('performance:get')).toEqual({ok:true,data:{lite:false,muteUnfocused:false}});
+  for (const bad of ['x',null,{lite:'sim'},{muteUnfocused:1}]) expect(call('performance:set',bad).ok).toBe(false);
+  expect((handlers.get('performance:set')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame},{lite:true}) as {ok:boolean}).ok).toBe(false);
+  expect(call('session:layout',ids[0]!,false,false).ok).toBe(true);
+  expect(ids.map(last).every(value => value === undefined || value === false)).toBe(true); // sem a opção, ninguém é mutado
+  expect(call('performance:set',{muteUnfocused:true})).toEqual({ok:true,data:{lite:false,muteUnfocused:true}});
+  expect(ids.map(last)).toEqual(ids.map((_id,index) => index !== 0)); // só a conta em foco tem som
+  expect(call('session:layout',null,false,false).ok).toBe(true);
+  expect(ids.map(last).every(value => value === false)).toBe(true); // na grade todas as colunas estão visíveis
+  expect(call('session:layout',ids[1]!,false,false).ok).toBe(true);
+  expect(ids.map(last)).toEqual(ids.map((_id,index) => index !== 1));
+  expect(call('performance:set',{lite:true,muteUnfocused:false})).toEqual({ok:true,data:{lite:true,muteUnfocused:false}}); // o Modo leve também muta fora do foco
+  expect(ids.map(last)).toEqual(ids.map((_id,index) => index !== 1));
+  expect(call('performance:set',{lite:false})).toEqual({ok:true,data:{lite:false,muteUnfocused:false}});
+  expect(ids.map(last).every(value => value === false)).toBe(true);
+  expect(call('session:layout',null,false,false).ok).toBe(true);
+ });
+ it('monitor por conta: agrupa CPU e memória privada por conta, hub e GPU, só para a interface', async () => {
+  const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
+  const ids = (handlers.get('profiles:list')?.(sender) as {data:{id:string}[]}).data.map(item => item.id);
+  type Group = {cpuPercent:number|null;privateKb:number|null;workingSetKb:number|null;count:number};
+  type Sample = {ok:boolean;data:{accounts:{id:string;cpuPercent:number|null;privateKb:number|null;workingSetKb:number|null}[];hub:Group;gpu:Group;other:Group}};
+  expect((handlers.get('diagnostics:processes')?.({sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame}) as {ok:boolean}).ok).toBe(false);
+  richMetrics = true;
+  try {
+   await new Promise(resolve => setTimeout(resolve,1100)); // a leitura anterior de getAppMetrics é reaproveitada por 1 s
+   const sample = handlers.get('diagnostics:processes')?.(sender) as Sample;
+   expect(sample.ok).toBe(true);
+   expect(sample.data.accounts.map(item => item.id)).toEqual(ids);
+   for (const account of sample.data.accounts) expect(account).toMatchObject({privateKb:3000,workingSetKb:4000});
+   expect(sample.data.hub).toMatchObject({count:1,privateKb:2048}); // sem privateBytes, usa o conjunto de trabalho
+   expect(sample.data.gpu).toMatchObject({count:1,workingSetKb:500});
+   expect(sample.data.other.count).toBe(0);
+  } finally { richMetrics = false; }
+ });
+ it('o resize refaz o layout no máximo a cada ~33 ms e sempre uma última vez ao parar', () => {
+  vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});
+  try {
+   const base = shell.sizeCalls;
+   for (let i = 0; i < 6; i++) shell.emit('resize');
+   expect(shell.sizeCalls - base).toBe(1); // a primeira é na hora
+   vi.advanceTimersByTime(33);
+   expect(shell.sizeCalls - base).toBe(2); // e uma final com o tamanho mais recente
+   vi.advanceTimersByTime(200);
+   expect(shell.sizeCalls - base).toBe(2);
+   shell.emit('resize'); expect(shell.sizeCalls - base).toBe(3);
+   vi.advanceTimersByTime(100); expect(shell.sizeCalls - base).toBe(3);
+  } finally { vi.useRealTimers(); }
  });
 });

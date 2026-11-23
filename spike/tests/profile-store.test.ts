@@ -40,9 +40,9 @@ it('recusa banco de versão futura sem alterá-lo', async () => {
  const { join } = await import('node:path');
  const dir = mkdtempSync(join(tmpdir(),'pokehub-version-'));
  try {
-  const path = join(dir,'future.sqlite'); const db = new DatabaseSync(path); db.exec('PRAGMA user_version=9'); db.close();
+  const path = join(dir,'future.sqlite'); const db = new DatabaseSync(path); db.exec('PRAGMA user_version=10'); db.close();
   expect(() => new ProfileStore(path)).toThrow();
-  const check = new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toEqual({user_version:9}); check.close();
+  const check = new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toEqual({user_version:10}); check.close();
  } finally { rmSync(dir,{recursive:true,force:true}); }
 });
 
@@ -76,5 +76,27 @@ it('recusa banco inconsistente com mais de quatro perfis sem apagar dados', asyn
   const reopened=new ProfileStore(path);
   expect(() => reopened.list()).toThrow(); reopened.close();
   const check=new DatabaseSync(path); expect(check.prepare('SELECT COUNT(*) AS count FROM profiles').get()).toMatchObject({count:5}); check.close();
+ } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
+it('guarda a lista em memória, invalida nas escritas e enxerga mudanças de outra conexão', async () => {
+ const { mkdtempSync, rmSync } = await import('node:fs');
+ const { tmpdir } = await import('node:os');
+ const { join } = await import('node:path');
+ const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
+ const dir = mkdtempSync(join(tmpdir(),'pokehub-cache-'));
+ try {
+  const path = join(dir,'profiles.sqlite');
+  const store = new ProfileStore(path);
+  const first = store.create(input);
+  const one = store.list(), two = store.list();
+  expect(two).toEqual(one); expect(two).not.toBe(one); // cópia: quem chama não altera o cache
+  two.pop(); expect(store.list()).toHaveLength(1);
+  store.update(first.id,{...input,label:'Nova'}); expect(store.list()[0]?.label).toBe('Nova');
+  const second = store.create(input); expect(store.list()).toHaveLength(2);
+  store.remove(second.id); expect(store.list()).toHaveLength(1);
+  const other = new DatabaseSync(path); other.prepare('INSERT INTO profiles VALUES (?, ?, ?, ?, ?, ?, ?)').run('550e8400-e29b-41d4-a716-446655440000','Fora','a@example.com','','#d4a65f','2026','2026'); other.close();
+  expect(store.list()).toHaveLength(2); // mudança por outra conexão aparece
+  store.close();
  } finally { rmSync(dir,{recursive:true,force:true}); }
 });

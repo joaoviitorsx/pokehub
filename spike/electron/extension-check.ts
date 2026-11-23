@@ -1,6 +1,7 @@
 // Valida, audita e localiza extensões de terceiros (/hunt, Smart Market...) na pasta do navegador do usuário.
 // O PokéHub só carrega a pasta original; nunca copia nem altera o código de terceiros.
 import * as nodeFs from 'node:fs';
+import * as nodeFsp from 'node:fs/promises';
 import { posix, win32 } from 'node:path';
 import type { AuditFinding, AuditResult, FindingKind } from '../contracts/extensions';
 
@@ -207,28 +208,14 @@ function jsFiles(dir: string, fs: ExtFs, depth = 0, out: string[] = []): string[
   }
   return out;
 }
-/**
- * Veredito pelo que o código faz, sem executá-lo, em ordem crescente: 'leitura'; 'interage' (clica, dispara eventos ou
- * envia pelo socket); 'externa' (chama a rede para hosts fora do pokeidle.io: precisa de aprovação dos hosts);
- * 'bloqueada' (eval/new Function ou arquivo grande demais para auditar). Comentários, arquivos de teste e endereços
- * escritos como texto fora de chamadas de rede só geram 'link'.
- */
-export function auditExtension(dir: string, fs: ExtFs = nodeFs): AuditResult {
+/** Acumula os achados de uma auditoria (mesmo código para a versão síncrona e a assíncrona). */
+function collector() {
   const found = new Map<string, {finding: AuditFinding; count: number}>();
   const add = (kind: FindingKind, file: string, detail: string) => {
     const key = `${kind}\0${file}\0${detail}`; const entry = found.get(key);
     if (entry) entry.count++; else found.set(key,{finding:{kind,file,detail},count:1});
   };
-  let total = 0;
-  for (const path of jsFiles(dir,fs)) {
-    const file = path.slice(dir.length).replace(/^[\\/]+/,'').replace(/\\/g,'/');
-    if (TEST_DIR_RE.test(file) || TEST_FILE_RE.test(file)) continue;
-    let raw: string;
-    try {
-      const size = fs.statSync(path).size;
-      if (size > AUDIT_FILE_BYTES || total + size > AUDIT_TOTAL_BYTES) { add('skipped',file,'arquivo grande demais para auditar'); continue; }
-      total += size; raw = fs.readFileSync(path,'utf8');
-    } catch { add('skipped',file,'arquivo ilegível'); continue; }
+  const scan = (file: string, raw: string) => {
     const text = stripComments(raw);
     const dynamic = DYNAMIC_CALL_RE.test(text);
     for (const {kind,api,re} of PATTERNS) for (const _ of text.matchAll(re)) add(kind,file,api); // eslint-disable-line @typescript-eslint/no-unused-vars
@@ -238,9 +225,103 @@ export function auditExtension(dir: string, fs: ExtFs = nodeFs): AuditResult {
       const inCall = CALL_BEFORE_RE.test(text.slice(Math.max(0,match.index - 120),match.index));
       add(inCall || (dynamic && !LINK_HOSTS.includes(host)) ? 'network' : 'link',file,host);
     }
+  };
+  const result = (): AuditResult => {
+    const findings = [...found.values()].map(({finding,count}) => count > 1 && finding.kind !== 'network' && finding.kind !== 'link' ? {...finding,detail:`${finding.detail} (${count}×)`} : finding);
+    const has = (...kinds: FindingKind[]) => findings.some(finding => kinds.includes(finding.kind));
+    const hosts = [...new Set(findings.filter(finding => finding.kind === 'network').map(finding => finding.detail))].sort();
+    return {verdict: has('eval','skipped') ? 'bloqueada' : has('network') ? 'externa' : has('click','dispatch','send') ? 'interage' : 'leitura', findings, hosts};
+  };
+  return {add,scan,result};
+}
+const relative = (dir: string, path: string) => path.slice(dir.length).replace(/^[\\/]+/,'').replace(/\\/g,'/');
+const isTestFile = (file: string) => TEST_DIR_RE.test(file) || TEST_FILE_RE.test(file);
+/**
+ * Veredito pelo que o código faz, sem executá-lo, em ordem crescente: 'leitura'; 'interage' (clica, dispara eventos ou
+ * envia pelo socket); 'externa' (chama a rede para hosts fora do pokeidle.io: precisa de aprovação dos hosts);
+ * 'bloqueada' (eval/new Function ou arquivo grande demais para auditar). Comentários, arquivos de teste e endereços
+ * escritos como texto fora de chamadas de rede só geram 'link'.
+ */
+export function auditExtension(dir: string, fs: ExtFs = nodeFs): AuditResult {
+  const {add,scan,result} = collector();
+  let total = 0;
+  for (const path of jsFiles(dir,fs)) {
+    const file = relative(dir,path);
+    if (isTestFile(file)) continue;
+    let raw: string;
+    try {
+      const size = fs.statSync(path).size;
+      if (size > AUDIT_FILE_BYTES || total + size > AUDIT_TOTAL_BYTES) { add('skipped',file,'arquivo grande demais para auditar'); continue; }
+      total += size; raw = fs.readFileSync(path,'utf8');
+    } catch { add('skipped',file,'arquivo ilegível'); continue; }
+    scan(file,raw);
   }
-  const findings = [...found.values()].map(({finding,count}) => count > 1 && finding.kind !== 'network' && finding.kind !== 'link' ? {...finding,detail:`${finding.detail} (${count}×)`} : finding);
-  const has = (...kinds: FindingKind[]) => findings.some(finding => kinds.includes(finding.kind));
-  const hosts = [...new Set(findings.filter(finding => finding.kind === 'network').map(finding => finding.detail))].sort();
-  return {verdict: has('eval','skipped') ? 'bloqueada' : has('network') ? 'externa' : has('click','dispatch','send') ? 'interage' : 'leitura', findings, hosts};
+  return result();
+}
+
+// Versão assíncrona (não trava o processo principal) e cache da auditoria.
+export interface AsyncExtFs {
+  stat(path: string): Promise<{isDirectory(): boolean; size: number; mtimeMs?: number}>;
+  readFile(path: string, encoding: 'utf8'): Promise<string>;
+  readdir(path: string): Promise<string[]>;
+}
+async function jsFilesAsync(dir: string, fs: AsyncExtFs, depth = 0, out: string[] = []): Promise<string[]> {
+  if (depth > AUDIT_DEPTH) return out;
+  let names: string[];
+  try { names = (await fs.readdir(dir)).slice().sort(); } catch { return out; }
+  for (const name of names) {
+    const path = pathFor(dir).join(dir,name);
+    try {
+      if ((await fs.stat(path)).isDirectory()) await jsFilesAsync(path,fs,depth + 1,out);
+      else if (/\.(?:m?js|cjs)$/i.test(name)) out.push(path);
+    } catch { /* ilegível: ignorado */ }
+  }
+  return out;
+}
+export async function auditExtensionAsync(dir: string, fs: AsyncExtFs = nodeFsp): Promise<AuditResult> {
+  const {add,scan,result} = collector();
+  let total = 0;
+  for (const path of await jsFilesAsync(dir,fs)) {
+    const file = relative(dir,path);
+    if (isTestFile(file)) continue;
+    let raw: string;
+    try {
+      const size = (await fs.stat(path)).size;
+      if (size > AUDIT_FILE_BYTES || total + size > AUDIT_TOTAL_BYTES) { add('skipped',file,'arquivo grande demais para auditar'); continue; }
+      total += size; raw = await fs.readFile(path,'utf8');
+    } catch { add('skipped',file,'arquivo ilegível'); continue; }
+    scan(file,raw);
+  }
+  return result();
+}
+/** Lista dos .js (caminho, tamanho, mtime): barata (só stat) e muda quando a extensão muda. */
+async function auditSignature(dir: string, fs: AsyncExtFs): Promise<string> {
+  const parts: string[] = [];
+  for (const path of await jsFilesAsync(dir,fs)) {
+    try { const stat = await fs.stat(path); parts.push(`${relative(dir,path)}:${stat.size}:${stat.mtimeMs ?? 0}`); } catch { parts.push(`${relative(dir,path)}:?`); }
+  }
+  return parts.join('|');
+}
+/**
+ * Cache da auditoria por (pasta, versão do manifest, lista de .js com tamanho e mtime). Sem `verify` um resultado guardado
+ * vale sem tocar no disco (toggle/remover); com `verify` só se faz stat dos arquivos (sem ler nada) e a pasta é relida apenas
+ * se algo mudou. `forget` (Detectar, Adicionar) obriga a reler. Mudar a versão ou o caminho cria outra entrada.
+ */
+export function createAuditCache(fs: AsyncExtFs = nodeFsp) {
+  const entries = new Map<string, {dir: string; signature: string; result: AuditResult}>();
+  return {
+    async get(dir: string, version: string | null, verify = false): Promise<AuditResult> {
+      const key = `${dir}\0${version ?? ''}`, hit = entries.get(key);
+      if (hit && !verify) return hit.result;
+      const signature = await auditSignature(dir,fs);
+      if (hit && hit.signature === signature) return hit.result;
+      const result = await auditExtensionAsync(dir,fs);
+      for (const [other,entry] of entries) if (entry.dir === dir) entries.delete(other); // versão antiga da mesma pasta
+      entries.set(key,{dir,signature,result});
+      return result;
+    },
+    forget(dir: string) { for (const [key,entry] of entries) if (entry.dir === dir) entries.delete(key); },
+    prune(keep: readonly string[]) { for (const [key,entry] of entries) if (!keep.includes(entry.dir)) entries.delete(key); },
+    get size() { return entries.size; },
+  };
 }
