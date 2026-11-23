@@ -17,6 +17,66 @@
 
 (O restante deste documento continua valendo; as opções Tailscale e Cloudflare ficam para o futuro.)
 
+## PokéHub Mobile: gerenciamento completo para farmar (2026-11-23)
+
+O usuário quer gerenciar no celular tudo o que o jogo permite, como no PC.
+
+### Princípio: duas camadas
+
+- **Atalhos nativos**, rápidos e feitos para toque, para as tarefas repetitivas do farm. Usam as mesmas funções do hub do PC, com as mesmas travas.
+- **Tela ao vivo + Controlar**, para **qualquer** outra coisa. O celular vê a conta e toca nela, e o hub repassa os toques para a página do jogo. Assim nenhuma função do jogo fica de fora, nem as que o hub não conhece ou que surgirem em atualizações.
+
+### Navegação (barra inferior, uma mão)
+
+1. **Contas**
+   - Cartões das 4 contas com estado, Pokémon em campo, hunt, XP/h, ouro e alertas (sem poção, caiu).
+   - Toque no cartão abre a conta.
+   - Arrastar para o lado: Recarregar ou Suspender.
+2. **Conta** (por conta), com abas:
+   - **Jogo:** tela ao vivo. O botão "Controlar" pede o PIN e vale por 10 min. Tem zoom e pan com pinça, teclado virtual para chat e campos, e botões grandes para Voltar, Fechar janela (Esc) e Rolar.
+   - **Capturas:** feed da conta.
+   - **Equipe:** dados do /hunt.
+   - **Onde caçar:** ranking.
+3. **Loja**
+   - Estoque das contas, kits com "Repor" em 1 toque e compra avulsa (item, quantidade, ×10/×100).
+   - Mostra sempre a tela de confirmação (itens, total e saldo depois) e pede o PIN.
+   - Pode aplicar em várias contas de uma vez.
+4. **Mercado**
+   - Ranking de custo-benefício, "Ler todas as páginas", filtros e foco.
+   - Cada anúncio tem **"Abrir no jogo"**: leva a conta à vitrine daquele anúncio, na tela ao vivo, para você decidir.
+5. **Alertas**
+   - Histórico de notificações (shiny, P5, drop raro, conta caiu, estoque baixo).
+   - Ajustes de quais alertas receber.
+
+### Compras
+
+- **Market (ouro):** pokébolas, poções e revives. Compra direta pelo hub (Loja rápida), com confirmação e PIN.
+- **Mercado da Comunidade (RMT):** usa gemas e coins de outros jogadores, com taxas e retenções, e as gemas valem dinheiro. **Decidido:** o hub leva a conta até o anúncio ("Abrir no jogo"), e o toque em Comprar é do usuário, na tela ao vivo. O hub nunca clica em Comprar no RMT.
+- **Teto diário de gasto pelo celular:** 200.000 ouro por conta, ajustável no PC (decidido).
+
+### Usabilidade
+
+- Botões de pelo menos 44 px.
+- Feedback tátil (vibração curta ao confirmar).
+- Modo escuro de madeira e layout de uma coluna.
+- Funciona com a tela do celular na vertical.
+- O feed e o estado chegam por SSE. Sem conexão, mostra o último estado com "atualizado há X".
+- A tela ao vivo pausa sozinha quando o app vai para segundo plano, para economizar a bateria do celular e a CPU do PC.
+
+### Segurança extra no mobile
+
+- Ações que gastam algo pedem o PIN. Há uma opção "lembrar PIN por 10 min neste aparelho".
+- Cada compra vai para o registro de auditoria e para a notificação "Compra feita pelo celular: X".
+- Teto diário de gasto pelo celular, ajustável no PC. Padrão: 200.000 ouro/dia por conta.
+- Revogar o aparelho ou desligar o acesso remoto pela bandeja corta tudo na hora.
+
+### Fases ajustadas
+- **R1:** base, pareamento, leitura (em andamento).
+- **R3:** capturas e Web Push.
+- **R4:** ações (Loja com kits, recarregar, suspender, Modo leve) com PIN e teto diário.
+- **R5:** tela ao vivo e Controlar. Isso destrava "todo tipo de gerenciamento".
+- **R6:** auditoria de segurança.
+
 Objetivo: com o PC em casa farmando, abrir no navegador do celular, de **qualquer lugar**, um painel do PokéHub para ver capturas, Pokémon, estoque, hunts e mercado, fazer ações simples (repor kit, recarregar ou suspender conta) e, quando preciso, **ver e mexer no jogo** de uma conta.
 
 ## 1. Princípios de segurança (inegociáveis)
