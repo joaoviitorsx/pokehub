@@ -1,0 +1,6 @@
+dist
+dist-electron
+release
+graphify-out
+bun.lock
+pnpm-lock.yaml

@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "skipLibCheck": true,
+    "outDir": "dist-electron",
+    "esModuleInterop": true,
+    "rootDir": "spike"
+  },
+  "include": [
+    "spike/electron",
+    "spike/domain"
+  ]
+}
