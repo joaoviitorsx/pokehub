@@ -113,7 +113,8 @@ const fakeApp = Object.assign(new EventEmitter(), {
     : [{pid:123,creationTime:100,memory:{workingSetSize:2048},cpu:{percentCPUUsage:3}}],
   quit: () => {},
 });
-vi.doMock('electron', () => ({Tray:FakeTray, Menu:{buildFromTemplate:(template: typeof menuTemplate) => { menuTemplate = template; return {}; }}, Notification:class { static isSupported() { return false; } }, nativeImage:{createFromPath:() => ({resize:(size:unknown) => size})}, app: fakeApp, BrowserWindow:FakeWindow, WebContentsView:FakeView, ipcMain:{handle: (name:string, handler:Handler) => handlers.set(name,handler)}, shell:{openExternal:async (url:string) => {openedExternal.push(url);}}, dialog:{showOpenDialog:async () => ({canceled:chosenFolder === null,filePaths:chosenFolder === null ? [] : [chosenFolder]}),showErrorBox() {},showMessageBoxSync:()=>confirmChoice,showMessageBox:async (_window:unknown, options:{message:string}) => {notices.push(options.message);return {response:noticeChoice};}}}));
+let powerStarts = 0;
+vi.doMock('electron', () => ({powerSaveBlocker:{start:() => { powerStarts++; return 1; }, stop() {}}, Tray:FakeTray, Menu:{buildFromTemplate:(template: typeof menuTemplate) => { menuTemplate = template; return {}; }}, Notification:class { static isSupported() { return false; } }, nativeImage:{createFromPath:() => ({resize:(size:unknown) => size})}, app: fakeApp, BrowserWindow:FakeWindow, WebContentsView:FakeView, ipcMain:{handle: (name:string, handler:Handler) => handlers.set(name,handler)}, shell:{openExternal:async (url:string) => {openedExternal.push(url);}}, dialog:{showOpenDialog:async () => ({canceled:chosenFolder === null,filePaths:chosenFolder === null ? [] : [chosenFolder]}),showErrorBox() {},showMessageBoxSync:()=>confirmChoice,showMessageBox:async (_window:unknown, options:{message:string}) => {notices.push(options.message);return {response:noticeChoice};}}}));
 afterAll(() => { shell?.emit('closed'); vi.doUnmock('electron'); rmSync(directory,{recursive:true,force:true}); });
 
 describe('processo principal', () => {
@@ -131,6 +132,10 @@ describe('processo principal', () => {
   expect(created[0]?.webContents.loadedUrl).toBe('https://pokeidle.io/app');
   expect(created[0]?.options.webPreferences).toMatchObject({spellcheck:false,devTools:true});
   const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
+  // acesso remoto: desligado por padrão => nada escuta e o PC não é impedido de dormir; só a interface pergunta
+  expect(await handlers.get('remote:status')!(sender)).toMatchObject({ok:true,data:{enabled:false,running:false,urls:[],pairing:null}});
+  expect(await handlers.get('remote:status')!({sender:{},senderFrame:{}})).toEqual({ok:false,error:'Origem não autorizada.'});
+  expect(powerStarts).toBe(0);
   const preventUnload = vi.fn();
   shell.webContents.emit('will-prevent-unload',{preventDefault:preventUnload});
   expect(preventUnload).not.toHaveBeenCalled();
@@ -509,7 +514,7 @@ describe('processo principal', () => {
   // menu (reconstruído com debounce): Abrir, uma entrada por conta, Modo leve e Sair
   const total = (call('profiles:list').data as unknown[]).length; await vi.waitFor(() => expect(menuTemplate.filter(item => / — /.test(item.label ?? '')).length).toBe(total));
   const labels = menuTemplate.map(item => item.type === 'separator' ? '-' : item.label);
-  expect(labels[0]).toBe('Abrir PokéHub'); expect(labels.filter(label => / — (pronta|carregando|suspensa|sem conexão|precisa entrar|com erro)$/.test(label ?? ''))).toHaveLength(total); expect(labels.at(-2)).toBe('Modo leve'); expect(labels.at(-1)).toBe('Sair do PokéHub');
+  expect(labels[0]).toBe('Abrir PokéHub'); expect(labels.filter(label => / — (pronta|carregando|suspensa|sem conexão|precisa entrar|com erro)$/.test(label ?? ''))).toHaveLength(total); expect(labels.at(-3)).toBe('Modo leve'); expect(labels.at(-2)).toBe('Acesso remoto: desligado'); expect(labels.at(-1)).toBe('Sair do PokéHub');
   const profileItem = menuTemplate[2]!; shell.webContents.sent.length = 0; windowCalls.length = 0; profileItem.click?.();
   expect(windowCalls).toEqual(['show','focus']); expect(shell.webContents.sent.at(-1)?.[0]).toBe('workspace:focus');
   const lite = menuTemplate.find(item => item.label === 'Modo leve')!; lite.click?.();

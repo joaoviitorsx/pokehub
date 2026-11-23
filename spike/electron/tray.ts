@@ -15,13 +15,14 @@ export const trayIconSize = (platform: string) => platform === 'linux' ? 24 : 16
 const STATE_TEXT: Record<string,string> = {ready:'pronta', loading:'carregando', suspended:'suspensa', offline:'sem conexão', auth_required:'precisa entrar', error:'com erro'};
 export const stateText = (state: string | undefined) => STATE_TEXT[state ?? 'loading'] ?? 'carregando';
 export interface TrayItem { label?: string; type?: 'separator' | 'checkbox'; checked?: boolean; click?: () => void }
-export function trayMenuItems(input: {profiles: readonly {id: string; label: string}[]; states: ReadonlyMap<string,string>; lite: boolean; open: () => void; focus: (id: string) => void; setLite: (value: boolean) => void; quit: () => void}): TrayItem[] {
+export function trayMenuItems(input: {profiles: readonly {id: string; label: string}[]; states: ReadonlyMap<string,string>; lite: boolean; open: () => void; focus: (id: string) => void; setLite: (value: boolean) => void; quit: () => void; remote?: {enabled: boolean; toggle: () => void}}): TrayItem[] {
   return [
     {label:'Abrir PokéHub', click:input.open},
     {type:'separator'},
     ...input.profiles.map(profile => ({label:`${profile.label} — ${stateText(input.states.get(profile.id))}`, click:() => input.focus(profile.id)})),
     ...(input.profiles.length ? [{type:'separator' as const}] : []),
     {label:'Modo leve', type:'checkbox', checked:input.lite, click:() => input.setLite(!input.lite)},
+    ...(input.remote ? [{label:`Acesso remoto: ${input.remote.enabled ? 'ligado' : 'desligado'}`, click:input.remote.toggle}] : []),
     {label:'Sair do PokéHub', click:input.quit},
   ];
 }

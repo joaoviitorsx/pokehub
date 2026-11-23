@@ -12,6 +12,23 @@ contextBridge.exposeInMainWorld('pokehub', {
     ipcRenderer.on('performance:changed', listener);
     return () => ipcRenderer.removeListener('performance:changed', listener);
   },
+  remote: {
+    status: () => ipcRenderer.invoke('remote:status'),
+    enable: (value: boolean) => ipcRenderer.invoke('remote:enable',value),
+    pairStart: () => ipcRenderer.invoke('remote:pair-start'),
+    pairCancel: () => ipcRenderer.invoke('remote:pair-cancel'),
+    decide: (allow: boolean) => ipcRenderer.invoke('remote:decide',allow),
+    setPin: (pin: string) => ipcRenderer.invoke('remote:set-pin',pin),
+    clearPin: () => ipcRenderer.invoke('remote:clear-pin'),
+    devices: () => ipcRenderer.invoke('remote:devices'),
+    revoke: (id: string) => ipcRenderer.invoke('remote:revoke',id),
+    audit: () => ipcRenderer.invoke('remote:audit'),
+    onChanged: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('remote:changed',listener);
+      return () => ipcRenderer.removeListener('remote:changed',listener);
+    },
+  },
   suspend: (id: string) => ipcRenderer.invoke('session:suspend',id),
   resume: (id: string) => ipcRenderer.invoke('session:resume',id),
   processes: () => ipcRenderer.invoke('diagnostics:processes'),
