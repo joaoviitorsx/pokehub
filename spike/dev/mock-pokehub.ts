@@ -5,6 +5,7 @@ import type { HuntRow, HuntSnapshot, HuntSprite } from '../contracts/hunt';
 import type { MarketListing, MarketScan } from '../domain/market';
 import type { UpdateInfo, UpdateStatus } from '../contracts/update';
 import type { PerformancePrefs } from '../contracts/preferences';
+import type { Capture } from '../domain/captures';
 import { createMockShop } from './mock-shop';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
@@ -84,6 +85,16 @@ const on = <T>(type: string, cb: (value: T) => void) => { const l = (e: Event) =
 const withExt = () => ok(extensions.map(e => ({...e})));
 const setUpdate = (status: UpdateStatus) => { update = {...update, status}; emit('update', status); };
 
+// Capturas simuladas: histórico inicial e, com a lateral aberta, uma nova a cada ~5 s (algumas Shiny/P5/recorde). ?captures=0 começa sem histórico.
+const capNames = ['Charmander', 'Pidgey', 'Gastly', 'Eevee', 'Dratini', 'Larvitar', 'Abra', 'Ponyta', 'Magikarp', 'Machop', 'Bulbasaur', 'Zubat'];
+let capSeq = 0;
+const fakeCapture = (minutesAgo: number): Capture => {
+  const i = capSeq++, at = new Date(Date.now() - minutesAgo * 60_000), p = profiles[i % Math.max(1, profiles.length)]?.id ?? uid(1), pot = i % 7 === 3 ? 5 : 1 + (i * 3) % 4;
+  const time = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  return {profileId: p, name: capNames[(i * 5) % capNames.length]!, level: 12 + (i * 17) % 60, time, at: at.toISOString(), potencia: pot, iv: 60 + (i * 23) % 70, quality: Math.round((0.6 + ((i * 7) % 20) / 10) * 1000) / 1000, nota: Math.round((1.2 + ((i * 11) % 80) / 10) * 1000) / 1000, shiny: i % 9 === 4, record: i % 8 === 5, hints: i % 8 === 5 ? ['recorde'] : []};
+};
+let captureLog: Capture[] = params.get('captures') === '0' ? [] : Array.from({length: 14}, (_, k) => fakeCapture(k * 3 + 1));
+let captureTimer = 0;
 const shop = createMockShop(() => profiles.map(p => p.id), p => emit('shop-progress', p));
 window.pokehub = {
   list: () => ok(profiles.map(p => ({...p}))),
@@ -128,6 +139,16 @@ window.pokehub = {
     run: plan => shop.run(plan),
     stop: () => ok(shop.stop()),
     onProgress: cb => on<Parameters<typeof cb>[0]>('shop-progress', cb),
+  },
+  captures: {
+    list: query => ok(captureLog.filter(c => (!query?.profileId || c.profileId === query.profileId)).slice(0, query?.limit ?? 100)),
+    clear: () => { captureLog = []; return ok(undefined); },
+    watch: open => {
+      clearInterval(captureTimer); // (o Shiny inicial só roda uma vez por abertura)
+      if (open) { const push = (c: Capture) => { captureLog = [c, ...captureLog].slice(0, 200); emit('captures-new', [c]); }; captureTimer = window.setInterval(() => push(fakeCapture(0)), 5000); window.setTimeout(() => push({...fakeCapture(0), shiny: true}), 2000); } // a 1ª simulada é Shiny: mostra o aviso logo
+      return ok(undefined);
+    },
+    onNew: cb => on<Capture[]>('captures-new', cb),
   },
   onToggleSide: cb => on<void>('toggle-side', cb),
   onToggleExpand: cb => on<string | null>('toggle-expand', cb),

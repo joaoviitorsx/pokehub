@@ -7,6 +7,8 @@ import { huntSnapshot, HUNT_UNAVAILABLE, type HuntTarget } from './hunt-snapshot
 import { marketScan, MARKET_UNAVAILABLE } from './market-scan';
 import { createMarketReader } from './market-read';
 import { createShop, SHOP_UNAVAILABLE } from './shop';
+import { createCaptureService, parseQuery } from './captures';
+import { alertsOf, alertText } from '../domain/captures';
 import { isAllowedSessionNavigation, isOAuthProviderUrl } from './navigation';
 import { ProfileStore } from './profile-store';
 import { partitionFor } from './partition';
@@ -476,6 +478,21 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('shop:buy', async (event,id: unknown,order: unknown) => trusted(event) ? shop.buy(id,order) : {ok:false,error:SHOP_UNAVAILABLE});
   ipcMain.handle('shop:run', async (event,plan: unknown) => trusted(event) ? shop.run(plan) : {ok:false,error:SHOP_UNAVAILABLE});
   ipcMain.handle('shop:stop', event => trusted(event) ? {ok:true,data:shop.stop()} : {ok:false,error:SHOP_UNAVAILABLE});
+  // Capturas (leitura do painel "CAPTURAS" do jogo): só enquanto o painel do desktop está aberto ou há assinante (ver spike/electron/captures.ts).
+  const captureAlerts = {notify:false, notaMin:null as number | null};
+  const captures = createCaptureService({file:join(app.getPath('userData'),'captures.json'), known:() => store.list().map(profile => profile.id), target:marketTarget, lite:() => perf.lite, suspended:id => suspended.has(id), onEvent:({captures:fresh}) => {
+    if (!window.isDestroyed()) window.webContents.send('captures:new',fresh);
+    if (!captureAlerts.notify || !Notification.isSupported()) return;
+    for (const capture of fresh.slice(0,3)) { const kinds = alertsOf(capture,captureAlerts); if (kinds.length) new Notification({title:store.list().find(profile => profile.id === capture.profileId)?.label ?? 'PokéHub', body:alertText(capture,kinds)}).show(); }
+  }});
+  app.on('before-quit', () => captures.stop());
+  ipcMain.handle('captures:list', (event,query: unknown) => { const q = trusted(event) ? parseQuery(query,store.list().map(profile => profile.id)) : null; return q ? {ok:true,data:captures.list(q)} : {ok:false,error:'Consulta de capturas inválida.'}; });
+  ipcMain.handle('captures:clear', event => { if (!trusted(event)) return {ok:false,error:'Origem não autorizada.'}; captures.log.clear(); return {ok:true,data:undefined}; });
+  ipcMain.handle('captures:watch', (event,open: unknown,notify: unknown,notaMin: unknown) => {
+    if (!trusted(event) || typeof open !== 'boolean') return {ok:false,error:'Origem não autorizada.'};
+    captureAlerts.notify = notify === true; captureAlerts.notaMin = typeof notaMin === 'number' && Number.isFinite(notaMin) && notaMin >= 0 ? notaMin : null;
+    captures.setDesktop(open); return {ok:true,data:undefined};
+  });
   ipcMain.handle('session:layout', (event,id: unknown,hide: unknown,side: unknown = false,panel: unknown = sidePanel,account: unknown = null) => invoke(event, () => {
     if (typeof hide !== 'boolean' || typeof side !== 'boolean' || (id !== null && typeof id !== 'string') || (account !== null && typeof account !== 'string') || typeof panel !== 'number' || !Number.isInteger(panel) || panel < SIDE_MIN || panel > SIDE_MAX) throw new Error();
     sidePanel = panel; sideAccount = account;

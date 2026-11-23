@@ -54,6 +54,16 @@ contextBridge.exposeInMainWorld('pokehub', {
       return () => ipcRenderer.removeListener('shop:progress',listener);
     },
   },
+  captures: {
+    list: (query?: unknown) => ipcRenderer.invoke('captures:list',query),
+    clear: () => ipcRenderer.invoke('captures:clear'),
+    watch: (open: boolean,notify?: boolean,notaMin?: number | null) => ipcRenderer.invoke('captures:watch',open,notify ?? false,notaMin ?? null),
+    onNew: (callback: (captures: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, captures: unknown) => callback(captures);
+      ipcRenderer.on('captures:new',listener);
+      return () => ipcRenderer.removeListener('captures:new',listener);
+    },
+  },
   onToggleSide: (callback: () => void) => {
     const listener = () => callback();
     ipcRenderer.on('workspace:toggle-side', listener);
