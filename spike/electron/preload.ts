@@ -21,11 +21,25 @@ contextBridge.exposeInMainWorld('pokehub', {
   states: () => ipcRenderer.invoke('session:states'),
   diagnostics: () => ipcRenderer.invoke('diagnostics:sample'),
   autoFocus: () => ipcRenderer.invoke('workspace:auto-focus'),
-  extension: {
-    status: () => ipcRenderer.invoke('extension:status'),
-    detect: () => ipcRenderer.invoke('extension:detect'),
-    choose: () => ipcRenderer.invoke('extension:choose'),
-    set: (enabled: unknown) => ipcRenderer.invoke('extension:set',enabled),
+  extensions: {
+    list: () => ipcRenderer.invoke('extensions:list'),
+    detect: () => ipcRenderer.invoke('extensions:detect'),
+    add: () => ipcRenderer.invoke('extensions:add'),
+    toggle: (id: string,enabled: boolean) => ipcRenderer.invoke('extensions:toggle',id,enabled),
+    remove: (id: string) => ipcRenderer.invoke('extensions:remove',id),
+    openStore: (id: string) => ipcRenderer.invoke('extensions:store',id),
+  },
+  updates: {
+    get: () => ipcRenderer.invoke('update:get'),
+    check: () => ipcRenderer.invoke('update:check'),
+    download: () => ipcRenderer.invoke('update:download'),
+    install: () => ipcRenderer.invoke('update:install'),
+    setAuto: (enabled: boolean) => ipcRenderer.invoke('update:auto',enabled),
+    onStatus: (callback: (status: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: unknown) => callback(status);
+      ipcRenderer.on('update:status',listener);
+      return () => ipcRenderer.removeListener('update:status',listener);
+    },
   },
   onAutoFocus: (callback: (id: string | null) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, id: string | null) => callback(id);

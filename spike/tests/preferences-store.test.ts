@@ -21,7 +21,7 @@ describe('preferências do workspace', () => {
    const path=join(dir,'app.sqlite'); const db=new DatabaseSync(path);
    db.exec("CREATE TABLE profiles (id TEXT PRIMARY KEY, label TEXT NOT NULL, emailLabel TEXT NOT NULL, characterName TEXT NOT NULL, colorToken TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); INSERT INTO profiles VALUES ('id','Conta','a@example.com','','#d4a65f','2026','2026'); PRAGMA user_version=1;"); db.close();
    const prefs=new PreferencesStore(path); expect(prefs.getStartupMode()).toBe('grid'); prefs.close();
-   const check=new DatabaseSync(path); expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'}); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:6}); check.close();
+   const check=new DatabaseSync(path); expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'}); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:7}); check.close();
   } finally {rmSync(dir,{recursive:true,force:true});}
  });
 });
@@ -41,18 +41,13 @@ it('mantém a versão e os perfis se a migração aditiva falhar', () => {
 
 const V3 = "CREATE TABLE profiles (id TEXT PRIMARY KEY, label TEXT NOT NULL, emailLabel TEXT NOT NULL, characterName TEXT NOT NULL, colorToken TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL); INSERT INTO profiles VALUES ('id','Conta','a@example.com','','#d4a65f','2026','2026'); CREATE TABLE workspace_settings (id INTEGER PRIMARY KEY CHECK (id = 1), startup_mode TEXT NOT NULL CHECK (startup_mode IN ('grid', 'focus-first'))); INSERT INTO workspace_settings VALUES (1, 'focus-first'); CREATE TABLE grindolino_measurements (id TEXT PRIMARY KEY, account_id TEXT NOT NULL, minutes INTEGER NOT NULL, recorded_at TEXT NOT NULL);"; // um banco v3 real já tem as tabelas do Grindolino, que a v5 altera e a v6 indexa
 describe('extensão /hunt (versão 4)', () => {
- it('migra a versão 3 preservando dados, com a extensão desativada, e persiste a pasta', () => {
+ it('migra a versão 3 preservando dados, sem extensões', () => {
   const dir=mkdtempSync(join(tmpdir(),'pokehub-v4-'));
   try {
    const path=join(dir,'app.sqlite'); const db=new DatabaseSync(path); db.exec(`${V3} PRAGMA user_version=3;`); db.close();
    const first=new PreferencesStore(path);
-   expect(first.getStartupMode()).toBe('focus-first'); expect(first.getHuntExtensionPath()).toBeNull();
-   first.setHuntExtensionPath('/home/u/ext/1.0.17_0'); first.close();
-   const second=new PreferencesStore(path); expect(second.getHuntExtensionPath()).toBe('/home/u/ext/1.0.17_0');
-   expect(() => second.setHuntExtensionPath('')).toThrow(); expect(() => second.setHuntExtensionPath(1 as unknown as string)).toThrow(); expect(() => second.setHuntExtensionPath('x'.repeat(4097))).toThrow();
-   expect(second.getHuntExtensionPath()).toBe('/home/u/ext/1.0.17_0');
-   second.setHuntExtensionPath(null); expect(second.getHuntExtensionPath()).toBeNull(); expect(second.getStartupMode()).toBe('focus-first'); second.close();
-   const check=new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:6}); expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'}); check.close();
+   expect(first.getStartupMode()).toBe('focus-first'); expect(first.listExtensions()).toEqual([]); first.close();
+   const check=new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:7}); expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label:'Conta'}); check.close();
   } finally {rmSync(dir,{recursive:true,force:true});}
  });
  it('mantém a versão 3 e os dados se a migração falhar', () => {

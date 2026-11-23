@@ -1,5 +1,7 @@
 # Extensão "/hunt for PokeIdle" nas sessões do PokéHub
 
+> **Atualização (v0.1):** o PokéHub agora carrega várias extensões (tabela `extensions`, banco v7), com validador por política e auditor estático (Só leitura / Interage com a página / Bloqueada), geridas em Configurações → Extensões (`extensions:*`). Os canais `extension:*` e a preferência `hunt_extension_path` descritos abaixo foram substituídos; a coluna antiga fica no banco sem uso. Veja `docs/PLANO-MELHORIAS.md`, seção 4.3.
+
 A extensão é de terceiros (Liang), id `mhnplloljgchpfpcpbhmcokmnefodjnh`. O PokéHub **não copia, não modifica e não distribui** o código dela: apenas carrega, em cada sessão do jogo, a pasta onde o usuário já a instalou pelo navegador.
 
 ## Como funciona

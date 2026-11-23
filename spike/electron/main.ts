@@ -1,5 +1,6 @@
 import { app, BrowserWindow, WebContentsView, ipcMain, dialog, shell, net, type IpcMainInvokeEvent } from 'electron';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { effectiveFocus, initialFocus, layout, SIDE_MAX, SIDE_MIN, SIDE_PANEL, sideWidth, TOP_BAR } from './layout';
 import { huntSnapshot, HUNT_UNAVAILABLE, type HuntTarget } from './hunt-snapshot';
@@ -13,13 +14,16 @@ import { canReadHunt, classifyLoadFailure, classifyLoadRejection, offlineRetryDe
 import { isSideShortcut, shortcutFocus, shortcutIndex } from './workspace-shortcuts';
 import { acquireSingleInstance } from './single-instance';
 import { resetSession, restartSession, openSessionSafely, mountSessionView } from './session-recovery';
-import { checkExtension, findInstalledHunt, resolveHuntPath } from './extension-check';
-import type { HuntExtensionStatus } from '../contracts/preferences';
+import { auditExtension, catalogIdOf, CATALOG, checkExtension, findInstalled, HUNT_ID, resolveExtensionPath } from './extension-check';
+import type { AuditFinding, AuditVerdict, ExtensionInfo } from '../contracts/extensions';
+import { createUpdater, type Updater } from './updater';
+import type { UpdateInfo } from '../contracts/update';
 import { ProfileLimitError, type ProfileInput } from '../domain/profiles';
 
 let window: BrowserWindow;
 let store: ProfileStore;
 let preferences: PreferencesStore;
+let updater: Updater;
 const views = new Map<string, WebContentsView>();
 const huntDocuments = new WeakMap<Electron.WebContents, object>();
 const states = new Map<string, string>();
@@ -36,66 +40,102 @@ let autoFocused: string | null = null;
 let diagnosticsBaseline: DiagnosticsBaseline | null = null;
 let externalNoticeOpen = false;
 const gameUrl = 'https://pokeidle.io/app';
-// Extensão /hunt (terceiros): carregada da pasta do navegador do usuário, nunca copiada.
-let hunt: {path: string; name: string; version: string} | null = null;
-let huntError: string | null = null;
-let huntBusy = false;
-const huntLoaded = new WeakMap<Electron.Session, {id: string; path: string}>();
-function refreshHunt() {
-  hunt = null; huntError = null;
-  const saved = preferences.getHuntExtensionPath();
-  if (!saved) return;
-  const path = resolveHuntPath(saved); // o Chrome troca a pasta da versão ao atualizar
-  const check = checkExtension(path);
-  if (!check.ok) { huntError = check.error; return; }
-  if (path !== saved) preferences.setHuntExtensionPath(path);
-  hunt = {path, name:check.name, version:check.version};
+// Extensões de terceiros (/hunt, Smart Market...): carregadas da pasta do navegador do usuário, nunca copiadas.
+interface ExtState {id: string; catalogId: string | null; name: string; version: string | null; path: string; enabled: boolean; verdict: AuditVerdict | null; findings: AuditFinding[]; error: string | null; loadable: boolean}
+let extensions: ExtState[] = [];
+const extErrors = new Map<string, string>(); // falhas de carga por extensão; as sessões seguem abertas sem ela
+let extBusy = false;
+const extLoaded = new WeakMap<Electron.Session, Map<string, {id: string; path: string}>>();
+const catalogName = (id: string | null) => CATALOG.find(entry => entry.id === id)?.name;
+const BLOCKED_PREFIX = 'Bloqueada pela auditoria: ';
+const findingText = (finding: AuditFinding) => finding.kind === 'skipped' ? finding.detail : `${finding.detail} em ${finding.file}`;
+function refreshExtensions() {
+  extensions = preferences.listExtensions().map(row => {
+    const catalogId = CATALOG.some(entry => entry.id === row.id) ? row.id : null;
+    const path = catalogId ? resolveExtensionPath(row.path) : row.path; // o Chrome troca a pasta da versão ao atualizar
+    if (path !== row.path) { try { preferences.setExtensionPath(row.id,path); } catch { /* caminho já usado por outra linha: segue com o antigo na lista */ } }
+    const base = {id:row.id, catalogId, path, enabled:row.enabled, findings:[] as AuditFinding[]};
+    const check = checkExtension(path);
+    if (!check.ok) return {...base, name:catalogName(catalogId) ?? (path.split(/[\\/]/).filter(Boolean).pop() ?? 'Extensão'), version:null, verdict:'bloqueada' as const, error:check.error, loadable:false};
+    const audit = auditExtension(path);
+    const reasons = [...new Set(audit.findings.filter(finding => finding.kind === 'network' || finding.kind === 'eval' || finding.kind === 'skipped').map(findingText))].slice(0,3);
+    return {...base, name:check.name, version:check.version, findings:audit.findings, verdict:audit.verdict, error:audit.verdict === 'bloqueada' ? `${BLOCKED_PREFIX}${reasons.join('; ')}.` : null, loadable:audit.verdict !== 'bloqueada'};
+  });
+  for (const id of [...extErrors.keys()]) if (!extensions.some(extension => extension.id === id)) extErrors.delete(id);
 }
+const loadedIn = (session: Electron.Session, extension: ExtState) => {
+  const loaded = extLoaded.get(session)?.get(extension.id);
+  return Boolean(loaded && loaded.path === extension.path && session.extensions.getExtension(loaded.id));
+};
+// A lateral "Caçar" só lê o ranking quando a /hunt está carregada nesta sessão.
 function hasHunt(session: Electron.Session) {
-  const loaded = huntLoaded.get(session);
-  return Boolean(hunt && loaded && loaded.path === hunt.path && session.extensions.getExtension(loaded.id));
+  const hunt = extensions.find(extension => extension.catalogId === HUNT_ID);
+  return Boolean(hunt && hunt.enabled && hunt.loadable && loadedIn(session,hunt));
 }
-// Deixa a sessão só com a extensão atual. Nunca rejeita: falha de extensão não pode impedir a sessão de abrir.
-function syncHunt(session: Electron.Session): Promise<void> | null {
-  const failed = () => { huntError = 'Não foi possível carregar a extensão em uma sessão. A sessão segue aberta sem ela.'; console.error('Falha ao carregar a extensão /hunt.'); };
+// Deixa a sessão só com as extensões habilitadas e válidas. Nunca rejeita: falha de extensão não pode impedir a sessão de abrir.
+function syncExtensions(session: Electron.Session): Promise<void> | null {
   try {
-    if (hasHunt(session)) return null;
-    for (const extension of session.extensions.getAllExtensions()) session.extensions.removeExtension(extension.id);
-    huntLoaded.delete(session);
-    if (!hunt) return null;
-    const path = hunt.path;
-    return session.extensions.loadExtension(path,{allowFileAccess:false}).then(extension => { huntLoaded.set(session,{id:extension.id,path}); }, failed);
-  } catch { failed(); return null; }
+    const wanted = extensions.filter(extension => extension.enabled && extension.loadable);
+    const kept = new Map<string, {id: string; path: string}>();
+    for (const extension of wanted) if (loadedIn(session,extension)) kept.set(extension.id,extLoaded.get(session)!.get(extension.id)!);
+    const keptIds = new Set([...kept.values()].map(loaded => loaded.id));
+    for (const extension of session.extensions.getAllExtensions()) if (!keptIds.has(extension.id)) session.extensions.removeExtension(extension.id);
+    extLoaded.set(session,kept);
+    const pending = wanted.filter(extension => !kept.has(extension.id));
+    if (pending.length === 0) return null;
+    return (async () => {
+      for (const extension of pending) {
+        try { const loaded = await session.extensions.loadExtension(extension.path,{allowFileAccess:false}); kept.set(extension.id,{id:loaded.id,path:extension.path}); extErrors.delete(extension.id); }
+        catch { extErrors.set(extension.id,'Não foi possível carregar a extensão em uma sessão. A sessão segue aberta sem ela.'); console.error('Falha ao carregar uma extensão.'); }
+      }
+    })();
+  } catch { console.error('Falha ao sincronizar as extensões.'); return null; }
 }
-function huntStatus(error?: string): HuntExtensionStatus {
-  const saved = preferences.getHuntExtensionPath();
-  let loaded = 0;
-  for (const view of views.values()) { try { if (!view.webContents.isDestroyed() && hasHunt(view.webContents.session)) loaded++; } catch { /* sessão encerrando */ } }
-  return {enabled:saved !== null, path:hunt?.path ?? saved, name:hunt?.name ?? null, version:hunt?.version ?? null, error:error ?? huntError, loaded, sessions:views.size};
+function extensionList(): ExtensionInfo[] {
+  const contents = [...views.values()].filter(view => !view.webContents.isDestroyed());
+  return extensions.map(extension => {
+    let loaded = 0;
+    for (const view of contents) { try { if (loadedIn(view.webContents.session,extension)) loaded++; } catch { /* sessão encerrando */ } }
+    return {id:extension.id, catalogId:extension.catalogId, name:extension.name, version:extension.version, path:extension.path, enabled:extension.enabled, loaded, sessions:contents.length, verdict:extension.verdict, findings:extension.findings, error:extension.error ?? extErrors.get(extension.id) ?? null};
+  });
 }
-async function setHunt(path: string | null): Promise<HuntExtensionStatus> {
-  if (path !== null) { const check = checkExtension(path); if (!check.ok) return huntStatus(check.error); }
-  preferences.setHuntExtensionPath(path);
-  refreshHunt();
-  await Promise.all([...views.values()].map(view => view.webContents.isDestroyed() ? null : syncHunt(view.webContents.session)));
-  return huntStatus();
+async function applyExtensions(): Promise<ExtensionInfo[]> {
+  refreshExtensions();
+  await Promise.all([...views.values()].map(view => view.webContents.isDestroyed() ? null : syncExtensions(view.webContents.session)));
+  return extensionList();
 }
-function detectHunt(): Promise<HuntExtensionStatus> {
-  const found = findInstalledHunt({platform:process.platform, home:app.getPath('home'), localAppData:process.env.LOCALAPPDATA});
-  return found ? setHunt(found) : Promise.resolve(huntStatus('Extensão não encontrada no Chrome, Chromium, Brave ou Edge. Instale-a no navegador ou escolha a pasta.'));
+async function detectExtensions(): Promise<ExtensionInfo[]> {
+  for (const found of findInstalled({platform:process.platform, home:app.getPath('home'), localAppData:process.env.LOCALAPPDATA})) {
+    if (!checkExtension(found.path).ok) continue;
+    const rows = preferences.listExtensions();
+    const same = rows.find(row => row.id === found.id);
+    if (same) { if (same.path !== found.path && !rows.some(row => row.path === found.path)) preferences.setExtensionPath(found.id,found.path); }
+    else if (!rows.some(row => row.path === found.path)) preferences.addExtension({id:found.id,path:found.path,enabled:true});
+  }
+  return applyExtensions();
 }
-async function chooseHunt(): Promise<HuntExtensionStatus> {
-  const {canceled, filePaths} = await dialog.showOpenDialog(window,{title:'Pasta da versão da extensão /hunt',buttonLabel:'Usar esta pasta',properties:['openDirectory']});
+async function addExtension(): Promise<ExtensionInfo[]> {
+  const {canceled, filePaths} = await dialog.showOpenDialog(window,{title:'Pasta da extensão (a pasta com o manifest.json)',buttonLabel:'Usar esta pasta',properties:['openDirectory']});
   const path = filePaths[0];
-  return canceled || !path ? huntStatus() : setHunt(path);
+  if (canceled || !path) return applyExtensions();
+  const check = checkExtension(path);
+  if (!check.ok) throw new ExtensionRefused(check.error);
+  const rows = preferences.listExtensions();
+  if (rows.some(row => row.path === path)) throw new ExtensionRefused('Essa pasta já está na lista.');
+  if (rows.length >= MAX_EXTENSIONS) throw new ExtensionRefused(`O limite é de ${MAX_EXTENSIONS} extensões. Remova alguma antes de adicionar outra.`);
+  const catalogId = catalogIdOf(path);
+  preferences.addExtension({id:catalogId && !rows.some(row => row.id === catalogId) ? catalogId : randomUUID(),path,enabled:true});
+  return applyExtensions();
 }
-async function invokeHunt(event: IpcMainInvokeEvent, action: () => HuntExtensionStatus | Promise<HuntExtensionStatus>) {
+class ExtensionRefused extends Error {}
+const MAX_EXTENSIONS = 16;
+async function invokeExtensions(event: IpcMainInvokeEvent, action: () => ExtensionInfo[] | Promise<ExtensionInfo[]>) {
   if (!trusted(event)) return {ok:false, error:'Origem não autorizada.'};
-  if (huntBusy) return {ok:false, error:'Aguarde a operação anterior da extensão terminar.'};
-  huntBusy = true;
+  if (extBusy) return {ok:false, error:'Aguarde a operação anterior das extensões terminar.'};
+  extBusy = true;
   try { return {ok:true, data:await action()}; }
-  catch { return {ok:false, error:'Não foi possível atualizar a extensão. Tente novamente.'}; }
-  finally { huntBusy = false; }
+  catch (error) { return {ok:false, error:error instanceof ExtensionRefused ? error.message : 'Não foi possível atualizar as extensões. Tente novamente.'}; }
+  finally { extBusy = false; }
 }
 async function explainBlockedPopup() {
   if (externalNoticeOpen || window.isDestroyed()) return;
@@ -201,7 +241,7 @@ function addView(id: string) {
     if (views.get(id) !== view || view.webContents.isDestroyed()) return; // sessão fechada enquanto a extensão carregava
     void view.webContents.loadURL(gameUrl).catch((error: unknown) => { const state = classifyLoadRejection(error); if (state && states.get(id) !== 'offline' && states.get(id) !== 'error') reportCurrent(state); });
   };
-  const pending = syncHunt(view.webContents.session); // content scripts em document_start exigem a extensão antes do loadURL
+  const pending = syncExtensions(view.webContents.session); // content scripts em document_start exigem a extensão antes do loadURL
   if (pending) void pending.then(load); else load();
 }
 function closeView(id: string) {
@@ -247,10 +287,11 @@ if (primary) app.whenReady().then(() => {
   const databasePath = join(app.getPath('userData'),'pokehub.sqlite');
   store = new ProfileStore(databasePath);
   preferences = new PreferencesStore(databasePath);
-  try { refreshHunt(); } catch { huntError = 'Não foi possível ler a configuração da extensão.'; }
+  try { refreshExtensions(); } catch { console.error('Não foi possível ler a configuração das extensões.'); }
   focused = initialFocus(preferences.getStartupMode(), store.list().map(profile => profile.id));
   window = new BrowserWindow({title:'PokéHub',backgroundColor:'#0f1218',width:1280,height:800,minWidth:700,minHeight:480,webPreferences:{preload:join(__dirname,'preload.js'),sandbox:true,contextIsolation:true,nodeIntegration:false}});
   if (process.platform !== 'darwin') window.removeMenu(); // no macOS o menu fica na barra do sistema e mantém copiar/colar
+  updater = createUpdater({autoCheck:() => preferences.getAutoUpdateCheck(), onStatus:status => { if (!window.isDestroyed()) window.webContents.send('update:status',status); }});
   registerShortcuts(window.webContents);
   window.webContents.setWindowOpenHandler(() => ({action:'deny'}));
   window.webContents.on('will-navigate', event => event.preventDefault());
@@ -261,10 +302,22 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('profiles:list', event => invoke(event, () => store.list()));
   ipcMain.handle('preferences:get', event => invoke(event, () => preferences.getStartupMode()));
   ipcMain.handle('preferences:set', (event,mode: unknown) => invoke(event, () => preferences.setStartupMode(mode)));
-  ipcMain.handle('extension:status', event => invokeHunt(event, () => huntStatus()));
-  ipcMain.handle('extension:detect', event => invokeHunt(event, detectHunt));
-  ipcMain.handle('extension:choose', event => invokeHunt(event, chooseHunt));
-  ipcMain.handle('extension:set', (event,enabled: unknown) => invokeHunt(event, () => { if (typeof enabled !== 'boolean') throw new Error(); return enabled ? detectHunt() : setHunt(null); }));
+  ipcMain.handle('extensions:list', event => invokeExtensions(event, applyExtensions));
+  ipcMain.handle('extensions:detect', event => invokeExtensions(event, detectExtensions));
+  ipcMain.handle('extensions:add', event => invokeExtensions(event, addExtension));
+  ipcMain.handle('extensions:toggle', (event,id: unknown,enabled: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error(); preferences.setExtensionEnabled(id,enabled); return applyExtensions(); }));
+  ipcMain.handle('extensions:remove', (event,id: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string') throw new Error(); preferences.removeExtension(id); return applyExtensions(); }));
+  ipcMain.handle('extensions:store', async (event,id: unknown) => { // só as lojas do catálogo, por id: o renderer nunca envia URL
+    const entry = CATALOG.find(item => item.id === id);
+    if (!trusted(event) || !entry) return {ok:false,error:'Extensão desconhecida.'};
+    try { await shell.openExternal(entry.store); return {ok:true,data:undefined}; } catch { return {ok:false,error:'Não foi possível abrir o navegador.'}; }
+  });
+  const updateInfo = (): UpdateInfo => ({version:app.getVersion(), packaged:app.isPackaged === true, autoCheck:preferences.getAutoUpdateCheck(), status:updater.status()});
+  ipcMain.handle('update:get', event => invoke(event, updateInfo));
+  ipcMain.handle('update:auto', (event,enabled: unknown) => invoke(event, () => { preferences.setAutoUpdateCheck(enabled); return updateInfo(); }));
+  ipcMain.handle('update:check', async event => { if (!trusted(event)) return {ok:false,error:'Origem não autorizada.'}; await updater.check(true); return {ok:true,data:updateInfo()}; });
+  ipcMain.handle('update:download', async event => { if (!trusted(event)) return {ok:false,error:'Origem não autorizada.'}; await updater.download(); return {ok:true,data:updateInfo()}; });
+  ipcMain.handle('update:install', event => invoke(event, () => { if (!updater.install()) throw new Error(); }));
   ipcMain.handle('workspace:initial-focus', event => invoke(event, () => focused));
   ipcMain.handle('profiles:create', (event,input: ProfileInput) => invoke(event, () => { const profile = store.create(input); openView(profile.id); arrange(); return profile; }));
   ipcMain.handle('profiles:update', (event,id: unknown,input: ProfileInput) => invoke(event, () => { if (typeof id !== 'string') throw new Error(); return store.update(id,input); }));
@@ -284,7 +337,7 @@ if (primary) app.whenReady().then(() => {
   const huntTarget = (profileId: string): HuntTarget | null => {
       const contents = readable(profileId);
       if (!contents) return null;
-      return {identity:huntDocuments.get(contents) ?? contents, url:contents.getURL(), hasExtension:hasHunt(contents.session), version:hunt?.version ?? null, run:script => contents.executeJavaScript(script), sprites};
+      return {identity:huntDocuments.get(contents) ?? contents, url:contents.getURL(), hasExtension:hasHunt(contents.session), version:extensions.find(extension => extension.catalogId === HUNT_ID)?.version ?? null, run:script => contents.executeJavaScript(script), sprites};
     };
   ipcMain.handle('hunt:snapshot', async (event,id: unknown,soLiberadas: unknown = true) => {
     if (!trusted(event)) return {ok:false,error:HUNT_UNAVAILABLE};
@@ -341,7 +394,7 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('workspace:auto-focus', event => invoke(event, () => autoFocused));
   window.on('resize', arrange);
   window.on('closed', () => {
-    clearTimeout(dragTimer);
+    clearTimeout(dragTimer); updater.dispose();
     for (const view of views.values()) { try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { console.error('Falha ao encerrar uma sessão.'); } }
     views.clear(); preferences.close(); store.close();
   });

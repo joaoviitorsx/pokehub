@@ -40,9 +40,9 @@ it('recusa banco de versão futura sem alterá-lo', async () => {
  const { join } = await import('node:path');
  const dir = mkdtempSync(join(tmpdir(),'pokehub-version-'));
  try {
-  const path = join(dir,'future.sqlite'); const db = new DatabaseSync(path); db.exec('PRAGMA user_version=7'); db.close();
+  const path = join(dir,'future.sqlite'); const db = new DatabaseSync(path); db.exec('PRAGMA user_version=8'); db.close();
   expect(() => new ProfileStore(path)).toThrow();
-  const check = new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toEqual({user_version:7}); check.close();
+  const check = new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toEqual({user_version:8}); check.close();
  } finally { rmSync(dir,{recursive:true,force:true}); }
 });
 

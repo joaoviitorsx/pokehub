@@ -37,3 +37,15 @@ Após uma instalação completa das dependências, `bun run dist:linux` gera um 
 O empacotamento usa o Electron, não inclui o executável Bun e não recompila addons nativos, pois o SQLite usado é integrado ao Node do Electron. Qualquer futura dependência nativa exige revisar essa configuração.
 
 Para retomar o desenvolvimento, consulte [o ponto de retomada](docs/RETOMADA.md).
+
+## Atualizações e releases
+
+O aplicativo instalado verifica atualizações no GitHub Releases (`joaoviitorsx/pokehub`) 10 segundos depois de abrir e a cada 6 horas; é possível desligar a verificação automática ou verificar na hora em Configurações → Atualizações. Quando há versão nova, aparece o selo "Atualização x.y.z" na barra superior: o clique baixa (com progresso) e depois "Reiniciar e atualizar" instala. Fora do app empacotado (`bun run start`, desenvolvimento) o atualizador fica desativado.
+
+Para publicar uma versão:
+
+1. Suba `version` em `package.json` (ex.: `0.1.1`) e faça o commit.
+2. Crie a tag com o mesmo número e envie: `git tag v0.1.1 && git push origin v0.1.1`.
+3. O workflow `.github/workflows/release.yml` roda typecheck e testes, gera o instalador NSIS (Windows) e o AppImage (Linux) e os publica no release da tag junto com `latest.yml` e `latest-linux.yml`. Para publicar por fora do CI, use `GH_TOKEN=<token> bun run release:win` ou `release:linux`.
+
+A primeira instalação é manual (baixe o instalador do release); as seguintes se atualizam pelo próprio aplicativo. Sem assinatura de código, o Windows mostra o SmartScreen ("Windows protegeu o computador") só na primeira instalação: "Mais informações" → "Executar assim mesmo". No Linux a atualização automática só funciona quando o app roda como AppImage. Não altere `productName` na raiz do `package.json`: isso mudaria a pasta de dados do usuário.

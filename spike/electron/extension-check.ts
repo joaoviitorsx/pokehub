@@ -1,13 +1,22 @@
-// Valida e localiza a extensão "/hunt for PokeIdle" na pasta do navegador do usuário.
+// Valida, audita e localiza extensões de terceiros (/hunt, Smart Market...) na pasta do navegador do usuário.
 // O PokéHub só carrega a pasta original; nunca copia nem altera o código de terceiros.
 import * as nodeFs from 'node:fs';
 import { posix, win32 } from 'node:path';
+import type { AuditFinding, AuditResult, FindingKind } from '../contracts/extensions';
 
 export const HUNT_ID = 'mhnplloljgchpfpcpbhmcokmnefodjnh';
+export const SMART_MARKET_ID = 'lhfeijlnlbglakplddjgbaopgcdfkcmm';
+// Extensões conhecidas: aparecem em "Detectar no navegador". Qualquer outra entra por "Adicionar pasta…".
+export const CATALOG: {id: string; name: string; store: string}[] = [
+  {id:HUNT_ID, name:'/hunt for PokeIdle', store:`https://chromewebstore.google.com/detail/${HUNT_ID}`},
+  {id:SMART_MARKET_ID, name:'Smart Market', store:`https://chromewebstore.google.com/detail/${SMART_MARKET_ID}`},
+];
 const GAME = 'https://pokeidle.io/';
 const MAX_MANIFEST_BYTES = 64 * 1024;
-// Qualquer uma destas chaves daria à extensão alcance além dos content scripts do jogo.
-const FORBIDDEN = ['background','permissions','host_permissions','optional_permissions','optional_host_permissions','externally_connectable'];
+// Chaves que dariam à extensão alcance além dos content scripts do jogo (lista vazia é aceita).
+const FORBIDDEN = ['background','optional_permissions','externally_connectable','chrome_url_overrides','devtools_page','declarative_net_request','chrome_settings_overrides','omnibox','side_panel','sandbox'];
+const ALLOWED_PERMISSIONS = ['storage','unlimitedStorage'];
+const REMOTE_CSP = /(?:https?|wss?):\/\/(?!pokeidle\.io(?:[/\s;:]|$))|\*/i;
 
 export interface ExtFs {
   statSync(path: string): {isDirectory(): boolean; size: number};
@@ -40,6 +49,19 @@ export function checkExtension(dir: string, fs: ExtFs = nodeFs): ExtensionCheck 
     const value = m[key];
     if (value !== undefined && !(Array.isArray(value) && value.length === 0)) return fail(`A extensão declara “${key}”, que o PokéHub não permite. Só scripts de conteúdo do pokeidle.io são aceitos.`);
   }
+  if (m.permissions !== undefined) {
+    if (!Array.isArray(m.permissions)) return fail('O manifest.json da extensão é inválido.');
+    const extra = (m.permissions as unknown[]).find(permission => typeof permission !== 'string' || !ALLOWED_PERMISSIONS.includes(permission));
+    if (extra !== undefined) return fail(`A extensão pede a permissão “${String(extra)}”, que o PokéHub não permite. Só ${ALLOWED_PERMISSIONS.join(' e ')} são aceitas.`);
+  }
+  for (const key of ['host_permissions','optional_host_permissions']) {
+    const value = m[key];
+    if (value === undefined) continue;
+    if (!Array.isArray(value)) return fail('O manifest.json da extensão é inválido.');
+    const extra = (value as unknown[]).find(host => typeof host !== 'string' || !host.startsWith(GAME));
+    if (extra !== undefined) return fail(`A extensão pede acesso a “${String(extra)}” em “${key}”. Só https://pokeidle.io/ é aceito.`);
+  }
+  if (m.content_security_policy !== undefined && REMOTE_CSP.test(JSON.stringify(m.content_security_policy))) return fail('A extensão declara “content_security_policy” com origens remotas, que o PokéHub não permite.');
   const scripts = m.content_scripts;
   if (!Array.isArray(scripts) || scripts.length === 0) return fail('A extensão não tem scripts de conteúdo para o jogo.');
   for (const script of scripts as unknown[]) {
@@ -87,25 +109,98 @@ export function browserRoots(machine: Machine): string[] {
   return ['.config/google-chrome','.config/chromium','.var/app/com.google.Chrome/config/google-chrome','.config/BraveSoftware/Brave-Browser','.config/microsoft-edge'].map(rel => posix.join(machine.home,rel));
 }
 
-/** Caminho da maior versão instalada em qualquer navegador/perfil conhecido, ou null. */
-export function findInstalledHunt(machine: Machine, fs: ExtFs = nodeFs): string | null {
-  let best: {path: string; parts: number[]} | null = null;
+/** Maior versão válida de cada extensão do catálogo, em qualquer navegador/perfil conhecido. */
+export function findInstalled(machine: Machine, fs: ExtFs = nodeFs): {id: string; path: string}[] {
+  const best = new Map<string, {path: string; parts: number[]}>();
   for (const root of browserRoots(machine)) {
     let profiles: string[];
     try { profiles = fs.readdirSync(root); } catch { continue; }
     for (const profile of profiles) {
       if (profile !== 'Default' && !profile.startsWith('Profile ')) continue;
-      const found = latestVersion(pathFor(root).join(root,profile,'Extensions',HUNT_ID),fs);
-      if (found && (!best || compareParts(found.parts,best.parts) > 0)) best = found;
+      for (const {id} of CATALOG) {
+        const found = latestVersion(pathFor(root).join(root,profile,'Extensions',id),fs);
+        const current = best.get(id);
+        if (found && (!current || compareParts(found.parts,current.parts) > 0)) best.set(id,found);
+      }
     }
   }
-  return best?.path ?? null;
+  return CATALOG.flatMap(({id}) => { const found = best.get(id); return found ? [{id,path:found.path}] : []; });
+}
+
+/** Id do catálogo a que a pasta pertence (`.../Extensions/<id>/<versão>`), ou null. */
+export function catalogIdOf(path: string): string | null {
+  const p = pathFor(path);
+  const id = p.basename(p.dirname(path));
+  return CATALOG.some(entry => entry.id === id) ? id : null;
 }
 
 /** O Chrome apaga a pasta da versão antiga ao atualizar: troca o caminho salvo pela maior versão irmã. */
-export function resolveHuntPath(saved: string, fs: ExtFs = nodeFs): string {
+export function resolveExtensionPath(saved: string, fs: ExtFs = nodeFs): string {
   try { if (fs.statSync(saved).isDirectory()) return saved; } catch { /* sumiu: procurar irmã */ }
-  const p = pathFor(saved);
-  const idDir = p.dirname(saved);
-  return p.basename(idDir) === HUNT_ID ? latestVersion(idDir,fs)?.path ?? saved : saved;
+  return catalogIdOf(saved) !== null ? latestVersion(pathFor(saved).dirname(saved),fs)?.path ?? saved : saved;
+}
+
+// Auditoria estática (nada é executado): lê os .js da extensão e relata o que eles fazem com a página e a rede.
+const AUDIT_TOTAL_BYTES = 8 * 1024 * 1024;
+const AUDIT_FILE_BYTES = 2 * 1024 * 1024;
+const AUDIT_DEPTH = 6;
+// Links de divulgação/doação/namespace: só contam como rede se estiverem dentro de uma chamada de rede.
+const LINK_HOSTS = ['chromewebstore.google.com','chrome.google.com','github.com','livepix.gg','www.w3.org','w3.org','developer.mozilla.org','ko-fi.com','buymeacoffee.com','discord.gg'];
+const URL_RE = /\b(?:https?|wss?):\/\/(\[[0-9a-f:]+\]|[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)/gi;
+const CALL_BEFORE_RE = /(?:fetch|WebSocket|EventSource|sendBeacon|importScripts|\bopen|\bimport)\s*\(\s*[^()]*$/;
+const PATTERNS: {kind: FindingKind; api: string; re: RegExp}[] = [
+  {kind:'eval', api:'eval()', re:/(?<![\w$.])eval\s*\(/g},
+  {kind:'eval', api:'new Function()', re:/new\s+Function\s*\(/g},
+  {kind:'click', api:'.click()', re:/\.click\s*\(/g},
+  {kind:'dispatch', api:'dispatchEvent()', re:/\.dispatchEvent\s*\(/g},
+  {kind:'send', api:'.send()', re:/\.send\s*\(/g},
+  {kind:'fetch', api:'fetch()', re:/(?<![\w$])fetch\s*\(/g},
+  {kind:'fetch', api:'XMLHttpRequest', re:/\bXMLHttpRequest\b/g},
+  {kind:'fetch', api:'new WebSocket()', re:/new\s+WebSocket\s*\(/g},
+  {kind:'fetch', api:'navigator.sendBeacon()', re:/\bsendBeacon\s*\(/g},
+];
+function jsFiles(dir: string, fs: ExtFs, depth = 0, out: string[] = []): string[] {
+  if (depth > AUDIT_DEPTH) return out;
+  let names: string[];
+  try { names = fs.readdirSync(dir).slice().sort(); } catch { return out; }
+  for (const name of names) {
+    const path = pathFor(dir).join(dir,name);
+    try {
+      if (fs.statSync(path).isDirectory()) jsFiles(path,fs,depth + 1,out);
+      else if (/\.(?:m?js|cjs)$/i.test(name)) out.push(path);
+    } catch { /* ilegível: ignorado */ }
+  }
+  return out;
+}
+/**
+ * Veredito pelo que o código faz, sem executá-lo: 'bloqueada' se fala com hosts fora do pokeidle.io, usa eval/new Function
+ * ou tem arquivo grande demais para auditar; 'interage' se clica, dispara eventos ou envia pelo socket; senão 'leitura'.
+ * fetch/XMLHttpRequest/WebSocket sem host literal fora do jogo são só relatados.
+ */
+export function auditExtension(dir: string, fs: ExtFs = nodeFs): AuditResult {
+  const found = new Map<string, {finding: AuditFinding; count: number}>();
+  const add = (kind: FindingKind, file: string, detail: string) => {
+    const key = `${kind}\0${file}\0${detail}`; const entry = found.get(key);
+    if (entry) entry.count++; else found.set(key,{finding:{kind,file,detail},count:1});
+  };
+  let total = 0;
+  for (const path of jsFiles(dir,fs)) {
+    const file = path.slice(dir.length).replace(/^[\\/]+/,'').replace(/\\/g,'/');
+    let text: string;
+    try {
+      const size = fs.statSync(path).size;
+      if (size > AUDIT_FILE_BYTES || total + size > AUDIT_TOTAL_BYTES) { add('skipped',file,'arquivo grande demais para auditar'); continue; }
+      total += size; text = fs.readFileSync(path,'utf8');
+    } catch { add('skipped',file,'arquivo ilegível'); continue; }
+    for (const {kind,api,re} of PATTERNS) for (const _ of text.matchAll(re)) add(kind,file,api); // eslint-disable-line @typescript-eslint/no-unused-vars
+    for (const match of text.matchAll(URL_RE)) {
+      const host = (match[1] ?? '').toLowerCase();
+      if (host === 'pokeidle.io') continue;
+      const inCall = CALL_BEFORE_RE.test(text.slice(Math.max(0,match.index - 120),match.index));
+      add(LINK_HOSTS.includes(host) && !inCall ? 'link' : 'network',file,host);
+    }
+  }
+  const findings = [...found.values()].map(({finding,count}) => count > 1 && finding.kind !== 'network' && finding.kind !== 'link' ? {...finding,detail:`${finding.detail} (${count}×)`} : finding);
+  const has = (...kinds: FindingKind[]) => findings.some(finding => kinds.includes(finding.kind));
+  return {verdict: has('network','eval','skipped') ? 'bloqueada' : has('click','dispatch','send') ? 'interage' : 'leitura', findings};
 }

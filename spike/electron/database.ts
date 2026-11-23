@@ -5,9 +5,9 @@ export function openDatabase(path: string): Database {
   const db = new DatabaseSync(path);
   try {
     const version = db.prepare('PRAGMA user_version').get()?.user_version;
-    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6) throw new Error('Versão de banco incompatível');
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7) throw new Error('Versão de banco incompatível');
     db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON'); // as cascatas do Grindolino dependem das FKs em toda conexão
-    if (version < 6) {
+    if (version < 7) {
       db.exec('BEGIN IMMEDIATE');
       try {
         if (version === 0) db.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY, label TEXT NOT NULL, emailLabel TEXT NOT NULL, characterName TEXT NOT NULL, colorToken TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)');
@@ -24,7 +24,9 @@ export function openDatabase(path: string): Database {
         // v5: abates, shinies e Pokémon em campo da medição ao vivo; NULL nas medições digitadas
         if (version < 5) db.exec('ALTER TABLE grindolino_measurements ADD COLUMN kill_count INTEGER; ALTER TABLE grindolino_measurements ADD COLUMN shiny_count INTEGER; ALTER TABLE grindolino_measurements ADD COLUMN pokemon_key TEXT; ALTER TABLE grindolino_measurements ADD COLUMN pokemon_name TEXT; ALTER TABLE grindolino_measurements ADD COLUMN pokemon_level INTEGER; ALTER TABLE grindolino_measurements ADD COLUMN pokemon_level_end INTEGER');
         // v6: histórico por conta e período (analytics) sem varrer a tabela
-        db.exec('CREATE INDEX grindolino_measurements_account_time ON grindolino_measurements (account_id, recorded_at); PRAGMA user_version=6; COMMIT;');
+        if (version < 6) db.exec('CREATE INDEX grindolino_measurements_account_time ON grindolino_measurements (account_id, recorded_at)');
+        // v7: várias extensões (a coluna hunt_extension_path fica, sem uso) e verificação automática de atualização
+        db.exec("CREATE TABLE extensions (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, enabled INTEGER NOT NULL, added_at TEXT NOT NULL); INSERT INTO extensions SELECT 'mhnplloljgchpfpcpbhmcokmnefodjnh', hunt_extension_path, 1, strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM workspace_settings WHERE id=1 AND hunt_extension_path IS NOT NULL AND hunt_extension_path<>''; ALTER TABLE workspace_settings ADD COLUMN auto_update_check INTEGER NOT NULL DEFAULT 1; PRAGMA user_version=7; COMMIT;");
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     return db;

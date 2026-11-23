@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { browserRoots, checkExtension, findInstalledHunt, HUNT_ID, latestVersion, resolveHuntPath, type ExtFs } from '../electron/extension-check';
+import { browserRoots, checkExtension, findInstalled, HUNT_ID, latestVersion, resolveExtensionPath, type ExtFs } from '../electron/extension-check';
 
 const valid = {manifest_version:3, name:'/hunt for PokeIdle', version:'1.0.17', key:'k', update_url:'https://clients2.google.com/service/update2/crx',
   content_scripts:[{matches:['https://pokeidle.io/*'],js:['a.js'],world:'MAIN',run_at:'document_start'},{matches:['https://pokeidle.io/*'],js:['b.js']}]};
@@ -25,23 +25,32 @@ function fakeFs(files: Record<string,string>): ExtFs {
     },
   };
 }
+const findHunt = (machine: Parameters<typeof findInstalled>[0], fs: ExtFs) => findInstalled(machine,fs).find(entry => entry.id === HUNT_ID)?.path ?? null;
 const check = (changes: Record<string, unknown>) => checkExtension('/ext',fakeFs({'/ext/manifest.json':manifest(changes)}));
 
 describe('validação da extensão /hunt', () => {
   it('aceita o manifest MV3 restrito ao jogo', () => {
     expect(check({})).toEqual({ok:true,name:'/hunt for PokeIdle',version:'1.0.17'});
-    expect(check({permissions:[],web_accessible_resources:[{resources:['x.png'],matches:['https://pokeidle.io/*']}]}).ok).toBe(true);
+    expect(check({permissions:['storage'],web_accessible_resources:[{resources:['x.png'],matches:['https://pokeidle.io/*']}]}).ok).toBe(true);
   });
   it('recusa manifest que não é MV3', () => {
     expect(check({manifest_version:2})).toEqual({ok:false,error:'A extensão precisa usar Manifest V3.'});
   });
   it.each([
-    ['background',{service_worker:'bg.js'}], ['permissions',['storage']], ['host_permissions',['<all_urls>']],
+    ['background',{service_worker:'bg.js'}], ['permissions',['storage','scripting']], ['host_permissions',['<all_urls>']], ['host_permissions',['https://pokeidle.io/*','https://evil.example/*']],
     ['optional_permissions',['tabs']], ['optional_host_permissions',['https://*/*']], ['externally_connectable',{matches:['https://pokeidle.io/*']}],
+    ['chrome_url_overrides',{newtab:'n.html'}], ['devtools_page','d.html'], ['content_security_policy',{extension_pages:"script-src 'self' https://cdn.example.com; object-src 'self'"}], ['content_security_policy',"script-src *"],
   ])('recusa %s', (key,value) => {
     const result = check({[key]:value});
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain(key);
+    if (!result.ok) expect(result.error).toContain(key === 'permissions' ? 'scripting' : key);
+  });
+  it('explica qual permissão fora da lista foi pedida', () => {
+    const result = check({permissions:['storage','tabs']});
+    expect(result).toMatchObject({ok:false}); if (!result.ok) expect(result.error).toContain('“tabs”');
+  });
+  it('aceita só storage/unlimitedStorage, hosts do jogo e uma CSP local', () => {
+    expect(check({permissions:['storage','unlimitedStorage'],host_permissions:['https://pokeidle.io/*'],optional_host_permissions:['https://pokeidle.io/app'],optional_permissions:[],action:{default_title:'x'},icons:{'16':'i.png'},content_security_policy:{extension_pages:"script-src 'self'; object-src 'self'"}}).ok).toBe(true);
   });
   it.each([
     [['https://pokeidle.io/*','https://example.com/*']], [['<all_urls>']], [['http://pokeidle.io/*']], [['https://pokeidle.io.evil.com/*']], [['https://*.pokeidle.io/*']], [[]], ['https://pokeidle.io/*'],
@@ -85,7 +94,7 @@ describe('localização da extensão instalada', () => {
       [`${idDir}/1.0.17_1/manifest.json`]:manifest(), [`${idDir}/2.0.0_0/manifest.json`]:manifest({permissions:['tabs']}), [`${idDir}/Temp/manifest.json`]:manifest(),
     });
     expect(latestVersion(idDir,fs)?.path).toBe(`${idDir}/1.0.17_1`);
-    expect(findInstalledHunt(linux,fs)).toBe(`${idDir}/1.0.17_1`);
+    expect(findHunt(linux,fs)).toBe(`${idDir}/1.0.17_1`);
     expect(latestVersion('/nada',fs)).toBeNull();
   });
   it('procura em todos os navegadores e perfis do Linux, incluindo Flatpak', () => {
@@ -97,8 +106,8 @@ describe('localização da extensão instalada', () => {
       [ext(flatpak,'Guest Profile','9.0.0_0')]:manifest({version:'9.0.0'}),
       [ext('/home/u/.config/microsoft-edge','Default','1.0.10_0')]:manifest({version:'1.0.10'}),
     });
-    expect(findInstalledHunt(linux,fs)).toBe(`${flatpak}/Profile 2/Extensions/${HUNT_ID}/1.0.17_0`);
-    expect(findInstalledHunt(linux,fakeFs({'/home/u/x':'1'}))).toBeNull();
+    expect(findHunt(linux,fs)).toBe(`${flatpak}/Profile 2/Extensions/${HUNT_ID}/1.0.17_0`);
+    expect(findHunt(linux,fakeFs({'/home/u/x':'1'}))).toBeNull();
   });
   it('procura nas pastas do Windows', () => {
     const local = 'C:\\Users\\u\\AppData\\Local';
@@ -110,15 +119,15 @@ describe('localização da extensão instalada', () => {
       [`${local}\\Google\\Chrome\\User Data\\Default\\Extensions\\${HUNT_ID}\\1.0.3_0\\manifest.json`]:manifest({version:'1.0.3'}),
       [`${brave}\\1.0.17_0\\manifest.json`]:manifest(),
     });
-    expect(findInstalledHunt(windows,fs)).toBe(`${brave}\\1.0.17_0`);
+    expect(findHunt(windows,fs)).toBe(`${brave}\\1.0.17_0`);
     expect(checkExtension(`${brave}\\1.0.17_0`,fs).ok).toBe(true);
   });
   it('troca a versão salva que sumiu pela maior irmã na pasta do id', () => {
     const idDir = `/home/u/.config/google-chrome/Default/Extensions/${HUNT_ID}`;
     const fs = fakeFs({[`${idDir}/1.0.18_0/manifest.json`]:manifest({version:'1.0.18'}),[`${idDir}/1.0.20_0/manifest.json`]:manifest({version:'1.0.20'}),'/custom/ext/manifest.json':manifest()});
-    expect(resolveHuntPath(`${idDir}/1.0.17_0`,fs)).toBe(`${idDir}/1.0.20_0`);
-    expect(resolveHuntPath(`${idDir}/1.0.18_0`,fs)).toBe(`${idDir}/1.0.18_0`); // ainda existe: mantém a escolha
-    expect(resolveHuntPath('/custom/gone',fs)).toBe('/custom/gone'); // fora da pasta do id não há o que adivinhar
-    expect(resolveHuntPath(`/vazio/${HUNT_ID}/1.0.17_0`,fs)).toBe(`/vazio/${HUNT_ID}/1.0.17_0`);
+    expect(resolveExtensionPath(`${idDir}/1.0.17_0`,fs)).toBe(`${idDir}/1.0.20_0`);
+    expect(resolveExtensionPath(`${idDir}/1.0.18_0`,fs)).toBe(`${idDir}/1.0.18_0`); // ainda existe: mantém a escolha
+    expect(resolveExtensionPath('/custom/gone',fs)).toBe('/custom/gone'); // fora da pasta do id não há o que adivinhar
+    expect(resolveExtensionPath(`/vazio/${HUNT_ID}/1.0.17_0`,fs)).toBe(`/vazio/${HUNT_ID}/1.0.17_0`);
   });
 });

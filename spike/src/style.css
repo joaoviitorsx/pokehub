@@ -329,3 +329,27 @@ select:disabled { opacity: .45; cursor: not-allowed; }
 .pill[data-state=loading], .pill[data-state=""] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
 .pill[data-state=auth_required] { color: var(--info); border-color: color-mix(in srgb, var(--info) 50%, var(--line)); }
 .pill[data-state=error] { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+
+/* Extensões e atualização */
+.ext-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 10px; }
+.ext-card { padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.ext-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ext-head small { color: var(--muted); }
+.ext-head .grow { flex: 1; }
+.ext-head .switch.mini { padding: 0; border: 0; }
+.panel .ext-card .ext-state { margin: 8px 0 0; }
+.panel .ext-card p[role=alert] { margin: 8px 0 0; }
+.verdict { padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; border: 1px solid; }
+.verdict[data-verdict=leitura] { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, var(--line)); }
+.verdict[data-verdict=interage] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.verdict[data-verdict=bloqueada] { color: var(--err); border-color: color-mix(in srgb, var(--err) 55%, var(--line)); }
+button.link { height: auto; padding: 0; border: 0; background: transparent; color: var(--info); font-weight: 500; text-decoration: underline; }
+button.link:not(:disabled):hover { background: transparent; border: 0; color: var(--text); }
+.ext-card button.link { margin-top: 8px; }
+.findings { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font-size: 12px; }
+.findings li { display: flex; gap: 6px; flex-wrap: wrap; align-items: baseline; }
+.findings small { color: var(--muted); overflow-wrap: anywhere; }
+.findings li[data-kind=network] b, .findings li[data-kind=eval] b, .findings li[data-kind=skipped] b { color: var(--err); }
+.findings li[data-kind=click] b, .findings li[data-kind=dispatch] b, .findings li[data-kind=send] b { color: var(--accent); }
+.tools button.update { height: 28px; margin-right: 6px; padding: 0 12px; border-radius: 999px; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: transparent; font-size: 12px; font-weight: 600; }
+.tools button.update.ready { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }

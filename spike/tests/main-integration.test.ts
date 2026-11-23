@@ -24,7 +24,7 @@ class FakeExtensions {
   async loadExtension(path: string, options: unknown) {
     if (failExtension) throw new Error('extensão recusada');
     order.push('extension'); this.options.push(options);
-    const item = {id:'hunt',path}; this.items.push(item); return item;
+    const item = {id:`ext-${path}`,path}; this.items.push(item); return item;
   }
 }
 class FakeSession {
@@ -79,6 +79,7 @@ const fakeApp = Object.assign(new EventEmitter(), {
   requestSingleInstanceLock: () => true,
   whenReady: () => Promise.resolve(),
   getPath: () => directory,
+  getVersion: () => '0.1.0',
   getAppMetrics: () => [{pid:123,creationTime:100,memory:{workingSetSize:2048},cpu:{percentCPUUsage:3}}],
   quit: () => {},
 });
@@ -250,50 +251,82 @@ describe('processo principal', () => {
   expect((await restart(sender,thirdId) as {ok:boolean}).ok).toBe(true);
   expect(created.at(-1)?.options.webPreferences.partition).toBe(third.options.webPreferences.partition);
  });
- it('carrega a extensão /hunt antes do jogo e nunca impede a sessão de abrir', async () => {
-  type Status = {enabled:boolean;path:string|null;name:string|null;version:string|null;error:string|null;loaded:number;sessions:number};
+ it('carrega várias extensões antes do jogo, audita e nunca impede a sessão de abrir', async () => {
+  type Info = {id:string;catalogId:string|null;name:string;version:string|null;path:string;enabled:boolean;loaded:number;sessions:number;verdict:string|null;findings:{kind:string}[];error:string|null};
   const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
-  const call = async (channel:string,...args:unknown[]) => await handlers.get(channel)?.(sender,...args) as {ok:boolean;data?:Status;error?:string};
+  const call = async (channel:string,...args:unknown[]) => await handlers.get(channel)?.(sender,...args) as {ok:boolean;data?:Info[];error?:string};
   const live = () => created.filter(view => !view.webContents.isDestroyed() && shell.children.has(view));
+  const HUNT = 'mhnplloljgchpfpcpbhmcokmnefodjnh', SMART = 'lhfeijlnlbglakplddjgbaopgcdfkcmm';
   const manifest = {manifest_version:3,name:'/hunt for PokeIdle',version:'1.0.17',content_scripts:[{matches:['https://pokeidle.io/*'],js:['a.js']}]};
-  const folder = (name:string, content:object) => { const path=join(directory,name); mkdirSync(path,{recursive:true}); writeFileSync(join(path,'manifest.json'),JSON.stringify(content)); return path; };
-  expect((await call('extension:status')).data).toEqual({enabled:false,path:null,name:null,version:null,error:null,loaded:0,sessions:3});
+  const folder = (name:string, content:object, files: Record<string,string> = {}) => { const path=join(directory,name); mkdirSync(path,{recursive:true}); writeFileSync(join(path,'manifest.json'),JSON.stringify(content)); for (const [file,code] of Object.entries(files)) writeFileSync(join(path,file),code); return path; };
+  expect((await call('extensions:list')).data).toEqual([]);
   const intruder = {sender:created[0]?.webContents,senderFrame:created[0]?.webContents.mainFrame};
-  for (const channel of ['extension:status','extension:detect','extension:choose','extension:set']) expect((await handlers.get(channel)?.(intruder,true) as {ok:boolean}).ok).toBe(false);
-  expect((await call('extension:set','sim')).ok).toBe(false);
-  // pasta recusada no main: nada é salvo nem carregado
-  chosenFolder = folder('ruim',{...manifest,permissions:['tabs']});
-  const refused = (await call('extension:choose')).data;
-  expect(refused).toMatchObject({enabled:false,loaded:0}); expect(refused?.error).toContain('permissions');
+  for (const channel of ['extensions:list','extensions:detect','extensions:add','extensions:toggle','extensions:remove','extensions:store']) expect((await handlers.get(channel)?.(intruder,'x',true) as {ok:boolean}).ok).toBe(false);
+  for (const channel of ['update:get','update:check','update:download','update:install','update:auto']) expect((await handlers.get(channel)?.(intruder,true) as {ok:boolean}).ok).toBe(false);
+  expect((await call('extensions:toggle',1,true)).ok).toBe(false); expect((await call('extensions:toggle','x','sim')).ok).toBe(false); expect((await call('extensions:remove',{})).ok).toBe(false);
+  // pasta recusada pelo validador (service worker): nada é salvo nem carregado
+  chosenFolder = folder('piloto',{...manifest,background:{service_worker:'sw.js'}});
+  const refused = await call('extensions:add');
+  expect(refused.ok).toBe(false); expect(refused.error).toContain('background');
   chosenFolder = null;
-  expect((await call('extension:choose')).data).toMatchObject({enabled:false,error:null});
-  // pasta válida: salva e carrega nas sessões abertas, sem acesso a arquivos
-  const good = folder('boa',manifest); chosenFolder = good;
-  expect((await call('extension:choose')).data).toEqual({enabled:true,path:good,name:'/hunt for PokeIdle',version:'1.0.17',error:null,loaded:3,sessions:3});
-  expect(live().map(view => view.webContents.session.extensions.items)).toEqual(Array(3).fill([{id:'hunt',path:good}]));
-  expect(live()[0]?.webContents.session.extensions.options).toEqual([{allowFileAccess:false}]);
-  // sessão reaberta: extensão antes do loadURL
+  expect((await call('extensions:add')).data).toEqual([]);
+  // pasta bloqueada pela auditoria entra na lista com o motivo, mas não é carregada
+  chosenFolder = folder('rede',manifest,{'a.js':"fetch('https://api.example.com/x')"});
+  const blocked = (await call('extensions:add')).data?.[0];
+  expect(blocked).toMatchObject({verdict:'bloqueada',enabled:true,loaded:0,sessions:3,catalogId:null}); expect(blocked?.error).toContain('api.example.com');
+  expect(live().every(view => view.webContents.session.extensions.items.length === 0)).toBe(true);
+  expect((await call('extensions:add')).error).toContain('já está');
+  // duas válidas: ambas carregadas em todas as sessões, sem acesso a arquivos
+  const hunt = folder(`Extensions/${HUNT}/1.0.17_0`,manifest,{'a.js':'const x=1'});
+  const smart = folder(`Extensions/${SMART}/0.10.0_0`,{...manifest,name:'Smart Market',version:'0.10.0',permissions:['storage']},{'a.js':"input.dispatchEvent(new Event('input')); ws.send('q')"});
+  chosenFolder = hunt; await call('extensions:add'); chosenFolder = smart;
+  const listed = (await call('extensions:add')).data ?? [];
+  expect(listed.map(item => [item.catalogId,item.verdict,item.loaded,item.enabled])).toEqual([[null,'bloqueada',0,true],[HUNT,'leitura',3,true],[SMART,'interage',3,true]]);
+  expect(live().map(view => view.webContents.session.extensions.items.map(item => item.path))).toEqual(Array(3).fill([hunt,smart]));
+  expect(live()[0]?.webContents.session.extensions.options).toEqual([{allowFileAccess:false},{allowFileAccess:false}]);
+  // sessão reaberta: as duas extensões antes do loadURL
   const id = (handlers.get('profiles:list')?.(sender) as {data:{id:string}[]}).data[0]?.id;
   order.length = 0;
   expect((await handlers.get('session:restart')?.(sender,id) as {ok:boolean}).ok).toBe(true);
   await vi.waitFor(() => expect(created.at(-1)?.webContents.loadedUrl).toBe('https://pokeidle.io/app'));
-  expect(order).toEqual(['extension','url']);
-  // falha ao carregar: a sessão abre sem a extensão e o erro aparece no status
+  expect(order).toEqual(['extension','extension','url']);
+  // falha ao carregar: a sessão abre sem as extensões e o erro aparece na lista
   failExtension = true;
   expect((await handlers.get('session:restart')?.(sender,id) as {ok:boolean}).ok).toBe(true);
   await vi.waitFor(() => expect(created.at(-1)?.webContents.loadedUrl).toBe('https://pokeidle.io/app'));
-  const partial = (await call('extension:status')).data;
-  expect(partial).toMatchObject({enabled:true,loaded:2,sessions:3}); expect(partial?.error).toContain('sessão segue aberta');
+  const partial = (await call('extensions:list')).data?.find(item => item.catalogId === HUNT);
   failExtension = false;
+  expect(partial).toMatchObject({loaded:2,sessions:3}); expect(partial?.error).toContain('sessão segue aberta');
+  // a lista se recupera ao sincronizar de novo
+  expect((await call('extensions:toggle',HUNT,true)).data?.find(item => item.catalogId === HUNT)).toMatchObject({loaded:3,error:null});
+  // desabilitar uma remove só ela, em todas as sessões; a /hunt perde o "hasHunt" mas a Smart Market segue
+  expect((await call('extensions:toggle',HUNT,false)).data?.map(item => [item.catalogId,item.enabled,item.loaded])).toEqual([[null,true,0],[HUNT,false,0],[SMART,true,3]]);
+  expect(live().map(view => view.webContents.session.extensions.items.map(item => item.path))).toEqual(Array(3).fill([smart]));
   // detecção na pasta do navegador (o home falso é a pasta temporária)
   if (process.platform !== 'win32') {
-    expect((await call('extension:set',false)).data).toMatchObject({enabled:false,path:null,loaded:0});
-    expect((await call('extension:detect')).data?.error).toContain('não encontrada');
-    const installed = folder('.config/chromium/Default/Extensions/mhnplloljgchpfpcpbhmcokmnefodjnh/1.0.18_0',{...manifest,version:'1.0.18'});
-    expect((await call('extension:set',true)).data).toMatchObject({enabled:true,path:installed,version:'1.0.18',loaded:3});
+    folder(`.config/chromium/Default/Extensions/${HUNT}/1.0.18_0`,{...manifest,version:'1.0.18'},{'a.js':'1'});
+    const detected = (await call('extensions:detect')).data;
+    expect(detected?.find(item => item.catalogId === HUNT)).toMatchObject({enabled:false,version:'1.0.18'}); // atualiza o caminho, mantém o "desabilitada"
   }
-  // desativar remove de todas as sessões
-  expect((await call('extension:set',false)).data).toEqual({enabled:false,path:null,name:null,version:null,error:null,loaded:0,sessions:3});
+  expect((await call('extensions:toggle',HUNT,true)).data?.find(item => item.catalogId === HUNT)).toMatchObject({enabled:true,loaded:3});
+  // remover tira das sessões e da lista
+  expect((await call('extensions:remove',HUNT)).data?.map(item => item.catalogId)).toEqual([null,SMART]);
+  expect((await call('extensions:remove',SMART)).data?.map(item => item.catalogId)).toEqual([null]);
   expect(live().every(view => view.webContents.session.extensions.items.length === 0)).toBe(true);
+  expect((await call('extensions:remove','nada')).ok).toBe(false);
+  // loja: só ids do catálogo, nunca URL do renderer
+  const before = openedExternal.length; // outros testes já abriram o jogo no navegador
+  expect((await call('extensions:store','https://evil.example')).ok).toBe(false);
+  expect(openedExternal.length).toBe(before);
+  expect((await call('extensions:store',SMART)).ok).toBe(true); expect(openedExternal.slice(before)).toEqual([`https://chromewebstore.google.com/detail/${SMART}`]);
+ });
+ it('expõe a versão e a preferência de atualização; fora do app empacotado fica desativada', async () => {
+  const sender = {sender:shell.webContents,senderFrame:shell.webContents.mainFrame};
+  const call = async (channel:string,...args:unknown[]) => await handlers.get(channel)?.(sender,...args) as {ok:boolean;data?:{version:string;packaged:boolean;autoCheck:boolean;status:{state:string}}};
+  expect((await call('update:get')).data).toEqual({version:'0.1.0',packaged:false,autoCheck:true,status:{state:'disabled'}});
+  expect((await call('update:auto',false)).data?.autoCheck).toBe(false); expect((await call('update:auto','x')).ok).toBe(false);
+  expect((await call('update:check')).data?.status).toEqual({state:'disabled'});
+  expect((await call('update:download')).data?.status).toEqual({state:'disabled'});
+  expect((await call('update:install')).ok).toBe(false);
  });
 });

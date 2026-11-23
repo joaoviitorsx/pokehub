@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            release_script: release:win
+          - os: ubuntu-latest
+            release_script: release:linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.x'
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run test
+      # electron-builder cria o release da tag (releaseType "release", não rascunho) e anexa o instalador e o latest*.yml
+      - run: bun run ${{ matrix.release_script }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
