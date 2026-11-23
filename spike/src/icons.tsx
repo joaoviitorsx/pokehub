@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type React from 'react';
 import { elementOf, type Element } from './element';
 
@@ -25,6 +26,7 @@ export const icons = {
  minus:'M5 8h6',
  expand:'M9.5 2.5h4v4M13.5 2.5L9 7M6.5 13.5h-4v-4M2.5 13.5L7 9',
  collapse:'M13.5 6.5h-4v-4M9.5 6.5L14 2M2.5 9.5h4v4M6.5 9.5L2 14',
+ download:'M8 2v8M4.8 7.2L8 10.4l3.2-3.2M3 13h10',
  gear:'M12.59 6.27L14.44 6.56L14.44 9.44L12.59 9.73L12.46 10.02L13.57 11.54L11.54 13.57L10.02 12.46L9.73 12.59L9.44 14.44L6.56 14.44L6.27 12.59L5.98 12.46L4.46 13.57L2.43 11.54L3.54 10.02L3.41 9.73L1.56 9.44L1.56 6.56L3.41 6.27L3.54 5.98L2.43 4.46L4.46 2.43L5.98 3.54L6.27 3.41L6.56 1.56L9.44 1.56L9.73 3.41L10.02 3.54L11.54 2.43L13.57 4.46L12.46 5.98ZM8 5.9a2.1 2.1 0 1 0 0 4.2a2.1 2.1 0 1 0 0-4.2', // engrenagem (8 dentes) — abre o Gerenciar
 };
 export const Icon = ({d}:{d:string}) => <svg className="ic" viewBox="0 0 16 16" aria-hidden="true"><path d={d}/></svg>;
@@ -39,3 +41,14 @@ export const elements: Record<Element,{d:string;name:string}> = {
  star:{name:'Estrela',d:'M8 1.5c.5 3.6 2.4 6 6.5 6.5-4.1.5-6 2.9-6.5 6.5-.5-3.6-2.4-6-6.5-6.5 4.1-.5 6-2.9 6.5-6.5z'},
 };
 export const El = ({color}:{color:string}) => <svg className="el" viewBox="0 0 16 16" aria-hidden="true"><path d={elements[elementOf(color)].d}/></svg>;
+
+// Pokébola original em quatro cores (mesma arte do logo): usada no carregando, no vazio e como retrato ausente. `tone="mono"` vira silhueta (currentColor).
+export function Ball({tone='color',className}:{tone?:'color'|'mono'; className?:string}) {
+ const id = useId();
+ if (tone === 'mono') return <svg className={`ball ${className ?? ''}`} viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="12" fill="none" stroke="currentColor" strokeWidth="3"/><path d="M4 16h8.2M19.8 16H28" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/><circle cx="16" cy="16" r="4.2" fill="none" stroke="currentColor" strokeWidth="3"/></svg>;
+ return <svg className={`ball ${className ?? ''}`} viewBox="62 62 388 388" aria-hidden="true"><defs><clipPath id={`${id}c`}><circle cx="256" cy="256" r="184"/></clipPath></defs>
+  <g clipPath={`url(#${id}c)`}><rect x="72" y="72" width="184" height="184" fill="#f25f5c"/><rect x="256" y="72" width="184" height="184" fill="#ffca3a"/><rect x="72" y="256" width="184" height="184" fill="#3fa7d6"/><rect x="256" y="256" width="184" height="184" fill="#59cd90"/><rect x="72" y="238" width="368" height="36" fill="#480e1e"/><rect x="253" y="72" width="6" height="368" fill="#480e1e"/></g>
+  <circle cx="256" cy="256" r="184" fill="none" stroke="#480e1e" strokeWidth="20"/><circle cx="256" cy="256" r="66" fill="#480e1e"/><circle cx="256" cy="256" r="44" fill="#fff6ef"/></svg>;
+}
+// Ilustração do estado vazio: pokébola sobre um pedestal de madeira (o balanço de 3 vezes roda uma só vez ao montar).
+export const EmptyArt = () => <div className="empty-art" aria-hidden="true"><Ball className="wobble"/><i className="stand"/><i className="shadow"/></div>;

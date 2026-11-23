@@ -1,7 +1,7 @@
 // Prévia no navegador: finge o window.pokehub exposto por spike/electron/preload.ts. Só para desenvolvimento.
 import type { Profile, ProfileInput } from '../domain/profiles';
 import type { ExtensionInfo } from '../contracts/extensions';
-import type { HuntRow, HuntSnapshot } from '../contracts/hunt';
+import type { HuntRow, HuntSnapshot, HuntSprite } from '../contracts/hunt';
 import type { MarketListing, MarketScan } from '../domain/market';
 import type { UpdateInfo, UpdateStatus } from '../contracts/update';
 
@@ -17,8 +17,12 @@ const seed: [string, string, string, string][] = [
   ['Shiny Hunter', 'shiny@exemplo.com', 'Misty', '#ffca3a'],
   ['Mercado', 'mercado@exemplo.com', 'Gary', '#59cd90'],
 ];
-let profiles: Profile[] = empty ? [] : seed.map(([label, emailLabel, characterName, colorToken], i) => ({id: uid(i + 1), label, emailLabel, characterName, colorToken, createdAt: now, updatedAt: now}));
+const sidePrefs = {width: Number(params.get('sidew')) || 340, rows: Number(params.get('rows')) || 10, compact: params.get('compact') === '1', liberadas: params.get('liberadas') !== '0'};
+try { localStorage.setItem('pokehub.side', JSON.stringify(sidePrefs)); } catch { /* prévia sem armazenamento */ } // ?sidew=280..520 &rows=5|10|20 &compact=1
+const accountCount = Math.min(4, Math.max(1, Number(params.get('accounts')) || 4)); // ?accounts=1..4
+let profiles: Profile[] = empty ? [] : seed.slice(0, accountCount).map(([label0, emailLabel, characterName, colorToken], i) => ({id: uid(i + 1), label: params.get('long') === '1' ? `${label0} · conta com nome bem comprido ${i + 1}` : label0, emailLabel, characterName, colorToken, createdAt: now, updatedAt: now}));
 const states: Record<string, string> = {[uid(1)]: 'ready', [uid(2)]: 'loading', [uid(3)]: 'auth_required', [uid(4)]: 'error'};
+if (params.get('allready') === '1') for (const key of Object.keys(states)) states[key] = 'ready'; // ?allready=1: todas as contas prontas
 let preferences: 'grid' | 'focus-first' = 'grid';
 
 const ext = (o: Partial<ExtensionInfo> & Pick<ExtensionInfo, 'id' | 'name'>): ExtensionInfo => ({catalogId: null, version: null, path: `C:\\Extensoes\\${o.name}`, enabled: true, loaded: 4, sessions: 4, verdict: 'leitura', findings: [], hosts: [], approvedHosts: [], pending: false, error: null, ...o});
@@ -29,14 +33,18 @@ let extensions: ExtensionInfo[] = [
 ];
 let update: UpdateInfo = {version: '0.1.0', packaged: true, autoCheck: true, status: {state: 'available', version: '0.1.1', notes: 'Novo painel de mercado e correções de sessão.'}};
 
-const huntNames = ['Rota 3', 'Floresta de Viridian', 'Monte Lua', 'Caverna Rubi', 'Lago Azul', 'Torre Pokémon', 'Ilha Seafoam', 'Rota 22', 'Mansão Pokémon', 'Cidade Fuchsia', 'Cume do Monte', 'Liga Pokémon'];
+// Retratos reais (atlas + janela) copiados de https://pokeidle.io/tracker/api/sprites em 2026-11-23; só URLs, nenhuma imagem no repositório.
+const atlas = (lt: number, x: number, w: number): HuntSprite => ({url: `https://pokeidle.io/assets/asset-packs/outfits/male/${lt}/outfits-male-${lt}-00-${hash[lt]}.webp`, x, y: 2, w, h: w});
+const hash: Record<number, string> = {2: 'be33c2bc8dab', 3: 'db2fbcffcc6c', 4: '6d1493b52558', 5: '41d09caaf101', 6: 'f9c285dcb70b', 7: 'd0294ef34646', 9: 'ea564acc6d19', 10: '17539951f766', 11: '82219c097599', 14: 'a3f7235eb82e', 15: '423a9bf03911', 16: '26fd95172e31'};
+const portraits: HuntSprite[] = [atlas(3, 398, 64), atlas(6, 206, 32), atlas(9, 530, 64), atlas(5, 662, 64), atlas(2, 206, 32), atlas(10, 530, 64), atlas(4, 398, 64), atlas(7, 662, 64), atlas(11, 398, 64), atlas(14, 398, 64), atlas(15, 398, 64), atlas(16, 662, 64)];
+const huntNames = ['Rota 3', 'Floresta de Viridian (clareira do Pikachu raro)', 'Monte Lua', 'Caverna Rubi', 'Lago Azul', 'Torre Pokémon', 'Ilha Seafoam', 'Rota 22', 'Mansão Pokémon', 'Cidade Fuchsia', 'Cume do Monte', 'Liga Pokémon'];
 const regions = ['Kanto', 'Johto', 'Hoenn', 'Sinnoh'];
-const hunts: HuntRow[] = huntNames.map((nome, i) => ({nome, regiao: regions[i % 4]!, nivel: 8 + i * 6, xpPorHora: 480000 - i * 31000, abatesPorHora: 1200 - i * 55, mataEm: 2.5 + i * 0.4, ouroPorHora: 95000 - i * 6200, shinyPorHora: i % 5 === 4 ? null : 0.4 - i * 0.02, estimado: i % 3 === 0, umHit: i < 4, mortesPorHora: i > 8 ? 3 : 0, piorGolpe: 0.08 + i * 0.07, liberada: i < 9, sprite: null}));
-const huntSnapshot = (soLiberadas?: boolean): HuntSnapshot => ({estado: 'ok', pokemon: {nome: 'Charizard', nivel: 62, sprite: null}, bonus: {pokemon: 1.15, treinador: 1.1, itens: [{nome: 'Amuleto de XP', mult: 1.2}]}, hunts: soLiberadas ? hunts.filter(h => h.liberada) : hunts, liberadas: 9, total: 12, filtro: {ordem: 'xp', soLiberadas: Boolean(soLiberadas)}, versaoJogo: '2.14.0', versaoExtensao: '1.0.23'});
+const hunts: HuntRow[] = huntNames.map((nome, i) => ({nome, regiao: regions[i % 4]!, nivel: 8 + i * 6, xpPorHora: 480000 - i * 31000, abatesPorHora: 1200 - i * 55, mataEm: 2.5 + i * 0.4, ouroPorHora: 95000 - i * 6200, shinyPorHora: i % 5 === 4 ? null : 0.4 - i * 0.02, estimado: i % 3 === 0, umHit: i < 4, mortesPorHora: i > 8 ? 3 : 0, piorGolpe: 0.08 + i * 0.07, liberada: i < 9, sprite: i === 5 ? null : portraits[i % portraits.length]!}));
+const huntSnapshot = (soLiberadas?: boolean): HuntSnapshot => ({estado: 'ok', pokemon: {nome: 'Charizard', nivel: 62, sprite: portraits[0]!}, bonus: {pokemon: 1.15, treinador: 1.1, itens: [{nome: 'Amuleto de XP', mult: 1.2}]}, hunts: soLiberadas ? hunts.filter(h => h.liberada) : hunts, liberadas: 9, total: 12, filtro: {ordem: 'xp', soLiberadas: Boolean(soLiberadas)}, versaoJogo: '2.14.0', versaoExtensao: '1.0.23'});
 const names = ['Charizard', 'Gengar', 'Dragonite', 'Alakazam', 'Machamp', 'Gyarados', 'Arcanine', 'Snorlax', 'Lapras', 'Tyranitar', 'Scizor', 'Umbreon'];
 const listings: MarketListing[] = Array.from({length: 15}, (_, i) => {
   const gold = i % 3 !== 2, label = (['desconto', 'no preço', 'acima'] as const)[i % 3]!;
-  return {id: `L${i + 1}`, name: names[i % names.length]!, level: 20 + i * 4, potencia: 60 + (i * 7) % 40, nota: 3.2 + ((i * 13) % 17) / 10, shiny: i % 6 === 0, price: gold ? 250000 + i * 180000 : 40 + i * 12, currency: gold ? 'gold' : 'orb', smart: {label, pct: label === 'desconto' ? -(8 + i) : label === 'acima' ? 12 + i : 1, market: gold ? 300000 + i * 190000 : 50 + i * 12}};
+  return {id: `L${i + 1}`, name: names[i % names.length]!, level: 20 + i * 4, potencia: 1 + (i * 7) % 5, nota: 3.2 + ((i * 13) % 17) / 10, shiny: i % 6 === 0, price: gold ? 250000 + i * 180000 : 40 + i * 12, currency: gold ? 'gold' : 'orb', smart: {label, pct: label === 'desconto' ? -(8 + i) : label === 'acima' ? 12 + i : 1, market: gold ? 300000 + i * 190000 : 50 + i * 12}};
 });
 // Vitrine simulada: 3 páginas de 5 anúncios; `?query=` define a busca (vazio = sem busca) e `?pages=` o total (>30 testa a recusa).
 const queryParam = params.get('query') ?? 'Charizard', totalPages = Math.max(1, Number(params.get('pages')) || 3);

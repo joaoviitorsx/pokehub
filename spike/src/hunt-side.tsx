@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type Dispatch, type SetStateAction } from 'react';
 import type { Profile } from '../domain/profiles';
 import type { HuntRow, HuntSnapshot, HuntSprite } from '../contracts/hunt';
-import { El, Icon, icons } from './icons';
+import { Ball, El, Icon, icons } from './icons';
 import { HUNT_REFRESH_MS, huntFetchable, huntQueue } from './hunt-queue';
 import { MarketPanel } from './market-side';
 
@@ -44,13 +44,19 @@ export function loadSidePrefs():SidePrefs {
 export function saveSidePrefs(prefs:SidePrefs) { try { localStorage.setItem(PREFS_KEY,JSON.stringify(prefs)); } catch { /* preferência só não persiste */ } }
 
 // O atlas vem direto de https://pokeidle.io (única origem liberada em img-src); a janela do retrato é recortada por CSS.
+// Janelas de 64 px desenham o bicho no canto inferior direito (a arte transborda em tiles de 32), então cortamos 12 px do topo/esquerda
+// para centralizar sem canvas. A escala é inteira quando cabe (pixel art nítida); ao reduzir usa suavização. Sem retrato: silhueta de pokébola.
+const CROP = 12;
 export function Sprite({sprite,name,size}:{sprite:HuntSprite|null; name:string; size:number}) {
  const [failed,setFailed] = useState<string|null>(null);
  const box = {'--s':`${size}px`} as CSSProperties;
- if (!sprite || failed === sprite.url) return <span className="spr" data-empty="" style={box} aria-hidden="true">{name.trim()[0]?.toUpperCase() ?? '?'}</span>;
- const scale = size / Math.max(sprite.w,sprite.h);
- return <span className="spr" style={box}><img src={sprite.url} alt={name} width={sprite.w} height={sprite.h} loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false} onError={() => setFailed(sprite.url)}
-  style={{left:(size - sprite.w * scale) / 2,top:(size - sprite.h * scale) / 2,objectPosition:`-${sprite.x}px -${sprite.y}px`,transform:`scale(${scale})`}}/></span>;
+ if (!sprite || failed === sprite.url) return <span className="spr" data-empty="" style={box} aria-hidden="true"><Ball tone="mono"/></span>;
+ const crop = Math.max(sprite.w,sprite.h) > 32 ? CROP : 0;
+ const view = Math.max(sprite.w,sprite.h) - crop;
+ const fit = size / view;
+ const scale = fit >= 1 ? Math.floor(fit) : fit;
+ return <span className="spr" style={box}><img src={sprite.url} alt={name} width={sprite.w} height={sprite.h} loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false} data-smooth={fit < 1 || undefined} onError={() => setFailed(sprite.url)}
+  style={{left:(size - view * scale) / 2 - crop * scale,top:(size - view * scale) / 2 - crop * scale,objectPosition:`-${sprite.x}px -${sprite.y}px`,transform:`scale(${scale})`,clipPath:crop ? `inset(${crop}px 0 0 ${crop}px)` : undefined}}/></span>;
 }
 // Contagem curta ao montar: o cartão remonta ao trocar de conta, métrica ou filtro; a atualização de 10 s troca o número direto.
 export function useCount(target:number) {
@@ -62,7 +68,7 @@ export function useCount(target:number) {
    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) frame = requestAnimationFrame(tick);
    return () => cancelAnimationFrame(frame);
  },[]);
- return target * (1 - (1 - t) ** 3);
+ return Math.max(0,target) * (1 - (1 - t) ** 3);
 }
 function Big({row,mode}:{row:HuntRow; mode:Mode}) {
  const shown = useCount(mode === 'shiny' ? 0 : modes[mode].value(row));
@@ -84,7 +90,7 @@ const waiting: Record<string,[string,string]> = {
  error:['Sessão com erro','Reabra a sessão desta conta pela barra superior.'],
  loading:['Sessão carregando','O ranking aparece assim que o jogo terminar de abrir.'],
 };
-const skeleton = (label:string) => <div className="side-skel" role="status"><span className="sr">{label}</span><i data-k="poke"/><i data-k="seg"/><i data-k="card"/><i/><i/><i/><i/></div>;
+const skeleton = (label:string) => <div className="side-skel" role="status"><span className="sr">{label}</span><i data-k="poke"/><i data-k="seg"/><i data-k="card"><Ball className="wobble"/></i><i/><i/><i/><i/></div>;
 
 // focusId: conta em foco/expandida (a lateral a seleciona ao abrir e quando ela muda); onAccount: devolve a conta mostrada (o processo principal a usa no foco automático).
 export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focusId,onAccount}:{profiles:Profile[]; states:Record<string,string>; prefs:SidePrefs; onPrefs:Dispatch<SetStateAction<SidePrefs>>; onClose:() => void; onSettings:() => void; focusId:string|null; onAccount:(id:string|null) => void}) {
@@ -170,7 +176,7 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
    for (const type of ['pointerup','pointercancel','blur']) window.addEventListener(type,endDrag,{signal});
  };
 
- const sprite = prefs.compact ? 24 : 32;
+ const sprite = prefs.compact ? 28 : 36;
  return <aside className="side" aria-label="Assistente: caçar e mercado" data-compact={prefs.compact || undefined} data-drag={drag !== null || undefined} style={{'--side':`${drag ?? prefs.width}px`} as CSSProperties}>
   {drag !== null && <div className="side-ghost" aria-hidden="true"><span>Ajustando a lateral · {drag} px</span></div>}
   <div className="side-grip" role="separator" aria-orientation="vertical" aria-label="Largura da lateral" aria-valuemin={SIDE_MIN} aria-valuemax={SIDE_MAX} aria-valuenow={drag ?? prefs.width} tabIndex={0} title="Arraste para ajustar a largura. Duplo clique volta ao padrão."
@@ -190,7 +196,7 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
    : entry.data.estado === 'sem-jogo' ? message('Conta deslogada','Entre no jogo nesta conta. O ranking aparece quando o jogo conectar.')
    : entry.data.estado === 'sem-pokemon' ? message('Nenhum Pokémon em campo','Coloque um Pokémon em campo nesta conta para ver onde caçar.')
    : ok && <>
-    <div className="side-poke"><Sprite sprite={ok.pokemon.sprite} name={ok.pokemon.nome} size={40}/><div><strong title={ok.pokemon.nome}>{ok.pokemon.nome}</strong><span>Nv {full.format(ok.pokemon.nivel)} · em campo</span></div>{ok.bonus && <span className="side-bonus" title={ok.bonus.itens.length ? ok.bonus.itens.map(item => `${item.nome} ×${decimal(item.mult,2)}`).join(' · ') : 'Nenhum bônus ativo'}>XP <b>×{decimal(ok.bonus.pokemon,2)}</b></span>}</div>
+    <div className="side-poke"><Sprite sprite={ok.pokemon.sprite} name={ok.pokemon.nome} size={52}/><div><strong title={ok.pokemon.nome}>{ok.pokemon.nome}</strong><span>Nv {full.format(ok.pokemon.nivel)} · em campo</span></div>{ok.bonus && <span className="side-bonus" title={ok.bonus.itens.length ? ok.bonus.itens.map(item => `${item.nome} ×${decimal(item.mult,2)}`).join(' · ') : 'Nenhum bônus ativo'}>XP <b>×{decimal(ok.bonus.pokemon,2)}</b></span>}</div>
     <div className="seg" role="group" aria-label="Ordenar por" style={{'--n':shown.length,'--i':shown.indexOf(current)} as CSSProperties}>{shown.map(item => <button key={item} aria-pressed={current === item} onClick={() => setMode(item)}>{modes[item].label}</button>)}</div>
     <div className="side-opts">
      <button className="opt" aria-pressed={liberadas} title={liberadas ? 'Mostrando só as hunts que o nível do treinador já alcança' : 'Mostrando também as hunts ainda bloqueadas'} onClick={() => patch({liberadas:!liberadas})}><Icon d={liberadas ? icons.check : icons.lock}/>Só liberadas</button>
@@ -199,13 +205,13 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
     </div>
     {!best ? message('Nenhuma hunt encontrada',liberadas ? 'A extensão não encontrou hunt viável para o nível desta conta.' : 'A extensão não encontrou hunt viável para este Pokémon.') : <div className="side-rank" key={`${current}|${liberadas}`}>
      <p className="sr" role="status">Melhor hunt: {best.nome}, {main(best,current)} {modes[current].unit}</p>
-     <section className="side-best" aria-label="Melhor hunt"><div className="best-top"><div><span className="best-tag"><Icon d={icons.crown}/>Melhor hunt</span><strong>{best.nome}</strong><small>{region(best)}{!best.liberada && <Locked/>}</small></div><Sprite sprite={best.sprite} name={best.nome} size={64}/></div>
+     <section className="side-best" key={best.nome} aria-label="Melhor hunt"><div className="best-top"><div><span className="best-tag"><Icon d={icons.crown}/>Melhor hunt</span><strong>{best.nome}</strong><small>{region(best)}{!best.liberada && <Locked/>}</small></div><Sprite sprite={best.sprite} name={best.nome} size={52}/></div>
       <div className="best-val"><Big row={best} mode={current}/></div>
       <dl><div><dt>{current === 'xp' ? 'Ouro/h' : 'XP/h'}</dt><dd>{short(current === 'xp' ? best.ouroPorHora : best.xpPorHora)}</dd></div><div><dt>Abates/h</dt><dd>{best.estimado ? '≈' : ''}{full.format(best.abatesPorHora)}</dd></div><div><dt>Mata em</dt><dd>{seconds(best.mataEm)}</dd></div><div><dt>Risco</dt><dd><Risk row={best}/></dd></div></dl>
      </section>
      <ol className="side-list" start={2}>{rows.slice(1).map((row,index) => <li key={`${row.nome}-${row.nivel}`} style={{'--i':index,'--p':top > 0 ? Math.max(.02,modes[current].value(row) / top) : 0} as CSSProperties}><span className="pos">{index + 2}</span><Sprite sprite={row.sprite} name={row.nome} size={sprite}/><div className="who"><strong title={row.nome}>{row.nome}</strong><small>{region(row)}{!row.liberada && <Locked/>}</small></div><div className="val"><b>{main(row,current)}</b><Risk row={row}/></div><small className="more">{current === 'xp' ? `${short(row.ouroPorHora)} ouro/h` : `${short(row.xpPorHora)} XP/h`} · {kills(row)}</small><i className="meter" aria-hidden="true"/></li>)}</ol>
     </div>}
-    <p className="side-foot">{ok.liberadas} de {ok.total} hunts liberadas{ok.versaoJogo && ` · jogo v${ok.versaoJogo}`}. Atualiza a cada 5 s.{busy === slot && <span className="side-sync" aria-hidden="true"> Atualizando…</span>}</p>
+    <p className="side-foot">{ok.liberadas} de {ok.total} hunts liberadas{ok.versaoJogo && ` · jogo v${ok.versaoJogo}`}. Atualiza a cada 5 s.<span className="side-sync" data-on={busy === slot || undefined} aria-hidden="true">Atualizando…</span></p>
    </>}
   </div>
   <p className="side-credit" hidden={tab === 'mercado'}>Dados: extensão /hunt (Liang){ok?.versaoExtensao && ` ${ok.versaoExtensao}`}</p>

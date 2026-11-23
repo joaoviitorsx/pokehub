@@ -2,12 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { rankDeals, type MarketCurrency, type MarketFocus, type MarketListing, type MarketScan } from '../domain/market';
 import { accumulate, accumulated, sessionKey, sessionStats, type MarketAccumulator, type MarketProgress } from '../domain/market-session';
 import { huntFetchable } from './hunt-queue';
+import { Icon, icons } from './icons';
 
 export const MARKET_REFRESH_MS = 5000, MARKET_MAX_PAGES = 30;
 const READ_TIMEOUT_MS = 12_000;
 const unavailable = 'Abra o Mercado nesta conta para analisar os anúncios.';
 type Entry = {data: MarketScan} | {error: string};
-const FOCUS: [MarketFocus, string][] = [['equilibrado', 'Equilibrado'], ['qualidade', 'Melhor qualidade'], ['desconto', 'Maior desconto']];
+const FOCUS: [MarketFocus, string][] = [['equilibrado', 'Equilibrado'], ['qualidade', 'Qualidade'], ['desconto', 'Desconto']];
 const CURRENCY: [MarketCurrency | 'todas', string][] = [['todas', 'Todas'], ['orb', 'Gemas'], ['gold', 'Coins']];
 const full = new Intl.NumberFormat('pt-BR', {maximumFractionDigits: 0});
 const compact = new Intl.NumberFormat('pt-BR', {notation: 'compact', maximumFractionDigits: 1});
@@ -16,6 +17,9 @@ const dec = (value: number) => value.toLocaleString('pt-BR', {minimumFractionDig
 const coin = (currency: MarketListing['currency']) => currency === 'orb' ? 'Gemas' : currency === 'gold' ? 'Coins' : '';
 const smartText = (smart: NonNullable<MarketListing['smart']>) => smart.pct === null ? smart.label : `${smart.pct > 0 ? '+' : '−'}${Math.abs(smart.pct).toLocaleString('pt-BR', {maximumFractionDigits: 1})}%`;
 
+// Faixa da barra de pontuação (verde/amarelo/vermelho, como a barra de vida do jogo) e raridade da potência.
+const tier = (score: number) => score >= 66 ? 'alto' : score >= 33 ? 'medio' : 'baixo';
+const progressOf = (progress: MarketProgress | null) => progress && progress.page != null && progress.pages ? Math.min(1, Math.max(0, progress.page / progress.pages)) : 0;
 const without = <T,>(record: Record<string, T>, key: string): Record<string, T> => Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
 
 export function MarketPanel({id, state}: {id: string | undefined; state: string}) {
@@ -85,7 +89,7 @@ export function MarketPanel({id, state}: {id: string | undefined; state: string}
       : !data!.open ? message('Mercado fechado', 'Abra o Mercado no jogo desta conta — a análise lê só o que está na tela.')
       : <>
         <div className="mkt-filters">
-          <div className="seg" role="group" aria-label="Foco" style={{'--n': FOCUS.length, '--i': FOCUS.findIndex(([key]) => key === focus)} as CSSProperties}>{FOCUS.map(([key, label]) => <button key={key} aria-pressed={focus === key} onClick={() => setFocus(key)}>{label}</button>)}</div>
+          <div className="seg" role="group" aria-label="Foco" style={{'--n': FOCUS.length, '--i': FOCUS.findIndex(([key]) => key === focus)} as CSSProperties}>{FOCUS.map(([key, label]) => <button key={key} aria-pressed={focus === key} title={key === 'qualidade' ? 'Foco: melhor qualidade' : key === 'desconto' ? 'Foco: maior desconto' : undefined} onClick={() => setFocus(key)}>{label}</button>)}</div>
           <div className="mkt-row">
             <label>Moeda <select value={currency} onChange={event => setCurrency(event.target.value as typeof currency)}>{CURRENCY.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
             <label>Nota mín. <select value={minNota} onChange={event => setMinNota(Number(event.target.value))}>{[0, 5, 6, 7, 8, 9].map(n => <option key={n} value={n}>{n || 'Qualquer'}</option>)}</select></label>
@@ -95,19 +99,19 @@ export function MarketPanel({id, state}: {id: string | undefined; state: string}
         </div>
         <div className="mkt-session">
           <p className="mkt-count" role="status">{pool.length ? `Analisando ${full.format(pool.length)} anúncios de ${stats.pagesSeen || 1} ${(stats.pagesSeen || 1) === 1 ? 'página vista' : 'páginas vistas'}${stats.pages ? ` (de ${full.format(stats.pages)})` : ''}` : 'Nenhum anúncio acumulado ainda'}{pool.length > 0 && <button className="opt" onClick={clear} disabled={reading}>Limpar</button>}</p>
-          {reading ? <div className="mkt-run"><span role="status">{progress ? `Lendo página ${progress.page ?? '?'} de ${progress.pages ?? '?'}…` : 'Preparando a leitura…'}</span><button onClick={stop}>Parar</button></div>
+          {reading ? <><div className="mkt-run"><span role="status">{progress ? `Lendo página ${progress.page ?? '?'} de ${progress.pages ?? '?'}…` : 'Preparando a leitura…'}</span><button onClick={stop}>Parar</button></div><div className="mkt-prog" role="progressbar" aria-label="Páginas lidas" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progressOf(progress) * 100)} style={{'--p': progressOf(progress)} as CSSProperties}><i/></div></>
             : <button className="mkt-readall" onClick={() => void readAll()} disabled={Boolean(hint)} title={hint || undefined}>Ler todas as páginas desta busca</button>}
           {!reading && hint && <p className="side-foot">{hint}</p>}
           {!reading && id && startError[id] && <p className="mkt-warn" role="alert">{startError[id]}</p>}
-          {finished && <p className="side-foot" role="status">{finished.error ?? `Leitura concluída: ${full.format(finished.collected)} anúncios lidos.`}</p>}
+          {finished && <p className={finished.error ? 'side-foot' : 'side-foot ok'} role="status">{!finished.error && <i className="burst" aria-hidden="true"/>}{finished.error ?? `Leitura concluída: ${full.format(finished.collected)} anúncios lidos.`}</p>}
           <p className="side-foot">O PokéHub só aperta “próxima página” no ritmo de uma pessoa. Não compra, não anuncia, não abre anúncios.</p>
         </div>
         {pool.length === 0 ? message('Nenhum anúncio na tela', 'O Mercado está aberto, mas não encontrei cards de Pokémon. Se a vitrine já tem anúncios, o layout do jogo pode ter mudado.')
           : deals.length === 0 ? message('Nada com estes filtros', 'Afrouxe os filtros para ver os anúncios analisados.')
-          : <ol className="mkt-list">{deals.map(({listing: l, score, reasons}, index) => <li key={`${l.id ?? l.name}-${index}`} className="mkt-card" style={{'--p': score / 100} as CSSProperties}>
-            <div className="mkt-top"><span className="pos">{index + 1}</span><strong title={l.name}>{l.shiny && <span className="mkt-shiny">Shiny</span>}{l.name}</strong><b className="mkt-price">{price(l.price)}{coin(l.currency) && <small> {coin(l.currency)}</small>}</b></div>
-            <p className="mkt-meta">{[l.level !== null && `Nv ${full.format(l.level)}`, l.potencia !== null && `P${l.potencia}`, l.nota !== null && `Nota ${dec(l.nota)}`].filter(Boolean).join(' · ') || 'Sem detalhes na tela'}{l.smart && <span className="mkt-smart" data-label={l.smart.label} title={l.smart.market !== null ? `Mercado: ${price(l.smart.market)}` : 'Selo da Smart Market'}>{smartText(l.smart)}</span>}</p>
-            <div className="mkt-bar" role="img" aria-label={`Pontuação ${Math.round(score)} de 100`}><i/><span>{Math.round(score)}</span></div>
+          : <ol className="mkt-list">{deals.map(({listing: l, score, reasons}, index) => <li key={`${l.id ?? l.name}-${index}`} className="mkt-card" data-shiny={l.shiny || undefined} style={{'--p': score / 100} as CSSProperties}>
+            <div className="mkt-top"><span className="pos">{index + 1}</span><strong title={l.name}>{l.shiny && <span className="mkt-shiny"><Icon d={icons.spark}/>Shiny</span>}{l.name}</strong><b className="mkt-price">{price(l.price)}{coin(l.currency) && <small> {coin(l.currency)}</small>}</b></div>
+            <p className="mkt-meta">{[l.level !== null && `Nv ${full.format(l.level)}`, l.nota !== null && `Nota ${dec(l.nota)}`].filter(Boolean).join(' · ') || (l.potencia === null ? 'Sem detalhes na tela' : '')}{l.potencia !== null && <span className="mkt-pot" data-p={Math.min(5, Math.max(1, Math.round(l.potencia)))} title={`Potência ${l.potencia}`}>P{l.potencia}</span>}{l.smart && <span className="mkt-smart" data-label={l.smart.label} title={l.smart.market !== null ? `Mercado: ${price(l.smart.market)}` : 'Selo da Smart Market'}>{smartText(l.smart)}</span>}</p>
+            <div className="mkt-bar" data-tier={tier(score)} role="img" aria-label={`Pontuação ${Math.round(score)} de 100`}><i/><span>{Math.round(score)}</span></div>
             <ul className="mkt-why">{reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
           </li>)}</ol>}
         {!data!.smart && pool.length > 0 && <p className="side-foot">Instale/ative a Smart Market em Gerenciar → Extensões para comparar com o preço de mercado.</p>}
