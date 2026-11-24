@@ -982,3 +982,23 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 .ext-rec strong { font-family: var(--fonte-titulo); font-size: 15px; }
 .ext-rec p { margin: 0; font-size: 12px; line-height: 1.45; color: var(--pi-sobre-dim); }
 .ext-rec-btns { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+
+/* ---------- Reposição assistida (aba Loja) ---------- */
+.stk h3 > span { display: inline-flex; align-items: center; gap: 6px; }
+.stk h3 .ic { width: 13px; height: 13px; }
+.stk-mins { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.stk-mins label, .stk-kit { display: grid; gap: 3px; min-width: 0; font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: var(--pi-vao-dim); }
+.stk-mins input { width: 100%; height: 28px; font-size: 12px; }
+.stk-kit select { width: 100%; height: 28px; }
+.stk-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.stk-list li { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; padding: 6px 8px; border-radius: 6px; background: var(--pi-campo); box-shadow: inset 3px 0 0 var(--c), inset 0 0 0 1px var(--pi-mad-linha); }
+.stk-list li[data-low] { box-shadow: inset 3px 0 0 var(--c), inset 0 0 0 1px var(--pi-laranja); }
+.stk-who { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: 12px; font-weight: 700; }
+.stk-who i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 1.5px var(--pi-mad-linha); }
+.stk-cats { flex: 1; display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.stk-chip { padding: 0 6px; border-radius: 4px; font: 600 10px/17px var(--fonte); font-style: normal; color: var(--pi-sobre-dim); background: var(--pi-vao); box-shadow: inset 0 0 0 1px var(--pi-mad-linha); white-space: nowrap; }
+.stk-chip b { color: var(--pi-verde); }
+.stk-chip[data-low] { color: #fff; background: #7a2a1f; box-shadow: inset 0 0 0 1px var(--pi-vermelho); }
+.stk-chip[data-low] b { color: var(--pi-ouro-luz); }
+.stk-none { flex: 1; text-align: right; font-size: 11px; color: var(--pi-vao-dim); }
+.stk-list button { height: 26px; padding: 0 10px; font-size: 10px; }

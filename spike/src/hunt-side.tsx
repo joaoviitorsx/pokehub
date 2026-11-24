@@ -107,7 +107,7 @@ const waiting: Record<string,[string,string]> = {
 const skeleton = (label:string) => <div className="side-skel" role="status"><span className="sr">{label}</span><i data-k="poke"/><i data-k="seg"/><i data-k="card"><Ball className="wobble"/></i><i/><i/><i/><i/></div>;
 
 // focusId: conta em foco/expandida (a lateral a seleciona ao abrir e quando ela muda); onAccount: devolve a conta mostrada (o processo principal a usa no foco automático).
-export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focusId,onAccount,lite=false,tabRequest=null}:{profiles:Profile[]; states:Record<string,string>; prefs:SidePrefs; onPrefs:Dispatch<SetStateAction<SidePrefs>>; onClose:() => void; onSettings:() => void; focusId:string|null; onAccount:(id:string|null) => void; lite?:boolean; tabRequest?:{tab:'mercado'; n:number} | null}) {
+export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focusId,onAccount,lite=false,tabRequest=null}:{profiles:Profile[]; states:Record<string,string>; prefs:SidePrefs; onPrefs:Dispatch<SetStateAction<SidePrefs>>; onClose:() => void; onSettings:() => void; focusId:string|null; onAccount:(id:string|null) => void; lite?:boolean; tabRequest?:{tab:'mercado' | 'loja'; n:number; profileId?: string} | null}) {
  const [pick,setPick] = useState<string|null>(focusId);
  const [seenFocus,setSeenFocus] = useState(focusId);
  if (seenFocus !== focusId) { setSeenFocus(focusId); if (focusId) setPick(focusId); }
@@ -213,7 +213,7 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
   <div className="seg side-tabs" role="group" aria-label="Seção" style={{'--n':5,'--i':['cacar','mercado','loja','capturas','twitch'].indexOf(tab)} as CSSProperties}><button aria-pressed={tab === 'cacar'} onClick={() => setTab('cacar')}>Caçar</button><button aria-pressed={tab === 'mercado'} onClick={() => setTab('mercado')}>Mercado</button><button aria-pressed={tab === 'loja'} onClick={() => setTab('loja')}>Loja</button><button aria-pressed={tab === 'capturas'} onClick={() => setTab('capturas')}>Capturas</button><button aria-pressed={tab === 'twitch'} onClick={() => setTab('twitch')}>Lives</button></div>
   {tab === 'mercado' && <MarketPanel id={id} state={state} profiles={profiles}/>}
   <CapturesPanel profiles={profiles} active={tab === 'capturas'}/>
-  <ShopPanel profiles={profiles} states={states} id={id} active={tab === 'loja'}/>
+  <ShopPanel profiles={profiles} states={states} id={id} active={tab === 'loja'} restockRequest={tabRequest?.tab === 'loja' && tabRequest.profileId ? {profileId: tabRequest.profileId, n: tabRequest.n} : null}/>
   <LivesPanel profiles={profiles} active={tab === 'twitch'}/>
   {lite && tab === 'cacar' && <p className="lite-tip" role="note">Nas contas que você não está olhando, ative o Modo economia do próprio jogo (botão na tela de sessão) — economiza CPU/GPU.</p>}
   <div className="side-body" hidden={tab !== 'cacar'} aria-busy={state === 'ready' && !entry}>

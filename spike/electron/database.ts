@@ -5,9 +5,9 @@ export function openDatabase(path: string): Database {
   const db = new DatabaseSync(path);
   try {
     const version = db.prepare('PRAGMA user_version').get()?.user_version;
-    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== 11 && version !== 12 && version !== 13 && version !== 14 && version !== 15 && version !== 16 && version !== 17) throw new Error('Versão de banco incompatível');
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4 && version !== 5 && version !== 6 && version !== 7 && version !== 8 && version !== 9 && version !== 10 && version !== 11 && version !== 12 && version !== 13 && version !== 14 && version !== 15 && version !== 16 && version !== 17 && version !== 18) throw new Error('Versão de banco incompatível');
     db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON'); // NORMAL é o recomendado com WAL: sem corromper, grava bem mais rápido // as cascatas do Grindolino dependem das FKs em toda conexão
-    if (version < 17) {
+    if (version < 18) {
       db.exec('BEGIN IMMEDIATE');
       try {
         if (version === 0) db.exec('CREATE TABLE profiles (id TEXT PRIMARY KEY, label TEXT NOT NULL, emailLabel TEXT NOT NULL, characterName TEXT NOT NULL, colorToken TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL)');
@@ -63,7 +63,9 @@ export function openDatabase(path: string): Database {
         // v17 (1.1.1): extensões do catálogo removidas pelo usuário (JSON); a detecção automática não as traz de volta. A 1.1.0 já saiu em v16,
         // então isto PRECISA de versão própria (não pode ir dentro da v16). Reentrante.
         if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='ext_dismissed'").get()) db.exec("ALTER TABLE workspace_settings ADD COLUMN ext_dismissed TEXT NOT NULL DEFAULT '[]'");
-        db.exec('PRAGMA user_version=17; COMMIT');
+        // v18 (1.1.2): reposição assistida — mínimos de estoque por categoria (JSON validado ao ler). Reentrante.
+        if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='stock_rules'").get()) db.exec("ALTER TABLE workspace_settings ADD COLUMN stock_rules TEXT NOT NULL DEFAULT '{}'");
+        db.exec('PRAGMA user_version=18; COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
     return db;

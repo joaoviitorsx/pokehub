@@ -10,6 +10,8 @@ import { createMarketReader } from './market-read';
 import { createMarketBadges } from './market-badges';
 import { createFichaReview } from './ficha-review';
 import { createDeadlines } from './deadlines';
+import { createStockWatch } from './stock-watch';
+import { lowText } from '../domain/stock';
 import { createAlertToast } from './alert-toast';
 import { DAY_TYPE_SCRIPT, sanitizeDayType, teamPick } from './team-pick';
 import { dayTypeNotice } from '../domain/team-pick';
@@ -662,6 +664,19 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('deadlines:refresh', event => invoke(event, () => { deadlines.refresh(); }));
   ipcMain.handle('deadlines:notify', event => invoke(event, () => preferences.getDeadlineNotify()));
   ipcMain.handle('deadlines:setNotify', (event,value: unknown) => invoke(event, () => preferences.setDeadlineNotify(value)));
+  // Reposição assistida (ver stock-watch.ts): avisa estoque baixo; clicar no aviso abre a Loja com a reposição daquela conta pronta para confirmar.
+  const stockWatch = createStockWatch({known:() => store.list().map(profile => ({id:profile.id, label:profile.label})), target:id => huntTarget(id), rules:() => preferences.getStockRules(), lite:() => perf.lite,
+    notify:(profileId,label,stock,low) => {
+      if (!window.isDestroyed()) window.webContents.send('stock:low',{profileId,low});
+      if (!Notification.isSupported()) return;
+      try { const n = new Notification({title:`Estoque baixo · ${label}`, body:`${lowText(stock,low,preferences.getStockRules())}. Clique para repor (você confirma a compra).`}); n.on('click',() => { showWindow(); if (!window.isDestroyed()) window.webContents.send('stock:openRestock',profileId); }); n.show(); } catch { /* sem notificações */ }
+    },
+    emit:all => { if (!window.isDestroyed()) window.webContents.send('stock:changed',all); }});
+  stockWatch.start();
+  app.on('before-quit', () => stockWatch.stop());
+  ipcMain.handle('stock:get', event => invoke(event, () => ({all:stockWatch.all(), rules:preferences.getStockRules()})));
+  ipcMain.handle('stock:setRules', (event,value: unknown) => invoke(event, () => { const rules = preferences.setStockRules(value); stockWatch.refresh(); return rules; }));
+  ipcMain.handle('stock:refresh', event => invoke(event, () => { stockWatch.refresh(); }));
   ipcMain.handle('daytype:notify', event => invoke(event, () => preferences.getDayTypeNotify()));
   ipcMain.handle('daytype:setNotify', (event,value: unknown) => invoke(event, () => preferences.setDayTypeNotify(value)));
   ipcMain.handle('hunt:snapshot', async (event,id: unknown,soLiberadas: unknown = true) => {

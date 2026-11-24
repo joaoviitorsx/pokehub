@@ -144,3 +144,9 @@ Leitura **somente do DOM** do painel esquerdo "CAPTURAS" do jogo (lista da sess�
 # Retratos centralizados (aba Caçar)
 
 - O atlas do jogo não manda CORS, então a interface não lê os pixels. O contorno real (pixels com alfa > 16) de cada janela de retrato é medido **na página do jogo** (mesma origem do atlas), uma vez por retrato, e o retrato é centralizado e escalado por ele (escala inteira quando cabe). Sem contorno, vale o recorte antigo. A animação de entrada do retrato passou a usar só opacidade: antes ela sobrescrevia a escala (`transform`) enquanto rodava.
+
+# Reposição assistida — aba Loja
+
+- **Fonte (conferida no jogo real em 2026-11-24):** barramento da /hunt, `estado.balls` e `estado.items` (id → quantidade), `estado.gold`, e `estado.automation.ballIds/potionIds/reviveIds` (o que a automação do jogo usa). Nomes das pokébolas pelo `welcome.catalogoBolas` (só `compravel`; a Beast Ball fica de fora). Poções e revives só têm id ali, então são somados por categoria.
+- **Regra:** categoria abaixo do mínimo (padrão 300 / 100 / 20; 0 = não vigiar) avisa uma vez; volta a poder avisar quando passar 20% do mínimo. A cada 3 min (Modo leve: 6).
+- **Compra:** o aviso (notificação ou botão "Repor") só chama a reposição da Loja com o kit escolhido: lê o Market, monta só o que falta e mostra a confirmação. Nada é comprado sem "Confirmar compra".

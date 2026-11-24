@@ -64,6 +64,21 @@ contextBridge.exposeInMainWorld('pokehub', {
   drag: (active: boolean) => ipcRenderer.invoke('session:drag',active),
   huntSnapshot: (id: string,soLiberadas?: boolean) => ipcRenderer.invoke('hunt:snapshot',id,soLiberadas),
   huntTeam: (id: string,force?: boolean) => ipcRenderer.invoke('hunt:team',id,force === true),
+  stock: {
+    get: () => ipcRenderer.invoke('stock:get'),
+    setRules: (rules: unknown) => ipcRenderer.invoke('stock:setRules',rules),
+    refresh: () => ipcRenderer.invoke('stock:refresh'),
+    onChanged: (callback: (all: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, all: unknown) => callback(all);
+      ipcRenderer.on('stock:changed',listener);
+      return () => ipcRenderer.removeListener('stock:changed',listener);
+    },
+    onOpenRestock: (callback: (profileId: string) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, profileId: string) => callback(profileId);
+      ipcRenderer.on('stock:openRestock',listener);
+      return () => ipcRenderer.removeListener('stock:openRestock',listener);
+    },
+  },
   deadlines: {
     get: () => ipcRenderer.invoke('deadlines:get'),
     refresh: () => ipcRenderer.invoke('deadlines:refresh'),

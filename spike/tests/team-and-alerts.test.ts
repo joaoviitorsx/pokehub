@@ -168,7 +168,7 @@ describe('migração 1.1.0 → 1.1.1', () => {
       expect(prefs.listMarketAlerts()).toHaveLength(1);
       prefs.close();
       const check = new DatabaseSync(path);
-      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:17});
+      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:18});
       check.close();
     } finally { rmSync(dir, {recursive:true, force:true}); }
   });

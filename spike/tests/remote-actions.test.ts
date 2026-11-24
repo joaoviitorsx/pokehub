@@ -127,7 +127,7 @@ describe('R4: migração v14', () => {
   it('cria remote_confirms, remote_purchases e a coluna tz de remote_spend, sem destruir nada', () => {
     const db = new DatabaseSync(dbPath);
     try {
-      expect(db.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 17});
+      expect(db.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 18});
       const cols = (t: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as {name: string}[]).map(c => c.name);
       expect(cols('remote_spend')).toEqual(['day', 'profile_id', 'gold', 'tz']);
       expect(cols('remote_confirms')).toEqual(['id', 'device_id', 'plan_hash', 'plan_json', 'created_at', 'expires_at', 'used', 'idem_key', 'result_json']);

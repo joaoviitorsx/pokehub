@@ -3,6 +3,9 @@ import type { Profile } from '../domain/profiles';
 import { MAX_QTY, SHOP_CATALOG, isCatalogItem, SHOP_CATS, fitPlan, loadKits, orderTotal, planRestock, planTotal, saveKits, isShopCat, MAX_KITS, MAX_KIT_LINES, type Kit, type ShopCat, type ShopItem, type ShopLine, type ShopLineResult, type ShopOrder, type ShopProgress, type ShopRead } from '../domain/shop';
 import { huntFetchable } from './hunt-queue';
 import { Ball, Icon, icons } from './icons';
+import { catLabel, DEFAULT_STOCK_RULES, STOCK_CATS, type StockRules } from '../domain/stock';
+import type { StockEntry } from '../electron/stock-watch';
+import type { CSSProperties } from 'react';
 
 const full = new Intl.NumberFormat('pt-BR', {maximumFractionDigits: 0});
 const fail = 'Falha de comunicação com o aplicativo.';
@@ -25,7 +28,7 @@ function ItemSelect({value, onChange, catalog, label}: {value: string; onChange:
   return <select value={value} aria-label={label} onChange={event => onChange(event.target.value)}>{SHOP_CATS.map(cat => <optgroup key={cat} label={cat}>{catalog[cat].map(name => <option key={name} value={keyOf(cat, name)}>{name}</option>)}</optgroup>)}</select>;
 }
 
-export function ShopPanel({profiles, states, id, active}: {profiles: Profile[]; states: Record<string, string>; id: string | undefined; active: boolean}) {
+export function ShopPanel({profiles, states, id, active, restockRequest = null}: {profiles: Profile[]; states: Record<string, string>; id: string | undefined; active: boolean; restockRequest?: {profileId: string; n: number} | null}) {
   const [sel, setSel] = useState<string[]>(() => id ? [id] : []);
   const [seen, setSeen] = useState(id);
   if (seen !== id) { setSeen(id); if (id) setSel([id]); }
@@ -39,6 +42,7 @@ export function ShopPanel({profiles, states, id, active}: {profiles: Profile[]; 
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [run, setRun] = useState<Run | null>(null);
   const opened = useRef(false);
+  const idleRef = useRef(true);
   const running = Boolean(run && !run.done);
   const liveIds = useMemo(() => profiles.filter(p => sel.includes(p.id) && huntFetchable(states[p.id])).map(p => p.id), [profiles, sel, states]);
   const label = (pid: string) => profiles.find(p => p.id === pid)?.label ?? 'Conta';
@@ -65,11 +69,12 @@ export function ShopPanel({profiles, states, id, active}: {profiles: Profile[]; 
   }, [active]);
 
   // Leitura nova + plano por conta + confirmação. Nada é comprado antes do "Confirmar compra".
-  async function prepare(title: string, build: (read: ShopRead) => {orders: ShopOrder[]; note?: string}) {
-    if (!liveIds.length) { setMsg('Selecione ao menos uma conta com a sessão aberta.'); return; }
+  async function prepare(title: string, build: (read: ShopRead) => {orders: ShopOrder[]; note?: string}, only?: string[]) {
+    const ids = only ? only.filter(pid => profiles.some(p => p.id === pid && huntFetchable(states[p.id]))) : liveIds;
+    if (!ids.length) { setMsg(only ? 'A sessão desta conta precisa estar aberta e logada para repor.' : 'Selecione ao menos uma conta com a sessão aberta.'); return; }
     setWork('prepare'); setMsg('');
-    const fresh = await readAccounts(liveIds);
-    const entries = liveIds.map((pid): Entry => {
+    const fresh = await readAccounts(ids);
+    const entries = ids.map((pid): Entry => {
       const r = fresh[pid];
       if (!r || 'error' in r) return {id: pid, label: label(pid), gold: null, lines: [], note: r ? r.error : 'Sem leitura.'};
       const b = build(r.data);
@@ -88,7 +93,29 @@ export function ShopPanel({profiles, states, id, active}: {profiles: Profile[]; 
       return it ? {orders: [{cat, name, qty: q, unitPrice: it.price, total: orderTotal(q, it.price)}]} : {orders: [], note: 'item não aparece no Market'};
     });
   };
-  const restock = (kit: Kit) => void prepare(`Repor: ${kit.name}`, read => { const orders = planRestock(read.items, kit.lines); return {orders, note: orders.length ? undefined : 'já está completo'}; });
+  const restock = (kit: Kit, only?: string[]) => void prepare(`Repor: ${kit.name}`, read => { const orders = planRestock(read.items, kit.lines); return {orders, note: orders.length ? undefined : 'já está completo'}; }, only);
+  // ---- Reposição assistida: estoque vigiado pelo processo principal (sem abrir o Market); "Repor" usa o kit escolhido e a confirmação de sempre
+  const [stock, setStock] = useState<Record<string, StockEntry>>({});
+  const [rules, setRules] = useState<StockRules>(DEFAULT_STOCK_RULES);
+  const [stockKit, setStockKit] = useState<string>(() => { try { return localStorage.getItem('pokehub.stockKit') ?? ''; } catch { return ''; } });
+  useEffect(() => { try { localStorage.setItem('pokehub.stockKit', stockKit); } catch { /* só não persiste */ } }, [stockKit]);
+  useEffect(() => {
+    let alive = true;
+    void window.pokehub.stock.get().then(r => { if (alive && r.ok) { setStock(r.data.all); setRules(r.data.rules); } }).catch(() => undefined);
+    const off = window.pokehub.stock.onChanged(all => setStock(all));
+    return () => { alive = false; off(); };
+  }, []);
+  const kitForStock = kits.find(k => k.id === stockKit) ?? kits[0];
+  const saveRules = (next: StockRules) => { setRules(next); void window.pokehub.stock.setRules(next).then(r => { if (r.ok) setRules(r.data); }).catch(() => undefined); };
+  const restockAccount = (pid: string) => { if (!kitForStock) { setMsg('Crie um kit de reposição (abaixo) para o PokéHub saber quanto comprar.'); return; } restock(kitForStock, [pid]); };
+  // aviso do sistema "Estoque baixo" clicado: prepara a reposição da conta (a compra ainda espera o "Confirmar compra")
+  const [seenReq, setSeenReq] = useState(restockRequest?.n ?? 0);
+  useEffect(() => {
+    if (!restockRequest || restockRequest.n === seenReq || !idleRef.current) return;
+    setSeenReq(restockRequest.n);
+    restockAccount(restockRequest.profileId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restockRequest]);
 
   async function start(c: Confirm) {
     const entries = c.entries.map(e => ({...e, lines: e.lines.filter(l => l.fits)})).filter(e => e.lines.length);
@@ -126,11 +153,24 @@ export function ShopPanel({profiles, states, id, active}: {profiles: Profile[]; 
   };
   const setLine = (index: number, patch: Partial<Kit['lines'][number]>) => setDraft(d => d && {...d, lines: d.lines.map((l, i) => i === index ? {...l, ...patch} : l)});
   const idle = work === null && !running;
+  useEffect(() => { idleRef.current = idle; });
   const selRead = liveIds.flatMap(pid => { const r = reads[pid]; return r && 'data' in r ? [[pid, r.data] as const] : []; });
   const unit = (data: ShopRead): ShopItem | undefined => { const p = splitKey(item); return p ? data.items.find(i => i.cat === p[0] && i.name === p[1]) : undefined; };
 
   return <>
     <div className="side-body shop" hidden={!active} aria-busy={work !== null || running}>
+      <section className="shop-box stk" aria-label="Reposição assistida">
+        <h3><span><Icon d={icons.bell}/> Reposição assistida</span><label className="switch ma-switch" title={rules.on ? 'Desligar os avisos de estoque baixo' : 'Ligar os avisos de estoque baixo'}><span className="sr">Avisos de estoque</span><input type="checkbox" role="switch" checked={rules.on} onChange={event => saveRules({...rules, on: event.target.checked})}/></label></h3>
+        <p className="side-foot">Vigia o estoque que a automação do jogo usa (sem abrir o Market) e avisa quando ficar abaixo do mínimo. Repor monta a compra pelo kit e só compra depois do seu “Confirmar compra”.</p>
+        <div className="stk-mins">{STOCK_CATS.map(cat => <label key={cat}>{catLabel[cat]} mín.<input type="number" min={0} max={1000000} value={rules.min[cat]} disabled={!rules.on} onChange={event => setRules({...rules, min: {...rules.min, [cat]: Math.max(0, Math.min(1_000_000, Math.floor(Number(event.target.value)) || 0))}})} onBlur={() => saveRules(rules)}/></label>)}</div>
+        {kits.length > 0 && <label className="stk-kit">Kit da reposição<select value={kitForStock?.id ?? ''} onChange={event => setStockKit(event.target.value)}>{kits.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}</select></label>}
+        <ul className="stk-list">{profiles.map(p => { const e = stock[p.id]; return <li key={p.id} data-low={e && e.low.length ? '' : undefined} style={{'--c': p.colorToken} as CSSProperties}>
+          <span className="stk-who"><i/>{p.label}</span>
+          {e ? <span className="stk-cats">{STOCK_CATS.map(cat => <i key={cat} className="stk-chip" data-low={e.low.includes(cat) || undefined} title={cat === 'Pokebolas' && e.stock.cats.Pokebolas.itens.length ? e.stock.cats.Pokebolas.itens.map(b => `${b.nome}: ${full.format(b.qtd)}`).join(' · ') : `${catLabel[cat]} em uso pela automação`}>{catLabel[cat]} <b>{full.format(e.stock.cats[cat].total)}</b></i>)}</span>
+            : <small className="stk-none">{huntFetchable(states[p.id]) ? 'precisa da extensão /hunt' : 'sessão fechada'}</small>}
+          {e && e.low.length > 0 && <button className="primary" disabled={!idle || !huntFetchable(states[p.id])} title={kitForStock ? `Repor com o kit “${kitForStock.name}” (você confirma)` : 'Crie um kit abaixo'} onClick={() => restockAccount(p.id)}>Repor</button>}
+        </li>; })}</ul>
+      </section>
       <fieldset className="shop-accs"><legend>Contas</legend>
         {profiles.map(p => <label key={p.id} className="shop-acc-pick" data-off={!huntFetchable(states[p.id]) || undefined}><input type="checkbox" checked={sel.includes(p.id)} disabled={!idle} onChange={event => setSel(old => event.target.checked ? [...old, p.id] : old.filter(x => x !== p.id))}/><span title={p.label}>{p.label}</span></label>)}
       </fieldset>

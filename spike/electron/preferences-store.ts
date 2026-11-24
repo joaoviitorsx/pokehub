@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from './database';
 import type { PerformancePrefs, StartupMode, TrayPrefs } from '../contracts/preferences';
 import { MAX_ALERTS, sanitizeAlert, type MarketAlert } from '../domain/market-alerts';
+import { sanitizeRules, type StockRules } from '../domain/stock';
 
 export interface ExtensionRow { id: string; path: string; enabled: boolean; approvedHosts: string[] }
 const parseHosts = (value: unknown): string[] => {
@@ -115,6 +116,13 @@ export class PreferencesStore {
   }
   setExtensionEnabled(id: string, enabled: unknown): void {
     if (typeof id !== 'string' || typeof enabled !== 'boolean' || this.db.prepare('UPDATE extensions SET enabled=? WHERE id=?').run(enabled ? 1 : 0,id).changes !== 1) throw new Error('Extensão inválida');
+  }
+  getStockRules(): StockRules { try { return sanitizeRules(JSON.parse(String(this.db.prepare('SELECT stock_rules FROM workspace_settings WHERE id=1').get()?.stock_rules ?? '{}'))); } catch { return sanitizeRules(null); } }
+  /** Grava só o que passa na validação (o resto volta ao padrão). */
+  setStockRules(value: unknown): StockRules {
+    const rules = sanitizeRules(value);
+    if (this.db.prepare('UPDATE workspace_settings SET stock_rules=? WHERE id=1').run(JSON.stringify(rules)).changes !== 1) throw new Error('Preferência ausente');
+    return rules;
   }
   /** Ids do catálogo que o usuário removeu: a detecção automática ao abrir não os adiciona de novo. */
   dismissedExtensions(): string[] {
