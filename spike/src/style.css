@@ -1017,3 +1017,7 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 .stk-auto-row strong { font-size: 12px; }
 .stk-max { display: grid; gap: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--pi-vao-dim); }
 .stk-auto .side-foot { margin: 0; }
+/* Lives: "Assistir no navegador" */
+.tw-browser { display: grid; gap: 6px; margin-top: 8px; }
+.tw-browser > button { width: 100%; justify-content: center; }
+.tw-browser .tw-hint { margin: 0; }

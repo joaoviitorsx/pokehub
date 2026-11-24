@@ -101,6 +101,10 @@ function StreamPanel({platform, profiles, active}: {platform: StreamPlatform; pr
         <p className="tw-hint">O canal oficial na {nome} que dá os pontos para os boosters. Pode colar o link do canal.</p>
       </form>
       : <div className="tw-channel-now"><Icon d={icons.tv}/><div><small>Canal</small><strong title={`${platform === 'kick' ? 'kick.com' : 'twitch.tv'}/${info?.channel}`}>{info?.channel}</strong></div><button className="icon" aria-label="Trocar canal" title="Trocar canal" onClick={() => setEditing(true)}><Icon d={icons.edit}/></button></div>}
+      {hasChannel && !showForm && <div className="tw-browser">
+        <button className={platform === 'twitch' ? 'primary' : undefined} disabled={busy !== null} title={`Abre ${platform === 'kick' ? 'kick.com' : 'twitch.tv'}/${info?.channel} no seu navegador padrão, onde você já está logado`} onClick={() => void act('browser', () => window.pokehub.streams.browser(platform))}><Icon d={icons.link}/>Assistir no navegador</button>
+        {platform === 'twitch' && <p className="tw-hint">A Twitch está bloqueando o login dentro do PokéHub. Assista pelo seu navegador (logado na sua conta): os pontos contam do mesmo jeito. Deixe a aba aberta, pode ser minimizada e sem som.</p>}
+      </div>}
     </section>
 
     {hasChannel && (info?.accounts.length ?? 0) > 0 && <div className="tw-summary" role="status">

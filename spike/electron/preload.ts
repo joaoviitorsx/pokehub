@@ -175,6 +175,7 @@ contextBridge.exposeInMainWorld('pokehub', {
     show: (platform: string,id: string) => ipcRenderer.invoke('stream:show',platform,id),
     hide: (platform: string,id: string) => ipcRenderer.invoke('stream:hide',platform,id),
     rewards: (platform: string,id: string) => ipcRenderer.invoke('stream:rewards',platform,id),
+    browser: (platform: string) => ipcRenderer.invoke('stream:browser',platform),
     onChanged: (callback: (info: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, info: unknown) => callback(info);
       ipcRenderer.on('stream:changed',listener);

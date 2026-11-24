@@ -38,7 +38,7 @@ export function createMockStreams(profileIds: () => string[], fresh: boolean) {
   return {
     get: (p: StreamPlatform) => pick(p).get(), setChannel: (p: StreamPlatform, v: string) => pick(p).setChannel(v), link: (p: StreamPlatform, id: string) => pick(p).link(id),
     unlink: (p: StreamPlatform, id: string) => pick(p).unlink(id), update: (p: StreamPlatform, id: string, patch: Partial<Pick<TwitchAccount, 'enabled' | 'autoClaim' | 'sound'>>) => pick(p).update(id, patch),
-    show: (p: StreamPlatform, id: string) => pick(p).show(id), hide: (p: StreamPlatform, id: string) => pick(p).hide(id), rewards: (p: StreamPlatform, id: string) => pick(p).rewards(id),
+    show: (p: StreamPlatform, id: string) => pick(p).show(id), hide: (p: StreamPlatform, id: string) => pick(p).hide(id), rewards: (p: StreamPlatform, id: string) => pick(p).rewards(id), browser: (p: StreamPlatform) => pick(p).get(),
     onChanged: (callback: (info: TwitchInfo) => void) => { const a = all.twitch.onChanged(callback), b = all.kick.onChanged(callback); return () => { a(); b(); }; },
   };
 }

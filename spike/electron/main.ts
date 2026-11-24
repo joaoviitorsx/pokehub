@@ -582,6 +582,15 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('stream:update', (event,platform: unknown,id: unknown,patch: unknown) => invokeStream(event, platform, service => service.update(id,patch)));
   ipcMain.handle('stream:show', (event,platform: unknown,id: unknown) => invokeStream(event, platform, service => service.show(id)));
   ipcMain.handle('stream:hide', (event,platform: unknown,id: unknown) => invokeStream(event, platform, service => service.hide(id)));
+  // "Assistir no navegador": abre o canal salvo no navegador padrão do usuário (onde ele já está logado). A URL é montada aqui, nunca vem do renderer.
+  ipcMain.handle('stream:browser', (event,platform: unknown) => invokeStream(event, platform, async service => {
+    const info = service.info(), spec = PLATFORMS[info.platform];
+    if (!info.channel) throw new TwitchRefused('Defina o canal da live primeiro.');
+    const url = spec.channelUrl(info.channel);
+    if (!spec.isAllowedNavigation(url)) throw new TwitchRefused('Canal inválido.');
+    try { await shell.openExternal(url); } catch { throw new TwitchRefused('Não foi possível abrir o navegador.'); }
+    return info;
+  }));
   ipcMain.handle('stream:rewards', (event,platform: unknown,id: unknown) => invokeStream(event, platform, service => service.rewards(id)));
   ipcMain.handle('network:get', event => invoke(event, networkInfo));
   ipcMain.handle('network:mode', (event,mode: unknown) => invoke(event, () => { networkStore.setMode(mode); return networkInfo(); }));
