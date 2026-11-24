@@ -37,7 +37,10 @@ import { ProfileLimitError, type ProfileInput } from '../domain/profiles';
 import { createRemoteHub, type RemoteHub } from '../remote/hub';
 import { createRemoteApi } from '../remote/api';
 import { registerRemoteIpc } from '../remote/ipc';
-import { clearAllSessionData, createWipeQueue, findOrphans, runPendingWipes, type WipeQueue } from './partition-wipe';
+import { clearAllSessionData, createWipeQueue, findOrphans, runPendingWipes, TWITCH_PREFIX, type WipeQueue } from './partition-wipe';
+import { createTwitchService, TwitchRefused, type TwitchService } from './twitch';
+import { TwitchStore } from './twitch-store';
+import type { TwitchInfo } from '../contracts/twitch';
 import { guardNewContents, isAppFrameUrl, lockSession, SAFE_DIALOGS } from './runtime-guards';
 import { createAccountLock } from './account-lock';
 import { readJsonBounded } from './bounded-body';
@@ -246,6 +249,15 @@ const appIndex = join(__dirname,'../../dist/index.html'), appUrl = pathToFileURL
 const trusted = (event: IpcMainInvokeEvent) => Boolean(window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame && event.senderFrame === window.webContents.mainFrame && isAppFrameUrl(event.senderFrame.url,appUrl));
 const accountLock = createAccountLock(); // uma ação por conta: leitura do Market e Loja não se sobrepõem
 let wipeQueue: WipeQueue; // apagamento de partições no próximo início (ver partition-wipe.ts)
+let twitchWipeQueue: WipeQueue; // idem para as sessões da Twitch (pasta pokehubtw-<id>)
+let twitchStore: TwitchStore;
+let twitch: TwitchService | null = null; // Twitch em segundo plano (ver twitch.ts)
+// Twitch: ações assíncronas só da janela do PokéHub; recusas trazem a mensagem para a interface.
+async function invokeTwitch(event: IpcMainInvokeEvent, action: (service: TwitchService) => TwitchInfo | Promise<TwitchInfo>) {
+  if (!trusted(event) || !twitch) return {ok:false, error:'Origem não autorizada.'};
+  try { return {ok:true, data:await action(twitch)}; }
+  catch (error) { return {ok:false, error:error instanceof TwitchRefused ? error.message : 'Não foi possível concluir a ação da Twitch. Tente novamente.'}; }
+}
 function report(id: string, state: string) {
   const changed = statusChanged(states.get(id),state);
   states.set(id,state);
@@ -478,11 +490,14 @@ if (primary) app.whenReady().then(() => {
   restrictUserData(app.getPath('userData'));
   wipeQueue = createWipeQueue(join(app.getPath('userData'),'pending-wipes.json'));
   try { runPendingWipes(app.getPath('userData'),wipeQueue); } catch { console.error('Falha ao apagar dados de sessões removidas.'); } // ANTES de qualquer sessão existir
+  twitchWipeQueue = createWipeQueue(join(app.getPath('userData'),'pending-twitch-wipes.json'));
+  try { runPendingWipes(app.getPath('userData'),twitchWipeQueue,undefined,TWITCH_PREFIX); } catch { console.error('Falha ao apagar sessões da Twitch removidas.'); }
   guardNewContents(app);
   lockSession(session.defaultSession);
   const databasePath = join(app.getPath('userData'),'pokehub.sqlite');
   store = new ProfileStore(databasePath);
   preferences = new PreferencesStore(databasePath);
+  twitchStore = new TwitchStore(databasePath);
   networkStore = createNetworkPolicyStore(join(app.getPath('userData'),'network-policy.json'));
   perf = preferences.getPerformance();
   trayPrefs = preferences.getTray();
@@ -527,6 +542,15 @@ if (primary) app.whenReady().then(() => {
     preferences.setApprovedHosts(id,extension.hosts);
     return applyExtensions();
   }));
+  twitch = createTwitchService({store:twitchStore, profiles:() => store.list(), iconPath:join(__dirname,'../../build/icon.png'), devTools:!app.isPackaged, emit:info => { if (!window.isDestroyed()) window.webContents.send('twitch:changed',info); }, wipe:id => { twitchWipeQueue.add(id); }, quitting:() => quitting});
+  ipcMain.handle('twitch:get', event => invokeTwitch(event, service => service.info()));
+  ipcMain.handle('twitch:channel', (event,value: unknown) => invokeTwitch(event, service => service.setChannel(value)));
+  ipcMain.handle('twitch:link', (event,id: unknown) => invokeTwitch(event, service => service.link(id)));
+  ipcMain.handle('twitch:unlink', (event,id: unknown) => invokeTwitch(event, service => service.unlink(id)));
+  ipcMain.handle('twitch:update', (event,id: unknown,patch: unknown) => invokeTwitch(event, service => service.update(id,patch)));
+  ipcMain.handle('twitch:show', (event,id: unknown) => invokeTwitch(event, service => service.show(id)));
+  ipcMain.handle('twitch:hide', (event,id: unknown) => invokeTwitch(event, service => service.hide(id)));
+  ipcMain.handle('twitch:rewards', (event,id: unknown) => invokeTwitch(event, service => service.rewards(id)));
   ipcMain.handle('network:get', event => invoke(event, networkInfo));
   ipcMain.handle('network:mode', (event,mode: unknown) => invoke(event, () => { networkStore.setMode(mode); return networkInfo(); }));
   ipcMain.handle('network:allow', (event,host: unknown) => invoke(event, () => { unknownHosts.forget(networkStore.allow(host)); return networkInfo(); }));
@@ -553,6 +577,7 @@ if (primary) app.whenReady().then(() => {
       await closeViewAwaited(id);
       try { store.remove(id); } catch (error) { if (!window.isDestroyed()) openView(id); throw error; }
       suspended.delete(id);
+      twitch?.removeProfile(id); // a conta da Twitch vinculada sai junto (o vínculo some em cascata; a sessão é apagada no próximo início)
       if (wipe !== false) wipeQueue.add(id); // apaga o login em disco no próximo início (a pasta fica em uso até lá)
       if (focused === id) focused = null;
       refreshTray.call();
@@ -693,7 +718,8 @@ if (primary) app.whenReady().then(() => {
     refreshTray.cancel(); changeNotifier.cancel(); tray?.destroy(); tray = null; try { globalShortcut.unregister(CONTROL_SHORTCUT); } catch { /* saindo */ }
     clearTimeout(dragTimer); clearTimeout(resizeTimer); for (const timer of startupTimers) clearTimeout(timer); startupTimers.clear(); updater.dispose();
     for (const view of views.values()) { try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { console.error('Falha ao encerrar uma sessão.'); } }
-    views.clear(); void remote?.close(); remote = null; preferences.close(); store.close();
+    twitch?.dispose(); twitch = null; // as janelas ocultas da Twitch fecham junto (senão o app não encerraria)
+    views.clear(); void remote?.close(); remote = null; preferences.close(); twitchStore.close(); store.close();
   });
   // Início escalonado: a interface primeiro; depois a conta em foco (ou a primeira) e as demais, uma a cada 2,5 s. A auditoria das extensões roda em segundo plano.
   void window.loadFile(appIndex).catch(() => { dialog.showErrorBox('PokéHub', 'Não foi possível carregar a interface local. Verifique a instalação e tente novamente.'); app.quit(); });
@@ -731,11 +757,13 @@ if (primary) app.whenReady().then(() => {
       startupTimers.add(timer);
     }
     arrange();
+    twitch?.start(); // depois das sessões do jogo, também escalonado
   });
 }).catch((error: unknown) => {
   console.error('Falha ao iniciar o PokéHub.');
   if (!window) {
     try { preferences?.close(); } catch { console.error('Falha ao fechar configurações.'); }
+    try { twitchStore?.close(); } catch { console.error('Falha ao fechar a Twitch.'); }
     try { store?.close(); } catch { console.error('Falha ao fechar perfis.'); }
   }
   const message = error instanceof ProfileLimitError

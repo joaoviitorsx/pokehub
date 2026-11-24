@@ -14,9 +14,11 @@ Pasta de dados do app: `%APPDATA%\PokeHub` (Windows) ou `~/.config/PokeHub` (Lin
   - `profiles`: `label` e `emailLabel` (só como identificação, nunca usado para entrar), `characterName`, `colorToken` e datas.
   - `workspace_settings`: modo de início, verificação de atualização, Modo leve, silenciar e preferências da bandeja.
   - `extensions`: pasta da extensão, se está habilitada e os hosts aprovados.
+  - `twitch_links`: para cada conta com Twitch vinculada, só três opções (assistir, coletar baú, som); apagada junto com o perfil. `workspace_settings.twitch_channel` guarda o nome do canal escolhido.
   - `grindolino_*`: tabelas legadas, sem uso (o Professor Grindolino foi removido na v0.1).
   - **Não há senhas.** O PokéHub não pede nem guarda senha de conta nenhuma.
 - **`Partitions/pokehub-<uuid>/`**: uma pasta por conta, com os cookies de login, `localStorage`/IndexedDB do jogo, cache e o armazenamento das extensões daquela conta. Quem tem esta pasta tem a sessão da conta. Com os Electron Fuses (a partir da versão que os inclui) os cookies passam a ser **criptografados em disco** com a chave do seu usuário do sistema.
+- **`Partitions/pokehubtw-<uuid>/`**: a sessão da **Twitch** daquela conta (cookies de login da Twitch, preferências do player), separada da sessão do jogo. Desvincular apaga os dados na hora e a pasta no próximo início; apagar o perfil também.
 - **`localStorage` da interface** (preferências desta máquina, nada sensível): `pokehub.kits`, `pokehub.side`, `pokehub.captures`, `pokehub.memLimitGb`.
 - **`captures.json`**: histórico de capturas lidas do jogo, últimos 7 dias, no máximo 5.000 entradas.
 
@@ -24,6 +26,7 @@ Pasta de dados do app: `%APPDATA%\PokeHub` (Windows) ou `~/.config/PokeHub` (Lin
 
 - **O jogo** (`pokeidle.io`) com a sua sessão, como em qualquer navegador; e o pedido público de retratos `https://pokeidle.io/tracker/api/sprites?lt=...`, feito pelo app **sem cookies**.
 - **`accounts.google.com` / `discord.com`**, só quando você escolhe entrar com essas contas.
+- **Twitch** (só nas contas em que você vincular a Twitch): a janela da Twitch daquela conta fala com `twitch.tv` e com os CDNs de vídeo, chat, anúncios e captcha que a própria página usa, como num navegador. A sessão da Twitch só aceita `https`/`wss`; o quadro principal só navega em `*.twitch.tv`; sem downloads, sem permissões e sem janelas novas. O PokéHub não lê nem guarda o token da Twitch: só confere se o cookie de login existe e lê o nome de usuário do cookie `login` para mostrar na tela.
 - **GitHub Releases** (verificação de atualização): 10 segundos depois de abrir e a cada 6 horas, se a verificação automática estiver ligada. Dá para desligar em Configurações.
 - **Chrome Web Store**: a página abre no **seu navegador**, quando você pede para instalar uma extensão.
 - **Tráfego das extensões**: a `/hunt` fala com `pokeidleguide.io` e `pokeidle-gg.pages.dev`; qualquer outra extensão só carrega depois que você aprova os hosts que ela acessa.
@@ -39,6 +42,15 @@ Tudo abaixo é a **seu pedido**; nada roda sozinho nem agendado. Regras exatas e
 - **Loja (NPC)**, só depois de "Confirmar compra" na janela do app: aba Market, aba Comprar, categoria, botão de compra do item e × (ou Esc) para fechar. Só ouro (Coins); Pokébolas, Poções e Revives.
 - **Nunca**: compras com dinheiro real (RMT), gemas, "Vender", Ovos, nem qualquer ação que gaste dinheiro de verdade.
 - **Leituras** (sem clique e sem escrever na página): vitrine do Mercado da Comunidade quando a aba está aberta, saldo e itens da Loja, painel de capturas, ranking da extensão `/hunt` e estado de carregamento das contas. Os scripts são constantes; nenhum dado da interface é interpolado neles.
+
+## O que o PokéHub faz na Twitch
+
+Só nas contas em que você clicou em **Vincular Twitch** e com o canal definido no Assistente → Twitch. O login é feito por você na página da Twitch; o PokéHub nunca vê a senha.
+
+- **Assistir em segundo plano**: uma janela **oculta** por conta abre o canal, **sempre muda enquanto oculta**, em **160p** (preferência gravada no `localStorage` da própria Twitch) e sem limitar timers, para a Twitch contar o tempo assistido. Fechar a janela só a esconde; ela fecha de verdade ao Sair do app, ao pausar “Assistir” ou ao desvincular. Uma conta da Twitch só assiste em um perfil: se a mesma conta aparecer em outro, o segundo fica como “Conta repetida” e não abre o canal.
+- **Leitura** (a cada 10–60 s, no mundo isolado, sem escrever na página): live no ar, player tocando, saldo de pontos, baú disponível, aviso de conteúdo e se está logado.
+- **Cliques**, e nada além: (1) **play** do player, só se ele parou com a live no ar e a janela oculta; (2) o **baú de bônus**, só com “Baú” ligado naquela conta (desligado por padrão); (3) o botão do **saldo**, quando você pede “Recompensas”, para abrir o painel na janela à vista. **Resgatar** uma recompensa (o booster) é sempre um clique seu.
+- A Twitch e o jogo têm regras próprias sobre bots, várias contas e audiência: use só contas suas, uma conta da Twitch por conta do jogo. O risco das contas é seu.
 
 Automação em jogo pode ser vista como violação dos termos: o risco da conta é seu. Leia `docs/data-sources.md`.
 
@@ -61,6 +73,7 @@ Com o acesso remoto ligado e um celular pareado, o hub pode **transmitir a image
 
 ## Como apagar seus dados
 
+- **Twitch de uma conta**: Assistente → Twitch → desvincular (ícone de corrente cortada). Apaga a sessão da Twitch daquela conta na hora e a pasta no próximo início; os pontos continuam na sua conta da Twitch.
 - **Uma conta**: Gerenciar → Contas → editar o perfil → apagar o perfil e os dados da sessão (irreversível; pode exigir novo login).
 - **Tudo**: feche o PokéHub pela bandeja (Sair), apague a pasta `%APPDATA%\PokeHub` (ou `~/.config/PokeHub`) e desinstale. **O desinstalador mantém a pasta** de propósito (`deleteAppDataOnUninstall: false`), para não apagar seus dados sem aviso; apague-a você mesmo. Isso também remove as preferências da interface (`localStorage`).
 

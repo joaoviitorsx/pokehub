@@ -248,7 +248,7 @@ describe('celular, empacotamento e migração', () => {
     const dir = tmp(), path = join(dir, 'v.sqlite'); openDatabase(path).close();
     const db = new DatabaseSync(path); db.exec("INSERT INTO profiles VALUES ('p1','Conta','e','c','#fff','t','t'); INSERT INTO remote_devices (id, name, token_hash, created_at) VALUES ('d','N','h','t'); DROP TABLE remote_push; DROP TABLE remote_alert_prefs; DROP TABLE remote_alerts; DROP TABLE remote_pin_state; ALTER TABLE remote_devices DROP COLUMN prev_token_hash; ALTER TABLE remote_devices DROP COLUMN prev_valid_until; ALTER TABLE remote_devices DROP COLUMN rotated_at; ALTER TABLE workspace_settings DROP COLUMN remote_net_pin; ALTER TABLE workspace_settings DROP COLUMN remote_net_label; ALTER TABLE workspace_settings DROP COLUMN remote_actions_disabled; PRAGMA user_version=11"); db.close();
     openDatabase(path).close();
-    const check = new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 15});
+    const check = new DatabaseSync(path); expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version: 16});
     expect(check.prepare("SELECT id, rotated_at, prev_valid_until FROM remote_devices").get()).toMatchObject({id: 'd', rotated_at: 0, prev_valid_until: 0});
     expect(check.prepare('SELECT label FROM profiles').get()).toMatchObject({label: 'Conta'}); expect(check.prepare('SELECT remote_net_pin, remote_actions_disabled FROM workspace_settings').get()).toMatchObject({remote_net_pin: null, remote_actions_disabled: 0});
     check.prepare("INSERT INTO remote_pin_state (key, fails) VALUES ('d', 1)").run(); check.close();

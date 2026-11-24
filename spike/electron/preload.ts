@@ -118,6 +118,21 @@ contextBridge.exposeInMainWorld('pokehub', {
     approve: (id: string,hosts: string[]) => ipcRenderer.invoke('extensions:approve',id,hosts),
     openStore: (id: string) => ipcRenderer.invoke('extensions:store',id),
   },
+  twitch: {
+    get: () => ipcRenderer.invoke('twitch:get'),
+    setChannel: (value: string) => ipcRenderer.invoke('twitch:channel',value),
+    link: (id: string) => ipcRenderer.invoke('twitch:link',id),
+    unlink: (id: string) => ipcRenderer.invoke('twitch:unlink',id),
+    update: (id: string,patch: unknown) => ipcRenderer.invoke('twitch:update',id,patch),
+    show: (id: string) => ipcRenderer.invoke('twitch:show',id),
+    hide: (id: string) => ipcRenderer.invoke('twitch:hide',id),
+    rewards: (id: string) => ipcRenderer.invoke('twitch:rewards',id),
+    onChanged: (callback: (info: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, info: unknown) => callback(info);
+      ipcRenderer.on('twitch:changed',listener);
+      return () => ipcRenderer.removeListener('twitch:changed',listener);
+    },
+  },
   network: {
     get: () => ipcRenderer.invoke('network:get'),
     setMode: (mode: string) => ipcRenderer.invoke('network:mode',mode),

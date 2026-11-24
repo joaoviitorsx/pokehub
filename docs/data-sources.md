@@ -81,3 +81,11 @@ Leitura **somente do DOM** do painel esquerdo "CAPTURAS" do jogo (lista da sess�
 - **Riscos:** DOM não é API; se o jogo mudar as classes a lista fica vazia (a interface avisa). Capturas idênticas (mesmo nome, nível, hora, P, IV, Q e nota) no mesmo minuto contam como uma.
 
 > Validação em 2026-11-23 (jogo v1.474, conta real, somente leitura): o `CAPTURES_SCRIPT` leu as 10 capturas da sessão com nome, nível, hora, P, IV, Q e Nota. O recorde vem da classe `recorde` da linha, e o selo "NOVO" (espécie nova) não gera alerta de recorde.
+
+# Twitch em segundo plano — lateral "Twitch"
+
+- **Fonte:** a página do canal na Twitch (`https://www.twitch.tv/<canal>`), aberta numa janela oculta com a sessão da Twitch da própria conta (`persist:pokehubtw-<uuid>`). Nenhuma API privada da Twitch é chamada pelo PokéHub; o login é lido só pela existência do cookie `auth-token` e o nome pelo cookie `login`.
+- **Leitura (mundo isolado 999, `PROBE_SCRIPT` em `spike/domain/twitch.ts`):** contador de espectadores/indicador ao vivo (live no ar), `<video>` tocando, texto do saldo em `[data-test-selector="community-points-summary"]` (lido por `parseBalance`: "1.234", "12,3 mil", "12.3K"), ícone `.claimable-bonus__icon` (baú), aviso de conteúdo e botão de login (deslogado: saldo e baú são ignorados). Ritmo: 10 s abrindo, 30 s ao vivo, 60 s fora do ar; fora do ar por 10 min, recarrega o canal.
+- **Cliques (e nada além):** play do `<video>` se pausou com a live no ar e a janela oculta; o botão do baú só com "Baú" ligado; o botão do saldo ao pedir "Recompensas". Nunca resgata recompensa, nunca escreve no chat, nunca segue/inscreve.
+- **Recursos:** 160p gravado em `localStorage['video-quality']` da Twitch; áudio mudo no Electron enquanto oculta (ou à vista com "Som" desligado); `backgroundThrottling: false` para a página continuar ativa. Testado (2026-11-24) num canal ao vivo com a janela oculta: live detectada, vídeo avançando e altura do vídeo 160.
+- **Seletores frágeis:** a Twitch muda o HTML sem aviso. Se o saldo ficar "—" ou a live não for detectada, ajuste só `PROBE_SCRIPT`/`CLAIM_SCRIPT`/`REWARDS_SCRIPT` em `spike/domain/twitch.ts` (os testes de `spike/tests/twitch.test.ts` cobrem o resto).

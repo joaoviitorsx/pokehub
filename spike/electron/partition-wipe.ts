@@ -9,6 +9,8 @@ import { isProfileId } from '../domain/profiles';
  */
 export const PENDING_FILE = 'pending-wipes.json', PARTITIONS_DIR = 'Partitions', MAX_PENDING = 64;
 const PREFIX = 'pokehub-';
+/** Pastas da sessão da Twitch de cada perfil (`persist:pokehubtw-<uuid>`): fila própria, mesmas travas. */
+export const TWITCH_PREFIX = 'pokehubtw-';
 
 export interface WipeFs {
   readFile(path: string): string;
@@ -28,9 +30,10 @@ export const realFs: WipeFs = {
 };
 
 /** Pasta da partição do perfil, garantidamente dentro de `<userData>/Partitions`. Lança para id que não é UUID ou caminho fora. */
-export function partitionPath(userData: string, id: unknown): string {
+export function partitionPath(userData: string, id: unknown, prefix: string = PREFIX): string {
   if (!isProfileId(id)) throw new Error('Identificador de perfil inválido');
-  const root = resolve(userData, PARTITIONS_DIR), target = resolve(root, `${PREFIX}${id}`), rel = relative(root, target);
+  if (prefix !== PREFIX && prefix !== TWITCH_PREFIX) throw new Error('Prefixo de partição desconhecido');
+  const root = resolve(userData, PARTITIONS_DIR), target = resolve(root, `${prefix}${id}`), rel = relative(root, target);
   if (!rel || rel.startsWith('..') || rel.includes(sep) || resolve(root, rel) !== target) throw new Error('Caminho fora das partições');
   return target;
 }
@@ -72,10 +75,10 @@ export function createWipeQueue(file: string, fs: WipeFs = realFs) {
 export type WipeQueue = ReturnType<typeof createWipeQueue>;
 
 /** Apaga as pastas da fila (chamar ANTES de criar qualquer sessão). Quem falha continua na fila para a próxima tentativa. */
-export function runPendingWipes(userData: string, queue: WipeQueue, fs: WipeFs = realFs): {wiped: string[]; failed: string[]} {
+export function runPendingWipes(userData: string, queue: WipeQueue, fs: WipeFs = realFs, prefix: string = PREFIX): {wiped: string[]; failed: string[]} {
   const wiped: string[] = [], failed: string[] = [];
   for (const id of queue.list()) {
-    try { fs.rm(partitionPath(userData, id)); queue.delete(id); wiped.push(id); }
+    try { fs.rm(partitionPath(userData, id, prefix)); queue.delete(id); wiped.push(id); }
     catch { failed.push(id); }
   }
   return {wiped, failed};

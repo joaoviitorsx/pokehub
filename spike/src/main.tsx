@@ -6,6 +6,7 @@ import type { PerformancePrefs, StartupMode, TrayPrefs } from '../contracts/pref
 import type { AuditFinding, AuditVerdict, ExtensionInfo } from '../contracts/extensions';
 import type { UpdateInfo, UpdateStatus } from '../contracts/update';
 import type { NetworkInfo, NetworkMode } from '../contracts/network';
+import type { TwitchAccount, TwitchInfo } from '../contracts/twitch';
 import './style.css';
 import { removeProfileAndData } from './remove-profile';
 import { profileFormChanged } from './profile-form';
@@ -32,6 +33,7 @@ declare global { interface Window { pokehub: {
  market: {scan(id:string):Promise<Result<MarketScan>>; readAll(id:string):Promise<Result<void>>; stop(id:string):Promise<Result<boolean>>; onProgress(callback:(progress:MarketProgress)=>void):()=>void};
  captures: {list(query?:{profileId?:string;onlyAlerts?:boolean;limit?:number;notaMin?:number|null}):Promise<Result<Capture[]>>; clear():Promise<Result<void>>; watch(open:boolean,notify?:boolean,notaMin?:number|null):Promise<Result<void>>; onNew(callback:(captures:Capture[])=>void):()=>void};
  shop: {read(id:string):Promise<Result<ShopRead>>; run(plan:ShopPlanEntry[]):Promise<Result<ShopLineResult[]>>; stop():Promise<Result<boolean>>; onProgress(callback:(progress:ShopProgress)=>void):()=>void};
+ twitch: {get():Promise<Result<TwitchInfo>>; setChannel(value:string):Promise<Result<TwitchInfo>>; link(id:string):Promise<Result<TwitchInfo>>; unlink(id:string):Promise<Result<TwitchInfo>>; update(id:string,patch:Partial<Pick<TwitchAccount,'enabled'|'autoClaim'|'sound'>>):Promise<Result<TwitchInfo>>; show(id:string):Promise<Result<TwitchInfo>>; hide(id:string):Promise<Result<TwitchInfo>>; rewards(id:string):Promise<Result<TwitchInfo>>; onChanged(callback:(info:TwitchInfo)=>void):()=>void};
  network: {get():Promise<Result<NetworkInfo>>; setMode(mode:NetworkMode):Promise<Result<NetworkInfo>>; allow(host:string):Promise<Result<NetworkInfo>>; disallow(host:string):Promise<Result<NetworkInfo>>};
  extensions: {list():Promise<Result<ExtensionInfo[]>>; detect():Promise<Result<ExtensionInfo[]>>; add():Promise<Result<ExtensionInfo[]>>; toggle(id:string,enabled:boolean):Promise<Result<ExtensionInfo[]>>; remove(id:string):Promise<Result<ExtensionInfo[]>>; approve(id:string,hosts:string[]):Promise<Result<ExtensionInfo[]>>; openStore(id:string):Promise<Result<void>>};
  updates: {get():Promise<Result<UpdateInfo>>; check():Promise<Result<UpdateInfo>>; download():Promise<Result<UpdateInfo>>; install():Promise<Result<void>>; setAuto(enabled:boolean):Promise<Result<UpdateInfo>>; onStatus(callback:(status:UpdateStatus)=>void):()=>void};

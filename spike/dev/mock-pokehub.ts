@@ -9,6 +9,7 @@ import type { PerformancePrefs } from '../contracts/preferences';
 import type { Capture } from '../domain/captures';
 import { createMockShop } from './mock-shop';
 import { createMockRemote } from './mock-remote';
+import { createMockTwitch } from './mock-twitch';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
 const ok = <T>(data: T): Promise<Result<T>> => new Promise(resolve => setTimeout(() => resolve({ok: true, data}), 40));
@@ -101,6 +102,7 @@ let captureLog: Capture[] = params.get('captures') === '0' ? [] : Array.from({le
 let captureTimer = 0;
 const shop = createMockShop(() => profiles.map(p => p.id), p => emit('shop-progress', p));
 window.pokehub = {
+  twitch: createMockTwitch(() => profiles.map(p => p.id), params.get('twitch') === '0'),
   list: () => ok(profiles.map(p => ({...p}))),
   getPreferences: () => ok(preferences),
   getPerformance: () => ok({...perfPrefs}),

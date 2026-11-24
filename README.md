@@ -7,11 +7,12 @@ Segurança, privacidade, o que o app guarda, envia e clica no jogo: leia o **[SE
 ## Recursos
 
 - **Colunas**: cada conta é uma coluna com cabeçalho (cor, nome, estado, focar, expandir, recarregar, reabrir e suspender). Modos Grade e Foco, com atalhos (Ctrl+0 grade, Ctrl+1 a Ctrl+4 foco, Ctrl+H lateral, Ctrl+Shift+Enter expandir).
-- **Assistente (lateral)**, com quatro abas:
+- **Assistente (lateral)**, com cinco abas:
   - **Caçar**: ranking de hunts lido da extensão `/hunt` (XP/h, ouro/h, Shiny/h), com retratos.
   - **Mercado**: leitura e pontuação (custo-benefício) da vitrine do Mercado da Comunidade; leitura assistida de várias páginas, a pedido.
   - **Loja**: compra de Pokébolas, Poções e Revives no Market NPC, sempre depois de uma janela de confirmação.
   - **Capturas**: feed e alertas das capturas, com histórico de 7 dias.
+  - **Twitch**: vincule **uma conta da Twitch por conta do jogo** e o PokéHub assiste ao canal escolhido em segundo plano (janela oculta, muda, 160p) para acumular os pontos do canal; mostra o saldo, os pontos ganhos na sessão e se a live está no ar. Coleta do baú opcional por conta; o resgate dos boosters é sempre seu, em **Recompensas**. Funciona com o PokéHub aberto ou na bandeja.
 - **Acesso remoto (opcional, desligado por padrão)**: veja as contas, capturas e alertas pelo celular na rede de casa (HTTPS próprio, pareamento por código + confirmação no PC) e, com “Pode agir” e PIN, compre na Loja (só ouro, com teto diário), recarregue/suspenda contas e ligue o Modo leve. No celular (PWA): alertas e notificações push (R3), ações com PIN (R4) e **tela ao vivo** da conta (R5). Ver a tela é uma coisa; **controlar** a conta exige a permissão separada “Pode controlar a tela”, com PIN, 10 min e faixa visível no PC. Detalhes em `docs/ACESSO-REMOTO.md` e `SECURITY.md`.
 - **Extensões** de navegador (Manifest V3) carregadas nas sessões, com **auditor** estático (Só leitura / Interage com a página / Acessa outros sites / Bloqueada) e aprovação dos hosts externos. A `/hunt` vem catalogada.
 - **Atualizações** automáticas pelo GitHub Releases (verificação a cada 6 h, desligável).
