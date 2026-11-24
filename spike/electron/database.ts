@@ -49,6 +49,8 @@ export function openDatabase(path: string): Database {
         if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='twitch_channel'").get()) db.exec("ALTER TABLE workspace_settings ADD COLUMN twitch_channel TEXT NOT NULL DEFAULT ''");
         // v16 também: selos de custo-benefício nos cards do RMT (ligados por padrão; só a página do jogo da própria conta)
         if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='market_badges'").get()) db.exec('ALTER TABLE workspace_settings ADD COLUMN market_badges INTEGER NOT NULL DEFAULT 1');
+        // v16 também: análise "Para caçar" na ficha do Pokémon (ligada por padrão)
+        if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='ficha_review'").get()) db.exec('ALTER TABLE workspace_settings ADD COLUMN ficha_review INTEGER NOT NULL DEFAULT 1');
         db.exec('PRAGMA user_version=16; COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }

@@ -8,6 +8,7 @@ import { huntSnapshot, HUNT_UNAVAILABLE, type HuntTarget } from './hunt-snapshot
 import { marketScan, MARKET_UNAVAILABLE } from './market-scan';
 import { createMarketReader } from './market-read';
 import { createMarketBadges } from './market-badges';
+import { createFichaReview } from './ficha-review';
 import { createShop, SHOP_UNAVAILABLE } from './shop';
 import { createCaptureService, parseQuery } from './captures';
 import { alertsOf, alertText } from '../domain/captures';
@@ -614,6 +615,12 @@ if (primary) app.whenReady().then(() => {
   const marketBadges = createMarketBadges({known:() => store.list().map(profile => profile.id), target:marketTarget, enabled:() => preferences.getMarketBadges(), lite:() => perf.lite, visible:() => !window.isDestroyed() && window.isVisible() && !window.isMinimized()});
   marketBadges.start();
   app.on('before-quit', () => marketBadges.stop());
+  // Análise "Para caçar" na ficha do Pokémon (ver ficha-review.ts): ligada por padrão, desligável em Gerenciar → Layout.
+  const fichaReview = createFichaReview({known:() => store.list().map(profile => profile.id), target:marketTarget, enabled:() => preferences.getFichaReview(), lite:() => perf.lite});
+  fichaReview.start();
+  app.on('before-quit', () => fichaReview.stop());
+  ipcMain.handle('ficha:review', event => invoke(event, () => preferences.getFichaReview()));
+  ipcMain.handle('ficha:setReview', (event,value: unknown) => invoke(event, () => { const on = preferences.setFichaReview(value); fichaReview.refresh(); return on; }));
   ipcMain.handle('market:badges', event => invoke(event, () => preferences.getMarketBadges()));
   ipcMain.handle('market:setBadges', (event,value: unknown) => invoke(event, () => { const on = preferences.setMarketBadges(value); marketBadges.refresh(); return on; }));
   ipcMain.handle('market:readAll', async (event,id: unknown) => trusted(event) ? marketReader.readAll(id) : {ok:false,error:MARKET_UNAVAILABLE});

@@ -31,6 +31,7 @@ const states: Record<string, string> = {[uid(1)]: 'ready', [uid(2)]: 'loading', 
 if (params.get('allready') === '1') for (const key of Object.keys(states)) states[key] = 'ready'; // ?allready=1: todas as contas prontas
 let preferences: 'grid' | 'focus-first' = 'grid';
 let marketBadges = true;
+let fichaReview = true;
 let winState = {maximized: false, focused: true};
 let trayPrefs = {onClose: true, onMinimize: true, hintShown: false};
 let perfPrefs = {lite: params.get('lite') === '1', muteUnfocused: false};
@@ -130,6 +131,7 @@ window.pokehub = {
   layout: (id, hide, side, panel = 340, account = null) => { Object.assign(layoutState, {id, hide, side, panel, account}); layoutListeners.forEach(l => l()); return ok(undefined); },
   drag: () => ok(undefined),
   huntSnapshot: (_id, soLiberadas) => ok(huntSnapshot(soLiberadas)),
+  ficha: {review: () => ok(fichaReview), setReview: (on: boolean) => { fichaReview = on; return ok(on); }},
   market: {
     badges: () => ok(marketBadges),
     setBadges: (on: boolean) => { marketBadges = on; return ok(on); },

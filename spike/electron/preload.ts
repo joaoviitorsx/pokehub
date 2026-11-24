@@ -135,6 +135,10 @@ contextBridge.exposeInMainWorld('pokehub', {
       return () => ipcRenderer.removeListener('twitch:changed',listener);
     },
   },
+  ficha: {
+    review: () => ipcRenderer.invoke('ficha:review'),
+    setReview: (on: boolean) => ipcRenderer.invoke('ficha:setReview',on),
+  },
   network: {
     get: () => ipcRenderer.invoke('network:get'),
     setMode: (mode: string) => ipcRenderer.invoke('network:mode',mode),

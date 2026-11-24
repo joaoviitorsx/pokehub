@@ -34,6 +34,7 @@ declare global { interface Window { pokehub: {
  captures: {list(query?:{profileId?:string;onlyAlerts?:boolean;limit?:number;notaMin?:number|null}):Promise<Result<Capture[]>>; clear():Promise<Result<void>>; watch(open:boolean,notify?:boolean,notaMin?:number|null):Promise<Result<void>>; onNew(callback:(captures:Capture[])=>void):()=>void};
  shop: {read(id:string):Promise<Result<ShopRead>>; run(plan:ShopPlanEntry[]):Promise<Result<ShopLineResult[]>>; stop():Promise<Result<boolean>>; onProgress(callback:(progress:ShopProgress)=>void):()=>void};
  twitch: {get():Promise<Result<TwitchInfo>>; setChannel(value:string):Promise<Result<TwitchInfo>>; link(id:string):Promise<Result<TwitchInfo>>; unlink(id:string):Promise<Result<TwitchInfo>>; update(id:string,patch:Partial<Pick<TwitchAccount,'enabled'|'autoClaim'|'sound'>>):Promise<Result<TwitchInfo>>; show(id:string):Promise<Result<TwitchInfo>>; hide(id:string):Promise<Result<TwitchInfo>>; rewards(id:string):Promise<Result<TwitchInfo>>; onChanged(callback:(info:TwitchInfo)=>void):()=>void};
+ ficha: {review():Promise<Result<boolean>>; setReview(on:boolean):Promise<Result<boolean>>};
  network: {get():Promise<Result<NetworkInfo>>; setMode(mode:NetworkMode):Promise<Result<NetworkInfo>>; allow(host:string):Promise<Result<NetworkInfo>>; disallow(host:string):Promise<Result<NetworkInfo>>};
  extensions: {list():Promise<Result<ExtensionInfo[]>>; detect():Promise<Result<ExtensionInfo[]>>; add():Promise<Result<ExtensionInfo[]>>; toggle(id:string,enabled:boolean):Promise<Result<ExtensionInfo[]>>; remove(id:string):Promise<Result<ExtensionInfo[]>>; approve(id:string,hosts:string[]):Promise<Result<ExtensionInfo[]>>; openStore(id:string):Promise<Result<void>>};
  updates: {get():Promise<Result<UpdateInfo>>; check():Promise<Result<UpdateInfo>>; download():Promise<Result<UpdateInfo>>; install():Promise<Result<void>>; setAuto(enabled:boolean):Promise<Result<UpdateInfo>>; onStatus(callback:(status:UpdateStatus)=>void):()=>void};
@@ -137,6 +138,9 @@ function App() {
  const [perf,setPerf] = useState<PerformancePrefs>({lite:false,muteUnfocused:false});
  const [tray,setTray] = useState<TrayPrefs>({onClose:true,onMinimize:true,hintShown:false});
  const [procs,setProcs] = useState<ProcessesSample | null>(null);
+ const [fichaReview,setFichaReview] = useState<boolean | null>(null); // análise "Para caçar" na ficha do jogo
+ useEffect(() => { if (editor === 'manage' && section === 'layout') void window.pokehub.ficha.review().then(result => { if (result.ok) setFichaReview(result.data); }).catch(() => undefined); },[editor,section]);
+ async function changeFichaReview(on: boolean) { setFichaReview(on); try { const result = await window.pokehub.ficha.setReview(on); if (!result.ok) { setFichaReview(!on); setMessage(result.error); } } catch { setFichaReview(!on); setMessage('Não foi possível salvar a opção da ficha.'); } }
  useEffect(() => { if (editor === 'manage' && section === 'accounts') void window.pokehub.orphans().then(result => { if (result.ok) setOrphans(result.data.count); }).catch(() => undefined); },[editor,section,profiles]);
  const [memLimitGb,setMemLimitGb] = useState(() => { try { const value = Number(localStorage.getItem('pokehub.memLimitGb')); return value > 0 ? value : 2; } catch { return 2; } });
  useEffect(() => { try { localStorage.setItem('pokehub.memLimitGb',String(memLimitGb)); } catch { /* preferência só não persiste */ } },[memLimitGb]);
@@ -435,6 +439,8 @@ function App() {
    {perf.lite && <p className="lite-tip" role="note">Nas contas que você não está olhando, ative o Modo economia do próprio jogo (botão na tela de sessão) — economiza CPU/GPU.</p>}
    <label className="switch"><span>Som só na conta em foco</span><input type="checkbox" role="switch" checked={perf.muteUnfocused || perf.lite} disabled={perf.lite} onChange={event => void changePerf({muteUnfocused:event.target.checked})}/></label>
    <p className="note">Silencia as contas que não estão visíveis (em Foco, as outras). Na grade todas as colunas continuam com som. O Modo leve já inclui esta opção.</p>
+   <label className="switch"><span>Análise “Para caçar” na ficha do Pokémon</span><input type="checkbox" role="switch" checked={fichaReview === true} disabled={fichaReview === null} onChange={event => void changeFichaReview(event.target.checked)}/></label>
+   <p className="note">Ao abrir a ficha de um Pokémon no jogo, mostra uma nota de 0 a 100 para caçar: pesa o IV do ataque que ele usa (físico ou especial, pelos stats-base da espécie), o IV de SPD (recarga dos golpes), HP, qualidade e potência, e explica os pontos fortes e fracos. Com a Smart Market ativa, fica compacta.</p>
    <label className="switch"><span>Ao fechar, continuar na bandeja</span><input type="checkbox" role="switch" checked={tray.onClose} onChange={event => void changeTray({onClose:event.target.checked})}/></label>
    <label className="switch"><span>Ao minimizar, ir para a bandeja</span><input type="checkbox" role="switch" checked={tray.onMinimize} onChange={event => void changeTray({onMinimize:event.target.checked})}/></label>
    <p className="note">Na bandeja o PokéHub fica só no ícone da área de notificação e os jogos continuam rodando. Para encerrar de vez: clique com o botão direito no ícone da bandeja → Sair do PokéHub. No macOS minimizar segue o Dock.</p>
