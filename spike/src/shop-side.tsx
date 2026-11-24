@@ -107,6 +107,18 @@ export function ShopPanel({profiles, states, id, active, restockRequest = null}:
   }, []);
   const kitForStock = kits.find(k => k.id === stockKit) ?? kits[0];
   const saveRules = (next: StockRules) => { setRules(next); void window.pokehub.stock.setRules(next).then(r => { if (r.ok) setRules(r.data); }).catch(() => undefined); };
+  // automática: o kit escolhido vai junto para o processo principal (os kits moram neste navegador); trocar ou editar o kit atualiza
+  const syncAuto = (list: Kit[], kitId: string) => {
+    const kit = list.find(k => k.id === kitId) ?? list[0];
+    if (!rules.auto) return;
+    if (!kit) { saveRules({...rules, auto: false, autoKit: []}); return; }
+    if (JSON.stringify(kit.lines) !== JSON.stringify(rules.autoKit)) saveRules({...rules, autoKit: kit.lines});
+  };
+  const [autoMaxText, setAutoMaxText] = useState<string | null>(null);
+  const toggleAuto = (on: boolean) => {
+    if (on && !kitForStock) { setMsg('Crie um kit de reposição (abaixo) para o PokéHub saber o que comprar sozinho.'); return; }
+    saveRules({...rules, auto: on, autoKit: on && kitForStock ? kitForStock.lines : rules.autoKit});
+  };
   const restockAccount = (pid: string) => { if (!kitForStock) { setMsg('Crie um kit de reposição (abaixo) para o PokéHub saber quanto comprar.'); return; } restock(kitForStock, [pid]); };
   // aviso do sistema "Estoque baixo" clicado: prepara a reposição da conta (a compra ainda espera o "Confirmar compra")
   const [seenReq, setSeenReq] = useState(restockRequest?.n ?? 0);
@@ -142,7 +154,7 @@ export function ShopPanel({profiles, states, id, active, restockRequest = null}:
     return () => window.removeEventListener('keydown', onKey);
   }, [confirm]);
 
-  const persist = (next: Kit[]) => { setKits(next); saveKits(next); };
+  const persist = (next: Kit[]) => { setKits(next); saveKits(next); syncAuto(next, stockKit); };
   const saveDraft = () => {
     if (!draft) return;
     const name = draft.name.trim().slice(0, 32), lines = draft.lines.filter(l => l.target >= 1);
@@ -161,9 +173,15 @@ export function ShopPanel({profiles, states, id, active, restockRequest = null}:
     <div className="side-body shop" hidden={!active} aria-busy={work !== null || running}>
       <section className="shop-box stk" aria-label="Reposição assistida">
         <h3><span><Icon d={icons.bell}/> Reposição assistida</span><label className="switch ma-switch" title={rules.on ? 'Desligar os avisos de estoque baixo' : 'Ligar os avisos de estoque baixo'}><span className="sr">Avisos de estoque</span><input type="checkbox" role="switch" checked={rules.on} onChange={event => saveRules({...rules, on: event.target.checked})}/></label></h3>
-        <p className="side-foot">Vigia o estoque que a automação do jogo usa (sem abrir o Market) e avisa quando ficar abaixo do mínimo. Repor monta a compra pelo kit e só compra depois do seu “Confirmar compra”.</p>
+        <p className="side-foot">Vigia o estoque que a automação do jogo usa (sem abrir o Market) e avisa quando ficar abaixo do mínimo. {rules.auto ? 'Com “Repor sozinho” ligado, compra pelo kit sem pedir confirmação e avisa o que comprou.' : 'Repor monta a compra pelo kit e só compra depois do seu “Confirmar compra”.'}</p>
         <div className="stk-mins">{STOCK_CATS.map(cat => <label key={cat}>{catLabel[cat]} mín.<input type="number" min={0} max={1000000} value={rules.min[cat]} disabled={!rules.on} onChange={event => setRules({...rules, min: {...rules.min, [cat]: Math.max(0, Math.min(1_000_000, Math.floor(Number(event.target.value)) || 0))}})} onBlur={() => saveRules(rules)}/></label>)}</div>
-        {kits.length > 0 && <label className="stk-kit">Kit da reposição<select value={kitForStock?.id ?? ''} onChange={event => setStockKit(event.target.value)}>{kits.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}</select></label>}
+        <div className="stk-auto" data-on={rules.auto || undefined}>
+          <label className="stk-auto-row"><span><strong>Repor sozinho</strong><small>Sem “Confirmar compra”: só o que falta para as metas do kit, só nas categorias baixas e só com ouro.</small></span>
+            <span className="switch ma-switch"><span className="sr">Reposição automática</span><input type="checkbox" role="switch" checked={rules.auto} disabled={!rules.on} onChange={event => toggleAuto(event.target.checked)}/></span></label>
+          {rules.auto && <label className="stk-max">Limite por reposição (ouro)<input type="number" min={1} max={1e12} step={100000} value={autoMaxText ?? rules.autoMax} onChange={event => setAutoMaxText(event.target.value)} onBlur={() => { const n = Math.floor(Number(autoMaxText)); setAutoMaxText(null); if (Number.isFinite(n) && n >= 1) saveRules({...rules, autoMax: Math.min(1e12, n)}); }}/></label>}
+          {rules.auto && <p className="side-foot">Gasta no máximo {full.format(rules.autoMax)} de ouro em cada reposição. Para desligar, é só desmarcar.</p>}
+        </div>
+        {kits.length > 0 && <label className="stk-kit">Kit da reposição<select value={kitForStock?.id ?? ''} onChange={event => { setStockKit(event.target.value); syncAuto(kits, event.target.value); }}>{kits.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}</select></label>}
         <ul className="stk-list">{profiles.map(p => { const e = stock[p.id]; return <li key={p.id} data-low={e && e.low.length ? '' : undefined} style={{'--c': p.colorToken} as CSSProperties}>
           <span className="stk-who"><i/>{p.label}</span>
           {e ? <span className="stk-cats">{STOCK_CATS.map(cat => <i key={cat} className="stk-chip" data-low={e.low.includes(cat) || undefined} title={cat === 'Pokebolas' && e.stock.cats.Pokebolas.itens.length ? e.stock.cats.Pokebolas.itens.map(b => `${b.nome}: ${full.format(b.qtd)}`).join(' · ') : `${catLabel[cat]} em uso pela automação`}>{catLabel[cat]} <b>{full.format(e.stock.cats[cat].total)}</b></i>)}</span>
@@ -216,7 +234,7 @@ export function ShopPanel({profiles, states, id, active, restockRequest = null}:
         {run.done && run.results && (() => { const ok = run.results.filter(r => r.ok), spent = ok.reduce((sum, r) => sum + (r.spent ?? r.order.total), 0); return <p className="shop-sum" role="status">{ok.length} de {run.results.length} compras feitas · {full.format(spent)} de ouro gasto.</p>; })()}
         {running ? <button onClick={stop}>Parar</button> : <button onClick={() => setRun(null)}>Fechar resumo</button>}
       </section>}
-      <p className="side-foot shop-foot">O PokéHub só compra quando você confirma. Só compra itens do catálogo e só quando o preço é em ouro (Coins) do Market: cards em gemas são ignorados. Nunca usa dinheiro real.</p>
+      <p className="side-foot shop-foot">{rules.auto ? 'O PokéHub só compra sem confirmação na reposição automática que você ligou; o resto continua pedindo “Confirmar compra”.' : 'O PokéHub só compra quando você confirma.'} Só compra itens do catálogo e só quando o preço é em ouro (Coins) do Market: cards em gemas são ignorados. Nunca usa dinheiro real.</p>
     </div>
     {confirm && active && <div className="shop-dialog" role="dialog" aria-modal="true" aria-labelledby="shop-dlg-title">
       <div className="shop-dlg-body">

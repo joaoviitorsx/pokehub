@@ -11,6 +11,7 @@ import { createMarketBadges } from './market-badges';
 import { createFichaReview } from './ficha-review';
 import { createDeadlines } from './deadlines';
 import { createStockWatch } from './stock-watch';
+import { autoRestock } from './auto-restock';
 import { lowText } from '../domain/stock';
 import { createAlertToast } from './alert-toast';
 import { DAY_TYPE_SCRIPT, sanitizeDayType, teamPick } from './team-pick';
@@ -668,6 +669,17 @@ if (primary) app.whenReady().then(() => {
   const stockWatch = createStockWatch({known:() => store.list().map(profile => ({id:profile.id, label:profile.label})), target:id => huntTarget(id), rules:() => preferences.getStockRules(), lite:() => perf.lite,
     notify:(profileId,label,stock,low) => {
       if (!window.isDestroyed()) window.webContents.send('stock:low',{profileId,low});
+      const rules = preferences.getStockRules();
+      const toast = (title: string, body: string) => { if (!Notification.isSupported()) return; try { const n = new Notification({title, body}); n.on('click',() => { showWindow(); if (!window.isDestroyed()) window.webContents.send('stock:openRestock',profileId); }); n.show(); } catch { /* sem notificações */ } };
+      if (rules.auto) { // reposição automática ligada pelo usuário: compra sem confirmação, dentro do teto, e avisa o que fez
+        void autoRestock(shop,profileId,rules,low).then(result => {
+          const fmt = (n: number) => n.toLocaleString('pt-BR');
+          if (result.kind === 'bought') toast(`Reposição automática · ${label}`,`${result.orders.map(o => `${fmt(o.qty)}× ${o.name}`).join(', ') || 'nada comprado'} · ${fmt(result.spent)} de ouro${result.failed ? ` · ${result.failed} compra(s) falharam` : ''}.`);
+          else toast(`Estoque baixo · ${label}`,`${lowText(stock,low,rules)}. Reposição automática não comprou: ${result.kind === 'error' ? result.error : result.why}`);
+          stockWatch.refresh();
+        });
+        return;
+      }
       if (!Notification.isSupported()) return;
       try { const n = new Notification({title:`Estoque baixo · ${label}`, body:`${lowText(stock,low,preferences.getStockRules())}. Clique para repor (você confirma a compra).`}); n.on('click',() => { showWindow(); if (!window.isDestroyed()) window.webContents.send('stock:openRestock',profileId); }); n.show(); } catch { /* sem notificações */ }
     },
@@ -738,6 +750,7 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('market:badges', event => invoke(event, () => preferences.getMarketBadges()));
   ipcMain.handle('market:setBadges', (event,value: unknown) => invoke(event, () => { const on = preferences.setMarketBadges(value); marketBadges.refresh(); return on; }));
   ipcMain.handle('market:readAll', async (event,id: unknown) => trusted(event) ? marketReader.readAll(id) : {ok:false,error:MARKET_UNAVAILABLE});
+  ipcMain.handle('market:locate', async (event,id: unknown,req: unknown) => trusted(event) ? marketReader.locate(id,req) : {ok:false,error:MARKET_UNAVAILABLE});
   ipcMain.handle('market:stop', (event,id: unknown) => trusted(event) ? {ok:true,data:marketReader.stop(id)} : {ok:false,error:MARKET_UNAVAILABLE});
   // Loja rápida (Market do jogo): leitura/compra só a pedido da janela do PokéHub, depois da confirmação do usuário (ver spike/electron/shop.ts).
   let remoteShopProgress: ((progress: ShopProgress) => void) | null = null; // compra pedida pelo celular: o progresso vai para ele (SSE), não para a tela do PC

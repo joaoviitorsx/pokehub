@@ -1,12 +1,17 @@
 // Reposição assistida: estoque das pokébolas, poções e revives que a automação do jogo USA, lido do estado do jogo (via /hunt),
 // sem abrir o Market. Avisa quando uma categoria cai abaixo do mínimo; a compra continua sendo da Loja, com confirmação.
-import type { ShopCat } from './shop';
+import { isShopCat, isShopName, MAX_KIT_LINES, type KitLine, type ShopCat } from './shop';
 
 export const STOCK_CATS: readonly ShopCat[] = ['Pokebolas', 'Poções', 'Revives'];
 export interface StockCat { total: number; /** só pokébolas têm nome no catálogo do jogo */ itens: {nome: string; qtd: number}[] }
 export interface StockRead { gold: number | null; cats: Record<ShopCat, StockCat> }
-export interface StockRules { on: boolean; min: Record<ShopCat, number> }
-export const DEFAULT_STOCK_RULES: StockRules = {on: true, min: {Pokebolas: 300, Poções: 100, Revives: 20}};
+/**
+ * `auto`: repõe sozinho, sem "Confirmar compra", quando uma categoria cai abaixo do mínimo (opcional, desligado por padrão).
+ * Compra só as linhas de `autoKit` das categorias que ficaram baixas, só o que falta para a meta, e no máximo `autoMax` de ouro por reposição.
+ */
+export interface StockRules { on: boolean; min: Record<ShopCat, number>; auto: boolean; autoKit: KitLine[]; autoMax: number }
+export const DEFAULT_AUTO_MAX = 5_000_000, MAX_AUTO_MAX = 1e12;
+export const DEFAULT_STOCK_RULES: StockRules = {on: true, min: {Pokebolas: 300, Poções: 100, Revives: 20}, auto: false, autoKit: [], autoMax: DEFAULT_AUTO_MAX};
 /** Sai do "baixo" só com folga (20% acima do mínimo), para não avisar de novo a cada pokébola lançada. */
 export const STOCK_HYSTERESIS = 1.2;
 
@@ -50,7 +55,15 @@ export function sanitizeRules(raw: unknown): StockRules {
   if (!raw || typeof raw !== 'object') return DEFAULT_STOCK_RULES;
   const r = raw as Record<string, unknown>, min = (r.min && typeof r.min === 'object' ? r.min : {}) as Record<string, unknown>;
   const pick = (cat: ShopCat) => { const v = min[cat]; return typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1e6 ? v : DEFAULT_STOCK_RULES.min[cat]; };
-  return {on: r.on !== false, min: {Pokebolas: pick('Pokebolas'), Poções: pick('Poções'), Revives: pick('Revives')}};
+  const autoKit: KitLine[] = [];
+  for (const l of Array.isArray(r.autoKit) ? r.autoKit.slice(0, MAX_KIT_LINES) : []) {
+    if (!l || typeof l !== 'object') continue;
+    const x = l as Record<string, unknown>;
+    if (isShopCat(x.cat) && isShopName(x.name) && typeof x.target === 'number' && Number.isInteger(x.target) && x.target >= 1 && x.target <= 1e6 && !autoKit.some(y => y.cat === x.cat && y.name === x.name)) autoKit.push({cat: x.cat, name: x.name, target: x.target});
+  }
+  const max = r.autoMax, autoMax = typeof max === 'number' && Number.isInteger(max) && max >= 1 && max <= MAX_AUTO_MAX ? max : DEFAULT_AUTO_MAX;
+  // sem kit não há o que comprar: a automática só fica ligada com pelo menos uma linha
+  return {on: r.on !== false, min: {Pokebolas: pick('Pokebolas'), Poções: pick('Poções'), Revives: pick('Revives')}, auto: r.auto === true && autoKit.length > 0, autoKit, autoMax};
 }
 /** Categorias abaixo do mínimo (mínimo 0 = não vigiar). */
 export const lowCats = (stock: StockRead, rules: StockRules): ShopCat[] => rules.on ? STOCK_CATS.filter(cat => rules.min[cat] > 0 && stock.cats[cat].total < rules.min[cat]) : [];

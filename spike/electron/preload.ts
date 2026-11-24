@@ -114,6 +114,7 @@ contextBridge.exposeInMainWorld('pokehub', {
       return () => ipcRenderer.removeListener('market:alertHit',listener);
     },
     stop: (id: string) => ipcRenderer.invoke('market:stop',id),
+    locate: (id: string,req: unknown) => ipcRenderer.invoke('market:locate',id,req),
     onProgress: (callback: (progress: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, progress: unknown) => callback(progress);
       ipcRenderer.on('market:progress',listener);

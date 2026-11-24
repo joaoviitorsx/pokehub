@@ -149,7 +149,7 @@ window.pokehub = {
   huntSnapshot: (_id, soLiberadas) => ok(huntSnapshot(soLiberadas)),
   huntTeam: () => new Promise(resolve => setTimeout(() => resolve({ok: true, data: mockTeam()}), 900)),
   dayType: {notify: () => ok(true), setNotify: (on: boolean) => ok(on)},
-  stock: {get: () => ok({all: {[uid(1)]: {stock: {gold: 58_319_042, cats: {Pokebolas: {total: 36_563, itens: [{nome: 'Ultra Ball', qtd: 36_530}, {nome: 'Poke Ball', qtd: 33}]}, Poções: {total: 10_314, itens: []}, Revives: {total: 12, itens: []}}}, low: ['Revives'], at: Date.now()}, [uid(2)]: {stock: {gold: 1_200_000, cats: {Pokebolas: {total: 140, itens: [{nome: 'Ultra Ball', qtd: 140}]}, Poções: {total: 380, itens: []}, Revives: {total: 55, itens: []}}}, low: ['Pokebolas'], at: Date.now()}}, rules: {on: true, min: {Pokebolas: 300, Poções: 100, Revives: 20}}}), setRules: (r: never) => ok(r), refresh: () => ok(undefined), onChanged: () => () => undefined, onOpenRestock: () => () => undefined},
+  stock: {get: () => ok({all: {[uid(1)]: {stock: {gold: 58_319_042, cats: {Pokebolas: {total: 36_563, itens: [{nome: 'Ultra Ball', qtd: 36_530}, {nome: 'Poke Ball', qtd: 33}]}, Poções: {total: 10_314, itens: []}, Revives: {total: 12, itens: []}}}, low: ['Revives'], at: Date.now()}, [uid(2)]: {stock: {gold: 1_200_000, cats: {Pokebolas: {total: 140, itens: [{nome: 'Ultra Ball', qtd: 140}]}, Poções: {total: 380, itens: []}, Revives: {total: 55, itens: []}}}, low: ['Pokebolas'], at: Date.now()}}, rules: {on: true, min: {Pokebolas: 300, Poções: 100, Revives: 20}, auto: false, autoKit: [], autoMax: 5_000_000}}), setRules: (r: never) => ok(r), refresh: () => ok(undefined), onChanged: () => () => undefined, onOpenRestock: () => () => undefined},
   deadlines: {get: () => ok({[uid(1)]: [{tipo: 'vip', nome: '+50% XP', ate: Date.now() + 17 * 86_400_000}, {tipo: 'guild-boost', nome: 'Boost Guild +10% XP', ate: Date.now() + 3 * 86_400_000 + 4 * 3_600_000}, {tipo: 'guild-boss', nome: 'Boss Guild +3,9%', ate: Date.now() + 22 * 3_600_000}, {tipo: 'twitch', nome: 'Bônus Twitch +15%', ate: Date.now() + 42 * 60_000}]}), refresh: () => ok(undefined), notify: () => ok(true), setNotify: (on: boolean) => ok(on), onChanged: () => () => undefined},
   ficha: {review: () => ok(fichaReview), setReview: (on: boolean) => { fichaReview = on; return ok(on); }},
   market: {
@@ -168,6 +168,7 @@ window.pokehub = {
       if (reading) return ok(undefined).then(() => ({ok: false as const, error: 'Já existe uma leitura de páginas em andamento nesta conta.'}));
       marketPage = 1; void readAllMock(id); return ok(undefined);
     },
+    locate: () => new Promise(resolve => setTimeout(() => resolve({ok:true,data:undefined}),1200)),
     stop: () => { const was = reading; stopRead = true; return ok(was); },
     onProgress: cb => on<Parameters<typeof cb>[0]>('market-progress', cb),
   },

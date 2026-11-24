@@ -40,7 +40,7 @@ describe('reposição assistida: regras', () => {
   });
   it('texto do aviso e validação das regras', () => {
     expect(lowText(s, ['Revives'], DEFAULT_STOCK_RULES)).toBe('Revives: restam 12 (mínimo 20)');
-    expect(sanitizeRules({on:false, min:{Pokebolas:50, Poções:-5, Revives:'x'}})).toEqual({on:false, min:{Pokebolas:50, Poções:100, Revives:20}});
+    expect(sanitizeRules({on:false, min:{Pokebolas:50, Poções:-5, Revives:'x'}})).toEqual({...DEFAULT_STOCK_RULES, on:false, min:{Pokebolas:50, Poções:100, Revives:20}});
     expect(sanitizeRules('lixo')).toEqual(DEFAULT_STOCK_RULES);
   });
 });
@@ -57,7 +57,7 @@ describe('migração 1.1.1 → 1.1.2', () => {
       db.close();
       const prefs = new PreferencesStore(path);
       expect(prefs.getStockRules()).toEqual(DEFAULT_STOCK_RULES);
-      expect(prefs.setStockRules({on:true, min:{Pokebolas:500, Poções:100, Revives:20}}).min.Pokebolas).toBe(500);
+      expect(prefs.setStockRules({...DEFAULT_STOCK_RULES, min:{Pokebolas:500, Poções:100, Revives:20}}).min.Pokebolas).toBe(500);
       expect(prefs.getStockRules().min.Pokebolas).toBe(500);
       prefs.close();
       const check = new DatabaseSync(path);

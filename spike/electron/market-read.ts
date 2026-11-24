@@ -11,7 +11,7 @@ import { MARKET_SCAN_SCRIPT, MARKET_UNAVAILABLE, sanitizeMarketScan, type Market
  * Limites: só com a busca preenchida, no máximo 30 páginas, um clique por vez no ritmo de uma pessoa (espera a página mudar
  * + 1,5 s), uma execução por conta, sempre interrompível, e para sozinho em qualquer anomalia.
  */
-export const MARKET_MAX_PAGES = 30, CHANGE_POLL_MS = 250, CHANGE_TIMEOUT_MS = 6000, HUMAN_PAUSE_MS = 1500;
+export const MARKET_MAX_PAGES = 30, CHANGE_POLL_MS = 250, CHANGE_TIMEOUT_MS = 6000, HUMAN_PAUSE_MS = 1500, LOCATE_PAUSE_MS = 700;
 export const NEEDS_QUERY = 'Busque uma espécie no Mercado antes (ex.: Venusaur) — o Mercado inteiro tem centenas de páginas.';
 const BUSY = 'Já existe uma leitura de páginas em andamento nesta conta.';
 const CLOSED = 'O Mercado foi fechado; a leitura parou.';
@@ -19,6 +19,7 @@ const CHANGED = 'A busca mudou; a leitura parou.';
 const GONE = 'A sessão desta conta ficou indisponível; a leitura parou.';
 const STUCK = 'A página não mudou depois do clique; a leitura parou.';
 const FAILED = 'Não foi possível ler as páginas; a leitura parou.';
+const STOPPED = 'Parado.';
 
 // Código fixo (nada vindo do renderer): aperta só o botão "›" do rodapé de paginação, e só se estiver habilitado.
 export const MARKET_NEXT_SCRIPT = `(() => {
@@ -29,6 +30,34 @@ export const MARKET_NEXT_SCRIPT = `(() => {
 })()`;
 // Só lê o texto "X de N" do rodapé (para detectar que a página trocou).
 export const MARKET_PAGE_SCRIPT = `(() => { const s = document.querySelector('#cm-paginas span'); return s ? String(s.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 40) : ''; })()`;
+
+// Página anterior: só o botão "‹" do rodapé, e só se estiver habilitado (usado ao levar o usuário até um anúncio).
+export const MARKET_PREV_SCRIPT = `(() => {
+  const b = Array.from(document.querySelectorAll('#cm-paginas button.cm-pag')).find((x) => (x.textContent || '').trim() === '‹');
+  if (!b || b.disabled) return false;
+  b.click();
+  return true;
+})()`;
+/** Rola até o card de número `index` (mesma seleção de cards da leitura) e o destaca por alguns segundos. Não clica. */
+export const marketHighlightScript = (index: number) => `(() => {
+  const lista = document.querySelector('#cm-lista');
+  if (!lista) return false;
+  const all = Array.from(lista.querySelectorAll(':scope > .cm-card'));
+  const poke = all.filter((c) => c.classList.contains('poke'));
+  const cards = poke.length ? poke : all.filter((c) => c.querySelector('.cm-nome-txt'));
+  const c = cards[${Math.max(0, Math.floor(index))}];
+  if (!c) return false;
+  c.scrollIntoView({block: 'center', behavior: 'smooth'});
+  const old = c.style.cssText;
+  c.style.outline = '3px solid #ffcb05'; c.style.outlineOffset = '2px'; c.style.boxShadow = '0 0 0 6px rgba(255,203,5,.35), 0 0 24px rgba(255,203,5,.6)';
+  c.style.transition = 'box-shadow .4s ease, outline-color .4s ease';
+  setTimeout(() => { c.style.cssText = old; }, 6000);
+  return true;
+})()`;
+export const LOCATE_MAX_CLICKS = 40;
+const LOCATE_LOST = 'Não encontrei esse anúncio no Mercado: ele pode ter sido vendido ou retirado. Leia as páginas de novo.';
+const LOCATE_QUERY = (q: string) => `Busque "${q}" no Mercado desta conta para ir até o anúncio.`;
+export interface LocateRequest { key: string; page: number | null; query: string }
 
 export type StartResult = {ok: true; data: undefined} | {ok: false; error: string};
 export interface ReaderDeps {
@@ -86,7 +115,78 @@ export function createMarketReader(deps: ReaderDeps) {
     } catch { finish(FAILED); }
   }
 
+  /** Vira uma página (`dir` = 1 ou −1) e espera o rodapé mudar. 'end' = botão desabilitado. */
+  async function turn(id: string, dir: 1 | -1, state: {stopped: boolean}): Promise<'ok' | 'end' | string> {
+    const t = usable(id);
+    if (!t) return GONE;
+    const before = await timed(t.run(MARKET_PAGE_SCRIPT), timeout);
+    if (await timed(t.run(dir > 0 ? MARKET_NEXT_SCRIPT : MARKET_PREV_SCRIPT), timeout) !== true) return 'end';
+    for (let waited = 0; waited < CHANGE_TIMEOUT_MS && !state.stopped; waited += CHANGE_POLL_MS) {
+      await sleep(CHANGE_POLL_MS);
+      const t2 = usable(id);
+      if (!t2) return GONE;
+      if (await timed(t2.run(MARKET_PAGE_SCRIPT), timeout) !== before) return 'ok';
+    }
+    return STUCK;
+  }
+  /** Índice do card com a chave pedida na página atual (ou -1), junto com a leitura da página. */
+  async function findHere(id: string, key: string): Promise<{index: number; scan: MarketScan} | string> {
+    const t = usable(id);
+    if (!t) return GONE;
+    const raw = await timed(t.run(MARKET_SCAN_SCRIPT), timeout) as {cards?: unknown[]} | null;
+    const scan = sanitizeMarketScan(raw);
+    if (!scan) return FAILED;
+    if (!scan.open) return CLOSED;
+    const cards = Array.isArray(raw?.cards) ? raw.cards : [];
+    const index = cards.findIndex(card => { const one = sanitizeMarketScan({open: true, pag: '', query: '', cards: [card]}); return one?.listings[0] ? listingKey(one.listings[0]) === key : false; });
+    return {index, scan};
+  }
+  async function locateLoop(id: string, req: LocateRequest, state: {stopped: boolean}): Promise<StartResult> {
+    const fail = (error: string): StartResult => ({ok: false, error});
+    // páginas a visitar: a de onde o anúncio foi visto, depois as vizinhas (a vitrine anda quando algo é vendido)
+    const plan = req.page !== null ? [req.page, req.page - 1, req.page + 1, req.page - 2, req.page + 2].filter(p => p >= 1) : [];
+    const visited = new Set<number>();
+    let clicks = 0, here = await findHere(id, req.key);
+    for (;;) {
+      if (typeof here === 'string') return fail(here);
+      if (!sameQuery(here.scan.query, req.query)) return fail(LOCATE_QUERY(req.query));
+      if (here.index >= 0) {
+        const t = usable(id);
+        if (!t) return fail(GONE);
+        await timed(t.run(marketHighlightScript(here.index)), timeout);
+        return {ok: true, data: undefined};
+      }
+      const {page, pages} = here.scan;
+      if (page === null || pages === null) return fail(LOCATE_LOST);
+      visited.add(page);
+      const goal = plan.find(p => p <= pages && !visited.has(p));
+      if (goal === undefined || ++clicks > LOCATE_MAX_CLICKS) return fail(LOCATE_LOST);
+      if (state.stopped) return fail(STOPPED);
+      const moved = await turn(id, goal > page ? 1 : -1, state);
+      if (moved === 'end') { visited.add(goal); continue; }
+      if (moved !== 'ok') return fail(moved);
+      await sleep(LOCATE_PAUSE_MS);
+      here = await findHere(id, req.key);
+    }
+  }
+
   return {
+    /** Leva o Mercado da conta até a página do anúncio e o destaca (sem clicar nele). Nunca lança. */
+    async locate(id: unknown, req: unknown): Promise<StartResult> {
+      if (typeof id !== 'string' || !deps.known().includes(id)) return {ok: false, error: MARKET_UNAVAILABLE};
+      const r = req as Partial<LocateRequest> | null;
+      if (!r || typeof r.key !== 'string' || r.key.length > 300 || typeof r.query !== 'string' || r.query.length > 80 || !(r.page === null || (Number.isInteger(r.page) && r.page! >= 1 && r.page! <= 1e6))) return {ok: false, error: MARKET_UNAVAILABLE};
+      if (runs.has(id)) return {ok: false, error: BUSY};
+      const release = lock.acquire(id);
+      if (!release) return {ok: false, error: ACCOUNT_BUSY};
+      const state = {stopped: false, finished: Promise.resolve()};
+      runs.set(id, state);
+      let result: StartResult = {ok: false, error: FAILED};
+      const work = locateLoop(id, {key: r.key, page: r.page ?? null, query: r.query}, state).then(v => { result = v; }, () => { result = {ok: false, error: FAILED}; });
+      state.finished = work.finally(() => { if (runs.get(id) === state) runs.delete(id); release(); });
+      await state.finished;
+      return result;
+    },
     /** Valida as pré-condições e inicia a leitura em segundo plano (progresso via `emit`). Nunca lança. */
     async readAll(id: unknown): Promise<StartResult> {
       if (typeof id !== 'string' || !deps.known().includes(id)) return {ok: false, error: MARKET_UNAVAILABLE};

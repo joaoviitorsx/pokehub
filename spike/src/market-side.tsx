@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { rankDeals, type MarketCurrency, type MarketFocus, type MarketListing, type MarketScan } from '../domain/market';
-import { accumulate, accumulated, sessionKey, sessionStats, type MarketAccumulator, type MarketProgress } from '../domain/market-session';
+import { accumulate, accumulated, listingKey, sessionKey, sessionStats, type MarketAccumulator, type MarketProgress } from '../domain/market-session';
 import { huntFetchable } from './hunt-queue';
 import { Icon, icons } from './icons';
 import { MarketAlerts } from './market-alerts';
@@ -39,6 +39,8 @@ export function MarketPanel({id, state, profiles}: {id: string | undefined; stat
   const running = useRef(new Set<string>());
   const lastScan = useRef<Record<string, {sig: string; at: number}>>({}); // retrato igual ao anterior não gera setState (o acúmulo só é renovado a cada 60 s)
   const live = huntFetchable(state);
+  // "Ir ao anúncio": o processo principal vira as páginas do Mercado até o anúncio e o destaca (não clica nele, não compra).
+  const [going, setGoing] = useState<{key: string; error?: string; done?: boolean} | null>(null);
   // Selos nos cards do RMT (processo principal, todas as contas): preferência salva no app.
   const [badges, setBadges] = useState<boolean | null>(null);
   useEffect(() => { let alive = true; void window.pokehub.market.badges().then(result => { if (alive && result.ok) setBadges(result.data); }).catch(() => undefined); return () => { alive = false; }; }, []);
@@ -87,6 +89,13 @@ export function MarketPanel({id, state, profiles}: {id: string | undefined; stat
     const result = await window.pokehub.market.readAll(id).catch(() => ({ok: false as const, error: unavailable}));
     if (!result.ok) { running.current.delete(id); setRuns(old => without(old, id)); setStartError(old => ({...old, [id]: result.error})); }
   };
+  const goTo = async (l: MarketListing) => {
+    if (!id || !data || going?.key && !going.done && !going.error) return;
+    const key = listingKey(l), page = acc?.entries.get(key)?.page ?? null;
+    setGoing({key});
+    const result = await window.pokehub.market.locate(id, {key, page, query: data.query}).catch(() => ({ok: false as const, error: unavailable}));
+    setGoing(old => old?.key === key ? (result.ok ? {key, done: true} : {key, error: result.error}) : old);
+  };
   const stop = () => { if (id) void window.pokehub.market.stop(id); };
   const clear = () => { if (!id || !data) return; setAccs(old => without(old, id)); setRuns(old => without(old, id)); setStamp(value => value + 1); };
   const query = data?.query ?? '', tooMany = data?.pages != null && data.pages > MARKET_MAX_PAGES;
@@ -121,7 +130,7 @@ export function MarketPanel({id, state, profiles}: {id: string | undefined; stat
           {!reading && hint && <p className="side-foot">{hint}</p>}
           {!reading && id && startError[id] && <p className="mkt-warn" role="alert">{startError[id]}</p>}
           {finished && <p className={finished.error ? 'side-foot' : 'side-foot ok'} role="status">{!finished.error && <i className="burst" aria-hidden="true"/>}{finished.error ?? `Leitura concluída: ${full.format(finished.collected)} anúncios lidos.`}</p>}
-          <p className="side-foot">O PokéHub só aperta “próxima página” no ritmo de uma pessoa. Não compra, não anuncia, não abre anúncios.</p>
+          <p className="side-foot">O PokéHub só aperta “próxima página” no ritmo de uma pessoa. Não compra, não anuncia, não abre anúncios. “Ir ao anúncio” só vira as páginas e destaca o card.</p>
         </div>
         {pool.length === 0 ? message('Nenhum anúncio na tela', 'O Mercado está aberto, mas não encontrei cards de Pokémon. Se a vitrine já tem anúncios, o layout do jogo pode ter mudado.')
           : deals.length === 0 ? message('Nada com estes filtros', 'Afrouxe os filtros para ver os anúncios analisados.')
@@ -130,6 +139,12 @@ export function MarketPanel({id, state, profiles}: {id: string | undefined; stat
             <p className="mkt-meta">{[l.level !== null && `Nv ${full.format(l.level)}`, l.nota !== null && `Nota ${dec(l.nota)}`].filter(Boolean).join(' · ') || (l.potencia === null ? 'Sem detalhes na tela' : '')}{l.potencia !== null && <span className="mkt-pot" data-p={Math.min(5, Math.max(1, Math.round(l.potencia)))} title={`Potência ${l.potencia}`}>P{l.potencia}</span>}{l.smart && <span className="mkt-smart" data-label={l.smart.label} title={l.smart.market !== null ? `Mercado: ${price(l.smart.market)}` : 'Selo da Smart Market'}>{smartText(l.smart)}</span>}</p>
             <div className="mkt-bar" data-tier={tier(score)} role="img" aria-label={`Pontuação ${Math.round(score)} de 100`}><i/><span>{Math.round(score)}</span></div>
             <ul className="mkt-why">{reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>
+            {(() => { const key = listingKey(l), mine = going?.key === key, busy = Boolean(going && !going.done && !going.error);
+              return <div className="mkt-go">
+                <button className="opt" onClick={() => void goTo(l)} disabled={busy || reading} aria-busy={mine && busy} title="Leva o Mercado do jogo até este anúncio e o destaca. Não compra nem abre o anúncio."><Icon d={icons.target}/>{mine && busy ? 'Indo ao anúncio…' : 'Ir ao anúncio'}</button>
+                {mine && going!.done && <small className="ok" role="status">Destacado no Mercado do jogo.</small>}
+                {mine && going!.error && <small className="mkt-warn" role="alert">{going!.error}</small>}
+              </div>; })()}
           </li>)}</ol>}
         {!data!.smart && pool.length > 0 && <p className="side-foot">Instale/ative a Smart Market em Gerenciar → Extensões para comparar com o preço de mercado.</p>}
         <p className="side-foot">A pontuação é uma estimativa a partir do que está na tela, não uma garantia. Atualiza a cada 5 s. Somente leitura: o PokéHub não compra nem clica por você.</p>
