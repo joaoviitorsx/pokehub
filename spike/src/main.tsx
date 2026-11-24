@@ -123,6 +123,7 @@ function App() {
  const [net,setNet] = useState<NetworkInfo | null>(null);
  const [openFindings,setOpenFindings] = useState<string | null>(null);
  const [upd,setUpd] = useState<UpdateInfo | null>(null);
+ const [updOpen,setUpdOpen] = useState(false); // modal da atualização
  const [extReload,setExtReload] = useState(false);
  const [side,setSide] = useState(false);
  const [sidePick,setSidePick] = useState<string|null>(null);
@@ -195,7 +196,9 @@ function App() {
  const sideAllowed = loaded && !loadError && profiles.length > 0;
  const sideShown = side && sideAllowed && editor === null;
  useEffect(() => window.pokehub.onToggleSide(() => { if (sideAllowed && editor === null) setSide(open => !open); }),[sideAllowed,editor]);
- useEffect(() => { if (loaded) void window.pokehub.layout(focus,editor !== null || loadError,sideShown,sidePrefs.width,sideShown ? sidePick : null).then(result => {if (!result.ok) setMessage(result.error);}).catch(() => setMessage('Falha de comunicação com o aplicativo.')); },[focus,editor,loaded,loadError,profiles.length,sideShown,sidePrefs.width,sidePick]);
+ // modais desenhados na interface (atualização, confirmação) ficam embaixo das views do jogo, que são nativas: escondê-las enquanto abertos
+ const overlay = ask !== null || (updOpen && upd !== null && (upd.status.state === 'available' || upd.status.state === 'downloading' || upd.status.state === 'ready'));
+ useEffect(() => { if (loaded) void window.pokehub.layout(focus,editor !== null || loadError || overlay,sideShown,sidePrefs.width,sideShown ? sidePick : null).then(result => {if (!result.ok) setMessage(result.error);}).catch(() => setMessage('Falha de comunicação com o aplicativo.')); },[focus,editor,loaded,loadError,overlay,profiles.length,sideShown,sidePrefs.width,sidePick]);
  const unsavedProfile = editor !== null && editor !== 'manage' && editor !== 'pair' && profileFormChanged(initialForm,form);
  const unsavedSettings = editor === 'manage' && startupMode !== null && savedStartupMode !== null && startupMode !== savedStartupMode;
  useEffect(() => {
@@ -350,7 +353,6 @@ function App() {
    const offStock = window.pokehub.stock.onOpenRestock(profileId => { setEditor(null); setSide(true); setSideTab(old => ({tab:'loja', n:(old?.n ?? 0) + 1, profileId})); });
    return () => { offHit(); offOpen(); offStock(); };
  },[]);
- const [updOpen,setUpdOpen] = useState(false); // modal da atualização
  const [updStarted,setUpdStarted] = useState(false); // o usuário pediu pelo modal: ao terminar o download, instala sozinho
  const startUpdate = () => { setUpdStarted(true); void updateAction(window.pokehub.updates.download); };
  const closeUpdate = () => { setUpdOpen(false); setUpdStarted(false); };
