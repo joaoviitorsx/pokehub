@@ -1021,3 +1021,4 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 .tw-browser { display: grid; gap: 6px; margin-top: 8px; }
 .tw-browser > button { width: 100%; justify-content: center; }
 .tw-browser .tw-hint { margin: 0; }
+.stk-pending { margin: 0; padding: 6px 8px; border-radius: 6px; font-size: 12px; line-height: 1.35; background: color-mix(in srgb, var(--pi-ouro-forte) 18%, transparent); box-shadow: inset 0 0 0 1px var(--pi-ouro-forte); }

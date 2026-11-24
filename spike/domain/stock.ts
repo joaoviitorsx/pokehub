@@ -1,6 +1,6 @@
 // Reposição assistida: estoque das pokébolas, poções e revives que a automação do jogo USA, lido do estado do jogo (via /hunt),
 // sem abrir o Market. Avisa quando uma categoria cai abaixo do mínimo; a compra continua sendo da Loja, com confirmação.
-import { isShopCat, isShopName, MAX_KIT_LINES, type KitLine, type ShopCat } from './shop';
+import { isShopCat, isShopName, MAX_KIT_LINES, SHOP_CATALOG, type KitLine, type ShopCat, type ShopItem } from './shop';
 
 export const STOCK_CATS: readonly ShopCat[] = ['Pokebolas', 'Poções', 'Revives'];
 export interface StockCat { total: number; /** só pokébolas têm nome no catálogo do jogo */ itens: {nome: string; qtd: number}[] }
@@ -73,4 +73,22 @@ export const catLabel: Record<ShopCat, string> = {Pokebolas: 'Pokébolas', Poç�
 /** Texto do aviso: "Pokébolas: restam 33 (mínimo 300) · Revives: restam 4 (mínimo 20)". */
 export function lowText(stock: StockRead, cats: readonly ShopCat[], rules: StockRules): string {
   return cats.map(cat => `${catLabel[cat]}: restam ${stock.cats[cat].total.toLocaleString('pt-BR')} (mínimo ${rules.min[cat].toLocaleString('pt-BR')})`).join(' · ');
+}
+
+/**
+ * Kit sugerido para a reposição automática quando o usuário ainda não tem kit: em cada categoria vigiada, o item do catálogo que
+ * ele mais tem (pokébola em uso pela automação, ou o que a última leitura do Market mostrou), com meta = 3 × o mínimo.
+ * Sem pista, usa Ultra Ball / Hyper Potion / Revive. É só uma sugestão: o usuário confere e salva.
+ */
+export function suggestKit(stocks: readonly StockRead[], items: readonly ShopItem[], rules: StockRules): KitLine[] {
+  const fallback: Record<ShopCat, string> = {Pokebolas: 'Ultra Ball', Poções: 'Hyper Potion', Revives: 'Revive'};
+  const have = new Map<string, number>();
+  const add = (cat: ShopCat, name: string, qtd: number) => { if (SHOP_CATALOG[cat].includes(name)) have.set(`${cat}|${name}`, (have.get(`${cat}|${name}`) ?? 0) + qtd); };
+  for (const s of stocks) for (const b of s.cats.Pokebolas.itens) add('Pokebolas', b.nome, b.qtd);
+  for (const i of items) add(i.cat, i.name, i.have);
+  return STOCK_CATS.filter(cat => rules.min[cat] > 0).map(cat => {
+    let best = fallback[cat], most = 0;
+    for (const name of SHOP_CATALOG[cat]) { const n = have.get(`${cat}|${name}`) ?? 0; if (n > most) { most = n; best = name; } }
+    return {cat, name: best, target: Math.min(1_000_000, rules.min[cat] * 3)};
+  });
 }

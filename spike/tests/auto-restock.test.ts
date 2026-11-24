@@ -52,3 +52,19 @@ describe('reposição automática', () => {
     expect(DEFAULT_STOCK_RULES.auto).toBe(false);
   });
 });
+
+describe('kit sugerido (ligar "Repor sozinho" sem kit)', () => {
+  it('usa o que a conta mais tem, com meta 3× o mínimo', async () => {
+    const { suggestKit, sanitizeStock } = await import('../domain/stock');
+    const s = sanitizeStock({gold: 1, bolas: [{nome: 'Ultra Ball', qtd: 39_000}, {nome: 'Poke Ball', qtd: 30}], pocoes: 1, revives: 1, usaPocao: true, usaRevive: true})!;
+    const items = [{cat: 'Poções' as const, name: 'Ultimate Potion', have: 10_492, price: 1500}, {cat: 'Poções' as const, name: 'Great Potion', have: 3583, price: 150}, {cat: 'Revives' as const, name: 'Max Revive', have: 77, price: 1}];
+    expect(suggestKit([s], items, DEFAULT_STOCK_RULES)).toEqual([
+      {cat: 'Pokebolas', name: 'Ultra Ball', target: 900}, {cat: 'Poções', name: 'Ultimate Potion', target: 300}, {cat: 'Revives', name: 'Max Revive', target: 60}]);
+  });
+  it('sem pista usa o padrão; categoria com mínimo 0 fica de fora; o kit passa na validação', async () => {
+    const { suggestKit } = await import('../domain/stock');
+    const kit = suggestKit([], [], {...DEFAULT_STOCK_RULES, min: {Pokebolas: 300, Poções: 0, Revives: 20}});
+    expect(kit).toEqual([{cat: 'Pokebolas', name: 'Ultra Ball', target: 900}, {cat: 'Revives', name: 'Revive', target: 60}]);
+    expect(sanitizeRules({auto: true, autoKit: kit})).toMatchObject({auto: true, autoKit: kit});
+  });
+});

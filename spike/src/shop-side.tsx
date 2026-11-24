@@ -3,7 +3,7 @@ import type { Profile } from '../domain/profiles';
 import { MAX_QTY, SHOP_CATALOG, isCatalogItem, SHOP_CATS, fitPlan, loadKits, orderTotal, planRestock, planTotal, saveKits, isShopCat, MAX_KITS, MAX_KIT_LINES, type Kit, type ShopCat, type ShopItem, type ShopLine, type ShopLineResult, type ShopOrder, type ShopProgress, type ShopRead } from '../domain/shop';
 import { huntFetchable } from './hunt-queue';
 import { Ball, Icon, icons } from './icons';
-import { catLabel, DEFAULT_STOCK_RULES, STOCK_CATS, type StockRules } from '../domain/stock';
+import { catLabel, DEFAULT_STOCK_RULES, STOCK_CATS, suggestKit, type StockRules } from '../domain/stock';
 import type { StockEntry } from '../electron/stock-watch';
 import type { CSSProperties } from 'react';
 
@@ -115,8 +115,18 @@ export function ShopPanel({profiles, states, id, active, restockRequest = null}:
     if (JSON.stringify(kit.lines) !== JSON.stringify(rules.autoKit)) saveRules({...rules, autoKit: kit.lines});
   };
   const [autoMaxText, setAutoMaxText] = useState<string | null>(null);
+  // sem kit: abre um kit sugerido (do que a conta mais usa) para conferir; ao salvar, a automática liga sozinha
+  const [autoPending, setAutoPending] = useState(false);
+  const draftRef = useRef<HTMLDivElement>(null);
   const toggleAuto = (on: boolean) => {
-    if (on && !kitForStock) { setMsg('Crie um kit de reposição (abaixo) para o PokéHub saber o que comprar sozinho.'); return; }
+    if (on && !kitForStock) {
+      const items = Object.values(reads).flatMap(r => 'data' in r ? r.data.items : []);
+      setDraft({id: newId(), name: 'Reposição automática', lines: suggestKit(Object.values(stock).map(e => e.stock), items, rules)});
+      setAutoPending(true);
+      setTimeout(() => draftRef.current?.scrollIntoView({block: 'center', behavior: 'smooth'}), 50);
+      return;
+    }
+    setAutoPending(false);
     saveRules({...rules, auto: on, autoKit: on && kitForStock ? kitForStock.lines : rules.autoKit});
   };
   const restockAccount = (pid: string) => { if (!kitForStock) { setMsg('Crie um kit de reposição (abaixo) para o PokéHub saber quanto comprar.'); return; } restock(kitForStock, [pid]); };
@@ -162,6 +172,7 @@ export function ShopPanel({profiles, states, id, active, restockRequest = null}:
     const kit = {...draft, name, lines};
     persist(kits.some(k => k.id === kit.id) ? kits.map(k => k.id === kit.id ? kit : k) : [...kits, kit].slice(0, MAX_KITS));
     setDraft(null);
+    if (autoPending) { setAutoPending(false); setStockKit(kit.id); saveRules({...rules, auto: true, autoKit: kit.lines}); }
   };
   const setLine = (index: number, patch: Partial<Kit['lines'][number]>) => setDraft(d => d && {...d, lines: d.lines.map((l, i) => i === index ? {...l, ...patch} : l)});
   const idle = work === null && !running;
@@ -179,6 +190,8 @@ export function ShopPanel({profiles, states, id, active, restockRequest = null}:
           <label className="stk-auto-row"><span><strong>Repor sozinho</strong><small>Sem “Confirmar compra”: só o que falta para as metas do kit, só nas categorias baixas e só com ouro.</small></span>
             <span className="switch ma-switch"><span className="sr">Reposição automática</span><input type="checkbox" role="switch" checked={rules.auto} disabled={!rules.on} onChange={event => toggleAuto(event.target.checked)}/></span></label>
           {rules.auto && <label className="stk-max">Limite por reposição (ouro)<input type="number" min={1} max={1e12} step={100000} value={autoMaxText ?? rules.autoMax} onChange={event => setAutoMaxText(event.target.value)} onBlur={() => { const n = Math.floor(Number(autoMaxText)); setAutoMaxText(null); if (Number.isFinite(n) && n >= 1) saveRules({...rules, autoMax: Math.min(1e12, n)}); }}/></label>}
+          {autoPending && !rules.auto && <p className="stk-pending">Falta o kit: confira o kit sugerido abaixo e salve para ligar.</p>}
+          {!rules.on && <p className="side-foot">Ligue os avisos de estoque (no topo) para usar a reposição automática.</p>}
           {rules.auto && <p className="side-foot">Gasta no máximo {full.format(rules.autoMax)} de ouro em cada reposição. Para desligar, é só desmarcar.</p>}
         </div>
         {kits.length > 0 && <label className="stk-kit">Kit da reposição<select value={kitForStock?.id ?? ''} onChange={event => { setStockKit(event.target.value); syncAuto(kits, event.target.value); }}>{kits.map(k => <option key={k.id} value={k.id}>{k.name}</option>)}</select></label>}
@@ -217,10 +230,11 @@ export function ShopPanel({profiles, states, id, active, restockRequest = null}:
           <button onClick={() => restock(kit)} disabled={!idle || !liveIds.length}>Repor</button>
           <button className="icon" aria-label={`Editar ${kit.name}`} title="Editar" disabled={!idle} onClick={() => setDraft({...kit, lines: kit.lines.map(l => ({...l}))})}><Icon d={icons.rows}/></button>
           <button className="icon" aria-label={`Excluir ${kit.name}`} title="Excluir" disabled={!idle} onClick={() => persist(kits.filter(k => k.id !== kit.id))}><Icon d={icons.close}/></button></li>)}</ul>
-        {draft ? <div className="shop-edit">
+        {draft ? <div className="shop-edit" ref={draftRef}>
+          {autoPending && <p className="stk-pending" role="status">Kit sugerido para repor sozinho: confira os itens e as metas e clique em <b>Salvar kit</b>. A reposição automática liga ao salvar.</p>}
           <input value={draft.name} maxLength={32} placeholder="Nome do kit (ex.: Farm padrão)" aria-label="Nome do kit" onChange={event => setDraft({...draft, name: event.target.value})}/>
           {draft.lines.map((l, index) => <div key={index} className="shop-form"><ItemSelect value={keyOf(l.cat, l.name)} catalog={catalog} label="Item do kit" onChange={key => { const p = splitKey(key); if (p) setLine(index, {cat: p[0], name: p[1]}); }}/><input type="number" min={1} max={1000000} value={l.target} aria-label="Meta" onChange={event => setLine(index, {target: Math.max(0, Math.floor(Number(event.target.value)) || 0)})}/><button className="icon" aria-label="Remover linha" onClick={() => setDraft({...draft, lines: draft.lines.filter((_, i) => i !== index)})}><Icon d={icons.close}/></button></div>)}
-          <div className="shop-row"><button onClick={() => setDraft({...draft, lines: [...draft.lines, {cat: 'Pokebolas', name: 'Ultra Ball', target: 100}]})} disabled={draft.lines.length >= MAX_KIT_LINES}>Adicionar item</button><button className="primary" onClick={saveDraft} disabled={!draft.name.trim() || !draft.lines.some(l => l.target >= 1)}>Salvar kit</button><button onClick={() => setDraft(null)}>Cancelar</button></div>
+          <div className="shop-row"><button onClick={() => setDraft({...draft, lines: [...draft.lines, {cat: 'Pokebolas', name: 'Ultra Ball', target: 100}]})} disabled={draft.lines.length >= MAX_KIT_LINES}>Adicionar item</button><button className="primary" onClick={saveDraft} disabled={!draft.name.trim() || !draft.lines.some(l => l.target >= 1)}>Salvar kit</button><button onClick={() => { setDraft(null); setAutoPending(false); }}>Cancelar</button></div>
         </div> : <button onClick={() => setDraft({id: newId(), name: '', lines: [{cat: 'Pokebolas', name: 'Ultra Ball', target: 200}]})} disabled={!idle || kits.length >= MAX_KITS}>Novo kit</button>}
       </section>
 
