@@ -74,7 +74,7 @@ export function createTwitchService(deps: TwitchDeps) {
   const duplicateOf = (runner: Runner) => {
     if (!runner.login) return false;
     const links = deps.store.list(), mine = links.findIndex(link => link.profileId === runner.id);
-    return links.some((link,index) => index < mine && runners.get(link.profileId)?.login === runner.login);
+    return links.some((link,index) => index < mine && link.enabled && runners.get(link.profileId)?.login === runner.login); // perfil pausado não bloqueia
   };
   const currentState = (runner: Runner, link: TwitchLink | null) => stateOf({enabled:link?.enabled === true, channel:deps.store.channel(), login:runner.login, duplicate:duplicateOf(runner), failed:runner.failed, probe:runner.probe});
 
@@ -108,7 +108,13 @@ export function createTwitchService(deps: TwitchDeps) {
     prepared.add(browserSession);
     lockSession(browserSession);
     browserSession.webRequest.onBeforeRequest((details,callback) => { try { callback({cancel:!twitchRequestAllowed(details.url)}); } catch { callback({cancel:true}); } });
-    browserSession.cookies.on('changed',(_event,cookie) => { if (cookie.name === 'login' || cookie.name === 'auth-token') void readLogin(id).then(() => afterLogin(id)); });
+    // entrar/sair muda vários cookies em sequência: uma releitura só, 600 ms depois da última mudança
+    let cookieTimer: ReturnType<typeof setTimeout> | undefined;
+    browserSession.cookies.on('changed',(_event,cookie) => {
+      if (cookie.name !== 'login' && cookie.name !== 'auth-token') return;
+      clearTimeout(cookieTimer);
+      cookieTimer = setTimeout(() => { if (!disposed) void readLogin(id).then(() => afterLogin(id)); },600);
+    });
     return browserSession;
   }
   async function readLogin(id: string): Promise<string | null> {
@@ -168,7 +174,7 @@ export function createTwitchService(deps: TwitchDeps) {
     // só o quadro principal fica preso à Twitch: anúncios e o captcha do login rodam em iframes de outros domínios
     contents.on('will-navigate',event => { if (event.isMainFrame) guard(event,event.url); });
     contents.on('will-redirect',event => { if (event.isMainFrame) guard(event,event.url); });
-    contents.on('page-title-updated',event => { event.preventDefault(); }); // o título é sempre "Twitch · <conta>"
+    win.on('page-title-updated',event => { event.preventDefault(); }); // o título é sempre "Twitch · <conta>" (o evento que troca o título é o da janela)
     contents.on('did-finish-load',() => {
       // primeira vez nesta sessão: grava 160p nas preferências da Twitch e recarrega o canal já em 160p
       void run(contents,LOW_QUALITY_SCRIPT).then(changedQuality => { if (changedQuality === true && isChannelPage(contents.getURL())) contents.reload(); }).catch(() => undefined);
@@ -287,6 +293,7 @@ export function createTwitchService(deps: TwitchDeps) {
       const link = deps.store.update(profileId,patch);
       const runner = runnerOf(profileId);
       if (!link.enabled) close(profileId); else afterLogin(profileId);
+      if (patch && typeof patch === 'object' && 'enabled' in patch) for (const other of deps.store.list()) if (other.profileId !== profileId) afterLogin(other.profileId); // pausar libera a mesma conta da Twitch em outro perfil
       applySound(runner);
       changed();
       return info();
