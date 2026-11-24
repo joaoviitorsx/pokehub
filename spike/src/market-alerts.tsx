@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties, type FormEvent } from 'react';
 import type { Profile } from '../domain/profiles';
 import { alertLabel, MAX_ALERTS, type MarketAlert, type MarketAlertHit, type MarketAlertInput } from '../domain/market-alerts';
 import { Icon, icons } from './icons';
+import { loadSoundPrefs, playAlertSound, saveSoundPrefs, TONES, type Tone } from './alert-sound';
 
 type Info = {alerts: MarketAlert[]; hits: MarketAlertHit[]};
 const full = new Intl.NumberFormat('pt-BR', {maximumFractionDigits: 0});
@@ -16,6 +17,9 @@ export function MarketAlerts({profiles}: {profiles: Profile[]}) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [sound, setSound] = useState(loadSoundPrefs);
+  useEffect(() => saveSoundPrefs(sound), [sound]);
+  const test = () => { if (sound.on) playAlertSound(sound, true); void window.pokehub.market.testToast().catch(() => undefined); };
   useEffect(() => {
     let alive = true;
     void window.pokehub.market.alerts().then(result => { if (alive && result.ok) { setInfo(result.data); if (result.data.alerts.length) setOpen(true); } }).catch(() => undefined);
@@ -46,6 +50,13 @@ export function MarketAlerts({profiles}: {profiles: Profile[]}) {
       <span className="ma-chevron" data-open={open || undefined} aria-hidden="true"><Icon d={icons.plus}/></span>
     </button>
     {open && <div className="ma-body">
+      <div className="ma-sound" role="group" aria-label="Som do alerta">
+        <label className="switch ma-switch" title={sound.on ? 'Desligar o som do alerta' : 'Ligar o som do alerta'}><span className="sr">Som do alerta</span><input type="checkbox" role="switch" checked={sound.on} onChange={event => setSound(old => ({...old, on: event.target.checked}))}/></label>
+        <span className="ma-sound-lbl"><Icon d={sound.on ? icons.sound : icons.mute}/>Som</span>
+        <select value={sound.tone} disabled={!sound.on} aria-label="Tom do alerta" title="Tom do alerta" onChange={event => { const tone = event.target.value as Tone; setSound(old => ({...old, tone})); playAlertSound({...sound, tone}, true); }}>{TONES.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}</select>
+        <input type="range" min={0} max={1} step={0.05} value={sound.volume} disabled={!sound.on} aria-label="Volume do alerta" onChange={event => setSound(old => ({...old, volume: Number(event.target.value)}))}/>
+        <button className="opt" onClick={test} title="Toca o som e mostra o aviso de exemplo"><Icon d={icons.bell}/>Testar</button>
+      </div>
       <p className="ma-tip">Avisa quando aparecer um anúncio que você quer, com o RMT aberto em qualquer conta (mesmo com o PokéHub na bandeja). O card ganha um selo de sino.</p>
       {alerts.length > 0 && <ul className="ma-rules">{alerts.map(alert => <li key={alert.id} data-off={!alert.ativo || undefined} title={alertLabel(alert)}>
         <div className="ma-rule-main">

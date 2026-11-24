@@ -10,6 +10,7 @@ import { createMarketReader } from './market-read';
 import { createMarketBadges } from './market-badges';
 import { createFichaReview } from './ficha-review';
 import { createDeadlines } from './deadlines';
+import { createAlertToast } from './alert-toast';
 import { DAY_TYPE_SCRIPT, sanitizeDayType, teamPick } from './team-pick';
 import { dayTypeNotice } from '../domain/team-pick';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -667,17 +668,23 @@ if (primary) app.whenReady().then(() => {
   const coinName = (currency: string | null) => currency === 'orb' ? 'Gemas' : currency === 'gold' ? 'Coins' : '';
   const onAlertHits = (hits: MarketAlertHit[]) => {
     alertHits.unshift(...hits); alertHits.splice(30);
-    if (!window.isDestroyed()) window.webContents.send('market:alertHit',hits);
-    if (!Notification.isSupported()) return;
+    if (!window.isDestroyed()) window.webContents.send('market:alertHit',hits); // a interface toca o som (preferência dela)
     const alerts = preferences.listMarketAlerts();
-    for (const hit of hits.slice(0,3)) {
-      const alert = alerts.find(item => item.id === hit.alertId), l = hit.listing;
-      const conta = store.list().find(profile => profile.id === hit.profileId)?.label ?? 'Conta';
-      const detalhe = [l.shiny ? 'Shiny' : '', l.level !== null ? `Nv ${l.level}` : '', l.potencia !== null ? `P${l.potencia}` : '', l.nota !== null ? `nota ${l.nota.toLocaleString('pt-BR')}` : ''].filter(Boolean).join(' · ');
-      try { new Notification({title:`Alerta do RMT · ${conta}`, body:`${l.name}${detalhe ? ` (${detalhe})` : ''} por ${l.price.toLocaleString('pt-BR')} ${coinName(l.currency)}${alert ? `
-Regra: ${alertLabel(alert)}` : ''}`}).show(); } catch { /* sem notificações no sistema */ }
+    const items = hits.map(hit => {
+      const l = hit.listing, profile = store.list().find(item => item.id === hit.profileId);
+      const detalhe = [l.level !== null ? `Nv ${l.level}` : '', l.potencia !== null ? `P${l.potencia}` : '', l.nota !== null ? `Nota ${l.nota.toLocaleString('pt-BR')}` : ''].filter(Boolean).join(' · ');
+      return {hit, alert:alerts.find(item => item.id === hit.alertId), conta:profile?.label ?? 'Conta', cor:profile?.colorToken ?? '#ba5ad1', detalhe};
+    });
+    // com a janela à vista: aviso no canto, por cima do jogo; escondida (bandeja): notificação do sistema, muda (o som é o nosso)
+    const shown = alertToast.show(items.map(i => ({conta:i.conta, cor:i.cor, nome:i.hit.listing.name, detalhe:i.detalhe || (i.alert ? alertLabel(i.alert) : ''), preco:`${i.hit.listing.price.toLocaleString('pt-BR')} ${coinName(i.hit.listing.currency)}`, moeda:i.hit.listing.currency, shiny:i.hit.listing.shiny})));
+    if (shown || !Notification.isSupported()) return;
+    for (const i of items.slice(0,3)) {
+      const l = i.hit.listing;
+      try { new Notification({title:`Alerta do RMT · ${i.conta}`, silent:true, body:`${l.shiny ? '✨ ' : ''}${l.name}${i.detalhe ? ` (${i.detalhe})` : ''} por ${l.price.toLocaleString('pt-BR')} ${coinName(l.currency)}${i.alert ? `\nRegra: ${alertLabel(i.alert)}` : ''}`}).show(); } catch { /* sem notificações no sistema */ }
     }
   };
+  const alertToast = createAlertToast(() => window.isDestroyed() ? null : window, () => { showWindow(); if (!window.isDestroyed()) window.webContents.send('market:openAlerts'); }, TOP_BAR);
+  app.on('before-quit', () => alertToast.dispose());
   const marketBadges = createMarketBadges({known:() => store.list().map(profile => profile.id), target:marketTarget, enabled:() => preferences.getMarketBadges(), lite:() => perf.lite, visible:() => !window.isDestroyed() && window.isVisible() && !window.isMinimized(), alerts:() => preferences.listMarketAlerts(), onHit:onAlertHits});
   const alertsInfo = () => ({alerts:preferences.listMarketAlerts(), hits:alertHits.slice()});
   ipcMain.handle('market:alerts', event => invoke(event, alertsInfo));
@@ -686,6 +693,7 @@ Regra: ${alertLabel(alert)}` : ''}`}).show(); } catch { /* sem notificações no
     try { preferences.saveMarketAlert(typeof id === 'string' && id ? id : randomUUID(),input); marketBadges.refresh(); return {ok:true,data:alertsInfo()}; }
     catch (error) { const msg = (error as Error).message; return {ok:false,error:msg === 'Limite de alertas' ? 'O limite é de 20 alertas. Remova algum antes.' : msg === 'Preço exige a moeda' ? 'Para usar preço máximo, escolha a moeda (Gemas ou Coins).' : msg === 'Alerta vazio' ? 'Defina pelo menos um critério: nome, preço, nota, potência ou shiny.' : 'Alerta inválido. Confira os campos.'}; }
   });
+  ipcMain.handle('market:testToast', event => invoke(event, () => { alertToast.show([{conta:'Teste', cor:'#ba5ad1', nome:'Venusaur', detalhe:'Nv 61 · P4 · Nota 7,8', preco:'13.000 Coins', moeda:'gold', shiny:false}]); }));
   ipcMain.handle('market:removeAlert', (event,id: unknown) => invoke(event, () => { preferences.removeMarketAlert(id); marketBadges.refresh(); return alertsInfo(); }));
   marketBadges.start();
   app.on('before-quit', () => marketBadges.stop());

@@ -38,6 +38,10 @@ interface Runner {
   state: TwitchState;
   /** banda limitada aplicada (janela escondida da plataforma com `throttleKbps`) */
   throttled: boolean;
+  /** kbps aplicado; sobe para o de reserva se o vídeo parar com a live no ar (vale até a janela fechar) */
+  kbps: number | null;
+  /** leituras seguidas com a live no ar e o vídeo parado, com o limite ativo */
+  stalls: number;
   /** chave do CSS que esconde o chat (aplicado só com a janela escondida) */
   cssKey: string | null;
   /** live fora do ar há muito tempo: janela fechada para liberar memória; acorda em `wake` */
@@ -80,7 +84,7 @@ export function createTwitchService(deps: TwitchDeps) {
   const labelOf = (id: string) => deps.profiles().find(profile => profile.id === id)?.label ?? 'Conta';
   const runnerOf = (id: string): Runner => {
     let runner = runners.get(id);
-    if (!runner) { runner = {id, win:null, login:null, probe:null, failed:false, balance:null, earned:0, claimed:0, since:null, offlineSince:null, timer:undefined, retry:undefined, probing:false, state:'starting', throttled:false, cssKey:null, sleeping:false, wake:undefined, reloadedOffline:false}; runners.set(id,runner); }
+    if (!runner) { runner = {id, win:null, login:null, probe:null, failed:false, balance:null, earned:0, claimed:0, since:null, offlineSince:null, timer:undefined, retry:undefined, probing:false, state:'starting', throttled:false, kbps:null, stalls:0, cssKey:null, sleeping:false, wake:undefined, reloadedOffline:false}; runners.set(id,runner); }
     return runner;
   };
   const alive = (runner: Runner): runner is Runner & {win: BrowserWindow} => Boolean(runner.win && !runner.win.isDestroyed() && !runner.win.webContents.isDestroyed());
@@ -182,15 +186,19 @@ export function createTwitchService(deps: TwitchDeps) {
    * Usa a emulação de rede do Chromium na própria janela (debugger do webContents; não abre porta de depuração).
    */
   async function applyThrottle(runner: Runner) {
-    const kbps = spec.throttleKbps;
-    if (!kbps || !alive(runner)) return;
+    if (!spec.throttleKbps || !alive(runner)) return;
     const contents = runner.win.webContents;
-    const want = !runner.win.isVisible() && runner.probe?.playing === true;
+    const p = runner.probe;
+    // live no ar e vídeo parado com o limite ativo, duas leituras seguidas: o player não desceu de qualidade → limite de reserva
+    if (runner.throttled && p?.live && !p.playing && !p.gate) runner.stalls++; else if (p?.playing) runner.stalls = 0;
+    if (runner.stalls >= 2 && spec.throttleFallbackKbps && runner.kbps !== spec.throttleFallbackKbps) { runner.kbps = spec.throttleFallbackKbps; runner.throttled = false; runner.stalls = 0; }
+    runner.kbps ??= spec.throttleKbps;
+    const want = !runner.win.isVisible() && (p?.playing === true || runner.kbps !== spec.throttleKbps && p?.live === true);
     if (want === runner.throttled) return;
     try {
       if (!contents.debugger.isAttached()) contents.debugger.attach('1.3');
       await contents.debugger.sendCommand('Network.enable');
-      await contents.debugger.sendCommand('Network.emulateNetworkConditions', {offline:false, latency:0, downloadThroughput: want ? kbps * 1000 / 8 : -1, uploadThroughput:-1});
+      await contents.debugger.sendCommand('Network.emulateNetworkConditions', {offline:false, latency:0, downloadThroughput: want ? runner.kbps * 1000 / 8 : -1, uploadThroughput:-1});
       runner.throttled = want;
     } catch { /* DevTools aberto ou janela fechando: segue sem limite */ }
   }
@@ -245,7 +253,7 @@ export function createTwitchService(deps: TwitchDeps) {
     contents.on('did-navigate',() => { runner.cssKey = null; }); // página nova: o CSS inserido some junto
     win.on('close',event => { if (!deps.quitting() && !disposed) { event.preventDefault(); win.hide(); } }); // fechar só esconde: continua contando
     win.once('closed',() => { if (runner.win === win) { runner.win = null; runner.throttled = false; clearTimeout(runner.timer); clearTimeout(runner.retry); runner.probe = null; changed(); } });
-    runner.throttled = false; runner.cssKey = null; runner.sleeping = false; clearTimeout(runner.wake);
+    runner.throttled = false; runner.kbps = null; runner.stalls = 0; runner.cssKey = null; runner.sleeping = false; clearTimeout(runner.wake);
     void contents.loadURL(url ?? spec.channelUrl(deps.store.channel())).catch(() => undefined);
     if (show) { win.show(); win.focus(); }
     schedule(runner,probeDelay('starting'));

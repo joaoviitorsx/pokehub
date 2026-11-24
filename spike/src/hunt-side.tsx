@@ -107,12 +107,14 @@ const waiting: Record<string,[string,string]> = {
 const skeleton = (label:string) => <div className="side-skel" role="status"><span className="sr">{label}</span><i data-k="poke"/><i data-k="seg"/><i data-k="card"><Ball className="wobble"/></i><i/><i/><i/><i/></div>;
 
 // focusId: conta em foco/expandida (a lateral a seleciona ao abrir e quando ela muda); onAccount: devolve a conta mostrada (o processo principal a usa no foco automático).
-export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focusId,onAccount,lite=false}:{profiles:Profile[]; states:Record<string,string>; prefs:SidePrefs; onPrefs:Dispatch<SetStateAction<SidePrefs>>; onClose:() => void; onSettings:() => void; focusId:string|null; onAccount:(id:string|null) => void; lite?:boolean}) {
+export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focusId,onAccount,lite=false,tabRequest=null}:{profiles:Profile[]; states:Record<string,string>; prefs:SidePrefs; onPrefs:Dispatch<SetStateAction<SidePrefs>>; onClose:() => void; onSettings:() => void; focusId:string|null; onAccount:(id:string|null) => void; lite?:boolean; tabRequest?:{tab:'mercado'; n:number} | null}) {
  const [pick,setPick] = useState<string|null>(focusId);
  const [seenFocus,setSeenFocus] = useState(focusId);
  if (seenFocus !== focusId) { setSeenFocus(focusId); if (focusId) setPick(focusId); }
  const [mode,setMode] = useState<Mode>('xp');
  const [tab,setTab] = useState<'cacar'|'mercado'|'loja'|'capturas'|'twitch'>('cacar');
+ const [seenReq,setSeenReq] = useState(tabRequest?.n ?? 0);
+ if (tabRequest && tabRequest.n !== seenReq) { setSeenReq(tabRequest.n); setTab(tabRequest.tab); } // "Ver" no aviso do RMT
  const [entries,setEntries] = useState<Record<string,Entry>>({});
  const [stamp,setStamp] = useState(0);
  const frame = useRef(0);

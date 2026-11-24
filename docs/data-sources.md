@@ -123,11 +123,17 @@ Leitura **somente do DOM** do painel esquerdo "CAPTURAS" do jogo (lista da sess�
 - **Conferência:** no mesmo ciclo dos selos (`spike/electron/market-badges.ts`, 5 s), em toda conta com o RMT aberto, inclusive com a janela na bandeja. Cada anúncio avisa uma vez por regra a cada 6 h (`hitKey`). Aviso: notificação do sistema (até 3 por leitura) + lista "Avisos recentes" (30, em memória) + selo de sino no card (com os selos ligados).
 - **Limite:** só enxerga o que a vitrine aberta mostra (a busca e a página atuais); não busca nem pagina sozinho.
 
+# Sons do alerta do RMT
+
+- **Tons:** "Confirmação" (padrão), "Confirmação 2" e "Vidro" vêm do pacote **Interface Sounds 1.0, de Kenney** (`confirmation_001.wav`, `confirmation_003.wav`, `glass_001.wav`), licença **CC0 1.0** (domínio público, sem crédito obrigatório). Fonte: https://kenney.nl/assets/interface-sounds; arquivos do espelho https://github.com/Calinou/kenney-interface-sounds (CC0). Texto da licença em `spike/src/assets/sounds/LICENSE-kenney-interface-sounds.txt`. "PokéHub (original)" é sintetizado (Web Audio), sem arquivo.
+- Tocados por `<audio>` (a CSP da interface bloqueia `fetch`); no máximo 1 vez a cada 1,5 s; liga/desliga, tom e volume ficam no `localStorage` da interface.
+
 # Kick em segundo plano — aba Lives
 
 - **Fonte (conferida em 2026-11-24):** a página do canal `https://kick.com/<canal>`. Ao vivo: `[data-testid="livestream-title"]`; player: `<video>` (Amazon IVS, autoplay mudo); conta: imagem em `[data-testid="navbar-account"]`; sem conta: botões "Log In/Entrar". O saldo de pontos é lido de qualquer elemento rotulado como pontos do canal (`[data-testid*=point]`, `aria-label`/`title` com "pontos"/"points"); se a Kick não expuser, fica "—". Sem baú automático.
 - **Login:** cookie `session_token` quando existir; senão, a própria página (menu da conta). Sem conta logada a janela escondida fecha.
-- **Qualidade:** o player escolhe sozinho; com a janela escondida a banda é limitada a 1,2 Mbps (`Network.emulateNetworkConditions`) e ele desce para ~480p (medido). À vista, sem limite.
+- **Qualidade:** o player escolhe sozinho; com a janela escondida a banda é limitada a 750 kbps (`Network.emulateNetworkConditions`; mínimo estável medido 650) e ele desce para ~480p; se o vídeo parar com a live no ar, sobe para 1,2 Mbps. À vista, sem limite.
+- **Pontos do canal (conferido logado em 2026-11-24):** login lido certo pelo menu da conta; num canal sem pontos ativados a Kick mostra só o saldo de KICKs (moeda paga), que o PokéHub não lê. O saldo de pontos do canal oficial ainda não foi visto; sem leitura o painel mostra "—".
 - **Cloudflare:** a sessão da Kick usa o user agent sem "Electron/…"; testado: a página abre e toca na janela oculta.
 
 # Prazos dos bônus — aba Caçar

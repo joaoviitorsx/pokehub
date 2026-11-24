@@ -22,7 +22,7 @@ export function createUpdater(options: {autoCheck: () => boolean; onStatus: (sta
   autoUpdater.allowPrerelease = false;
   autoUpdater.on('update-available', info => apply({type:'available',version:info.version,notes:typeof info.releaseNotes === 'string' ? info.releaseNotes.replace(/<[^>]*>/g,' ') : ''}));
   autoUpdater.on('update-not-available', () => apply({type:'none'}));
-  autoUpdater.on('download-progress', progress => apply({type:'progress',percent:progress.percent}));
+  autoUpdater.on('download-progress', progress => apply({type:'progress',percent:progress.percent,transferred:progress.transferred,total:progress.total,bps:progress.bytesPerSecond}));
   autoUpdater.on('update-downloaded', () => apply({type:'downloaded'}));
   autoUpdater.on('error', error => { console.error('Falha na atualização:',error?.message); apply({type:'error',message:status.state === 'downloading' ? 'Não foi possível baixar a atualização.' : 'Não foi possível verificar atualizações.'}); });
   async function check(manual: boolean) {
@@ -46,7 +46,8 @@ export function createUpdater(options: {autoCheck: () => boolean; onStatus: (sta
       try { await autoUpdater.downloadUpdate(); } catch { apply({type:'error',message:'Não foi possível baixar a atualização.'}); }
       return status;
     },
-    install() { if (status.state !== 'ready') return false; autoUpdater.quitAndInstall(false,true); return true; },
+    // silencioso (/S, sem o assistente do instalador) e reabre o PokéHub já na versão nova; o `before-quit` libera as janelas da bandeja e das lives
+    install() { if (status.state !== 'ready') return false; autoUpdater.quitAndInstall(true,true); return true; },
     dispose() { clearTimeout(first); clearInterval(every); clearTimeout(retry); },
   };
 }

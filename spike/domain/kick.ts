@@ -35,5 +35,9 @@ export const KICK_PROBE_SCRIPT = `(() => {
   const user = conta ? String(conta.getAttribute('alt') || '').trim().slice(0, 25) : '';
   return {live, playing, paused: Boolean(video && video.paused), balance, claimable: false, gate, loggedOut, user};
 })()`;
-/** Kick: o player (Amazon IVS) escolhe a qualidade sozinho; escondida, a banda da janela é limitada a isto e ele desce para ~480p. */
-export const KICK_THROTTLE_KBPS = 1200;
+/**
+ * Kick: o player (Amazon IVS) escolhe a qualidade sozinho; escondida, a banda da janela é limitada para ele descer para ~480p.
+ * Medido (2026-11-24, 12 amostras de 8 s por valor): 650–1000 kbps tocam lisos; 600 trava. 750 = mínimo com ~15% de folga.
+ * Às vezes o player não desce de 720p e engasga: aí a janela sobe para `KICK_THROTTLE_FALLBACK_KBPS` (ver `applyThrottle`).
+ */
+export const KICK_THROTTLE_KBPS = 750, KICK_THROTTLE_FALLBACK_KBPS = 1200;

@@ -56,7 +56,7 @@ let extensions: ExtensionInfo[] = [
   ext({id: 'lhfeijlnlbglakplddjgbaopgcdfkcmm', catalogId: 'smart-market', name: 'Smart Market', version: '1.2.2', verdict: 'interage', findings: [{kind: 'click', file: 'content.js', detail: 'element.click() em botões de compra'}]}),
   ext({id: 'x1', name: 'Auto Clicker Pro', version: '0.9.0', enabled: false, loaded: 0, verdict: 'bloqueada', error: 'Bloqueada: envia eventos sintéticos e usa eval.', findings: [{kind: 'eval', file: 'bg.js', detail: 'new Function(...)'}, {kind: 'dispatch', file: 'bg.js', detail: 'dispatchEvent(new MouseEvent)'}]}),
 ];
-let update: UpdateInfo = {version: '0.1.0', packaged: true, autoCheck: true, status: {state: 'available', version: '0.1.1', notes: 'Novo painel de mercado e correções de sessão.'}};
+let update: UpdateInfo = {version: '0.1.0', packaged: true, autoCheck: true, status: {state: 'available', version: '1.1.0', notes: '- Lives: Twitch e Kick em segundo plano\n- Selos e alertas no RMT\n- Análise “Para caçar” na ficha do Pokémon\n- Quem colocar em campo e tipagem do dia\n- Lembretes de prazo dos bônus'}};
 
 // Retratos reais (atlas + janela) copiados de https://pokeidle.io/tracker/api/sprites em 2026-11-23; só URLs, nenhuma imagem no repositório.
 // Contornos reais medidos na página do jogo (2026-11-24); ?semcontorno=1 mostra o recorte antigo para comparar.
@@ -157,6 +157,8 @@ window.pokehub = {
     saveAlert: (id: string | null, input: MarketAlertInput) => { try { const alert = sanitizeAlert(input, id ?? `a${Date.now()}`); mockAlerts = id ? mockAlerts.map(a => a.id === id ? alert : a) : [...mockAlerts, alert]; return ok({alerts: mockAlerts, hits: mockHits}); } catch (error) { return ok(undefined).then(() => ({ok: false as const, error: (error as Error).message === 'Preço exige a moeda' ? 'Para usar preço máximo, escolha a moeda (Gemas ou Coins).' : 'Alerta inválido. Confira os campos.'})); } },
     removeAlert: (id: string) => { mockAlerts = mockAlerts.filter(a => a.id !== id); return ok({alerts: mockAlerts, hits: mockHits}); },
     onAlertHit: () => () => undefined,
+    testToast: () => ok(undefined),
+    onOpenAlerts: () => () => undefined,
     setBadges: (on: boolean) => { marketBadges = on; return ok(on); },
     scan: () => ok(scanPage()),
     readAll: id => {
@@ -206,7 +208,12 @@ window.pokehub = {
   updates: {
     get: () => ok(update),
     check: () => { setUpdate({state: 'available', version: '0.1.1', notes: update.status.notes}); return ok(update); },
-    download: () => { setUpdate({state: 'ready', version: '0.1.1'}); return ok(update); },
+    download: () => { // download simulado: 52 MB em ~5 s, com progresso real no modal
+      const total = 52 * 1_048_576; let got = 0;
+      setUpdate({state: 'downloading', version: '1.1.0', percent: 0, total, transferred: 0, bps: 0});
+      const timer = setInterval(() => { got = Math.min(total, got + total / 12); setUpdate(got >= total ? {state: 'ready', version: '1.1.0'} : {state: 'downloading', version: '1.1.0', percent: Math.round(got / total * 100), total, transferred: got, bps: 10.4 * 1_048_576}); if (got >= total) clearInterval(timer); }, 420);
+      return ok(update);
+    },
     install: () => ok(undefined),
     setAuto: enabled => { update = {...update, autoCheck: enabled}; return ok(update); },
     onStatus: cb => on<UpdateStatus>('update', cb),

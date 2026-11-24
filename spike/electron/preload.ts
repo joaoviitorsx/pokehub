@@ -87,6 +87,12 @@ contextBridge.exposeInMainWorld('pokehub', {
     alerts: () => ipcRenderer.invoke('market:alerts'),
     saveAlert: (id: string | null,input: unknown) => ipcRenderer.invoke('market:saveAlert',id,input),
     removeAlert: (id: string) => ipcRenderer.invoke('market:removeAlert',id),
+    testToast: () => ipcRenderer.invoke('market:testToast'),
+    onOpenAlerts: (callback: () => void) => {
+      const listener = () => callback();
+      ipcRenderer.on('market:openAlerts',listener);
+      return () => ipcRenderer.removeListener('market:openAlerts',listener);
+    },
     onAlertHit: (callback: (hits: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, hits: unknown) => callback(hits);
       ipcRenderer.on('market:alertHit',listener);

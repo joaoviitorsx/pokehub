@@ -939,3 +939,40 @@ select:disabled { opacity: .5; cursor: not-allowed; }
 .dl li[data-u=perto] .dl-t { color: var(--pi-laranja); }
 .dl li[data-u=agora] .dl-t { color: var(--pi-vermelho-txt); }
 .dl li[data-u=agora] { box-shadow: inset 0 0 0 1px var(--pi-vermelho); }
+
+/* ---------- Modal da atualização ---------- */
+.upd-modal { z-index: 60; background: #1a0b12d9; }
+.upd-card { position: relative; width: min(440px, 100%); display: grid; justify-items: center; gap: 10px; padding: 46px 22px 18px; border-radius: 12px; text-align: center; color: var(--pi-sobre);
+  background: linear-gradient(var(--pi-mad-esc) 0 10px, var(--pi-mad) 10px calc(100% - 12px), var(--pi-mad-quente) calc(100% - 12px));
+  box-shadow: inset 0 0 0 2px var(--pi-mad-linha), inset 0 0 0 4px var(--pi-mad-luz), inset 0 0 0 6px var(--pi-mad), 0 10px 0 #0005; animation: open var(--dur-slow) var(--pop) backwards; }
+.upd-hero { position: absolute; top: -34px; width: 68px; height: 68px; border-radius: 50%; display: grid; place-items: center; background: var(--pi-vao); box-shadow: 0 0 0 3px var(--pi-mad-linha), 0 0 0 6px var(--pi-ouro), 0 4px 0 6px var(--pi-mad-linha); }
+.upd-ball { width: 48px; height: 48px; }
+.upd-ball.spin { animation: upd-spin 1.1s linear infinite; }
+@keyframes upd-spin { to { transform: rotate(360deg); } }
+.upd-card h2 { margin: 0; font-family: var(--fonte-titulo); font-size: 18px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; text-shadow: 0 3px 0 var(--pi-titulo-linha), 2px 0 0 var(--pi-titulo-linha), -2px 0 0 var(--pi-titulo-linha), 0 -2px 0 var(--pi-titulo-linha); }
+.upd-sub { margin: 0; max-width: 36ch; font-size: 13px; line-height: 1.45; color: var(--pi-sobre-dim); text-wrap: pretty; }
+.upd-notes { width: 100%; max-height: 160px; overflow-y: auto; margin: 2px 0 0; padding: 10px 12px 10px 28px; border-radius: 7px; text-align: left; font-size: 12px; line-height: 1.5; background: var(--pi-vao); box-shadow: inset 0 0 0 2px var(--pi-mad-linha); }
+.upd-notes li::marker { color: var(--pi-ouro); }
+.upd-prog { width: 100%; display: grid; gap: 6px; }
+.upd-bar { position: relative; height: 18px; border-radius: 9px; overflow: hidden; background: var(--pi-campo); box-shadow: inset 0 0 0 2px var(--pi-mad-linha), 0 1px 0 var(--pi-mad-luz2); }
+.upd-bar i { position: absolute; inset: 2px auto 2px 2px; max-width: calc(100% - 4px); border-radius: 7px; background: linear-gradient(var(--pi-ouro-luz) 0 30%, var(--pi-ouro) 30% 70%, var(--pi-ouro-forte) 70%); box-shadow: inset 0 -2px 0 #0002; transition: width var(--dur-slow) var(--slide); }
+.upd-bar i::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: repeating-linear-gradient(-45deg, #fff3 0 8px, #fff0 8px 16px); background-size: 22px 22px; animation: upd-stripes .8s linear infinite; }
+@keyframes upd-stripes { to { background-position: 22px 0; } }
+.upd-prog p { margin: 0; display: flex; justify-content: space-between; font-size: 12px; color: var(--pi-sobre-dim); }
+.upd-prog b { font-family: var(--fonte-titulo); color: var(--pi-ouro); text-shadow: 0 1px 0 var(--pi-mad-linha); }
+.upd-err { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--pi-vermelho-txt); }
+.upd-err .ic { width: 14px; height: 14px; }
+.upd-btns { display: flex; justify-content: center; gap: 8px; padding-top: 6px; }
+.upd-btns button { height: 34px; }
+.upd-btns .ic { width: 14px; height: 14px; }
+.upd-card[data-phase=instalando] .upd-bar i { background: linear-gradient(#a9f0bd 0 30%, var(--pi-verde) 30% 70%, #3f9e5c 70%); }
+
+.ma-sound { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; background: var(--pi-campo); box-shadow: inset 0 0 0 1px var(--pi-mad-linha); }
+.ma-sound-lbl { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--pi-sobre-dim); }
+.ma-sound-lbl .ic { width: 13px; height: 13px; }
+.ma-sound input[type=range] { flex: 1; min-width: 40px; accent-color: var(--pi-rx-clr); }
+.ma-sound input[type=range]:disabled { opacity: .4; }
+.ma-sound .opt { height: 24px; padding: 0 8px; gap: 4px; font-size: 10px; }
+.ma-sound .opt .ic { width: 12px; height: 12px; }
+.ma-sound { flex-wrap: wrap; }
+.ma-sound select { height: 24px; max-width: 128px; font-size: 11px; }

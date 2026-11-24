@@ -145,7 +145,8 @@ describe('Kick', async () => {
     expect(isPlatform('youtube')).toBe(false);
     expect(streamPartitionFor('pokehubkk-', A)).toBe(`persist:pokehubkk-${A}`);
     expect(partitionPath('/u', A, KICK_PREFIX)).toBe(resolve('/u', PARTITIONS_DIR, `pokehubkk-${A}`));
-    expect(PLATFORMS.kick.throttleKbps).toBeGreaterThan(0);
+    expect(PLATFORMS.kick.throttleKbps).toBe(750); // mínimo estável medido (650) + ~15%
+    expect(PLATFORMS.kick.throttleFallbackKbps).toBeGreaterThan(PLATFORMS.kick.throttleKbps!);
     expect(PLATFORMS.twitch.throttleKbps).toBeNull();
     expect(PLATFORMS.kick.claimScript).toBeNull();
   });

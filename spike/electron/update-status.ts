@@ -7,7 +7,7 @@ export type UpdateEvent =
   | {type:'available'; version: string; notes?: string}
   | {type:'none'}
   | {type:'start-download'}
-  | {type:'progress'; percent: number}
+  | {type:'progress'; percent: number; transferred?: number; total?: number; bps?: number}
   | {type:'downloaded'}
   | {type:'error'; message: string};
 
@@ -27,7 +27,12 @@ export function reduceUpdate(status: UpdateStatus, event: UpdateEvent): UpdateSt
     }
     case 'none': return busy ? status : {state:'none'};
     case 'start-download': return status.state === 'available' ? {...status,state:'downloading',percent:0} : status;
-    case 'progress': return status.state === 'downloading' ? {...status,percent:Number.isFinite(event.percent) ? Math.min(100,Math.max(0,Math.round(event.percent))) : 0} : status;
+    case 'progress': {
+      if (status.state !== 'downloading') return status;
+      const bytes = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v < 1e11 ? Math.round(v) : undefined;
+      const extra = {transferred:bytes(event.transferred), total:bytes(event.total), bps:bytes(event.bps)};
+      return {...status,percent:Number.isFinite(event.percent) ? Math.min(100,Math.max(0,Math.round(event.percent))) : 0,...Object.fromEntries(Object.entries(extra).filter(([,v]) => v !== undefined))};
+    }
     case 'downloaded': return status.state === 'downloading' ? {state:'ready',...(status.version ? {version:status.version} : {})} : status;
     case 'error': {
       if (status.state === 'available' && status.error) return status; // o mesmo erro chega pelo evento e pela promessa
