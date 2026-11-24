@@ -47,6 +47,8 @@ export function openDatabase(path: string): Database {
         // v16: Twitch em segundo plano — uma conta da Twitch por perfil (apagada junto com o perfil) e o canal escolhido. Não destrutiva; reentrante
         db.exec('CREATE TABLE IF NOT EXISTS twitch_links (profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, enabled INTEGER NOT NULL DEFAULT 1, auto_claim INTEGER NOT NULL DEFAULT 0, sound INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)');
         if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='twitch_channel'").get()) db.exec("ALTER TABLE workspace_settings ADD COLUMN twitch_channel TEXT NOT NULL DEFAULT ''");
+        // v16 também: selos de custo-benefício nos cards do RMT (ligados por padrão; só a página do jogo da própria conta)
+        if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='market_badges'").get()) db.exec('ALTER TABLE workspace_settings ADD COLUMN market_badges INTEGER NOT NULL DEFAULT 1');
         db.exec('PRAGMA user_version=16; COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }

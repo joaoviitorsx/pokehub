@@ -20,6 +20,12 @@ export class PreferencesStore {
     if (this.db.prepare('UPDATE workspace_settings SET startup_mode=? WHERE id=1').run(value).changes !== 1) throw new Error('Preferência ausente');
     return value;
   }
+  getMarketBadges(): boolean { return this.db.prepare('SELECT market_badges FROM workspace_settings WHERE id=1').get()?.market_badges !== 0; }
+  setMarketBadges(value: unknown): boolean {
+    if (typeof value !== 'boolean') throw new Error('Preferência inválida');
+    if (this.db.prepare('UPDATE workspace_settings SET market_badges=? WHERE id=1').run(value ? 1 : 0).changes !== 1) throw new Error('Preferência ausente');
+    return value;
+  }
   getAutoUpdateCheck(): boolean { return this.db.prepare('SELECT auto_update_check FROM workspace_settings WHERE id=1').get()?.auto_update_check !== 0; }
   setAutoUpdateCheck(value: unknown): boolean {
     if (typeof value !== 'boolean') throw new Error('Preferência inválida');

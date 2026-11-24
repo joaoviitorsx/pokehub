@@ -37,6 +37,10 @@ export function MarketPanel({id, state}: {id: string | undefined; state: string}
   const running = useRef(new Set<string>());
   const lastScan = useRef<Record<string, {sig: string; at: number}>>({}); // retrato igual ao anterior não gera setState (o acúmulo só é renovado a cada 60 s)
   const live = huntFetchable(state);
+  // Selos nos cards do RMT (processo principal, todas as contas): preferência salva no app.
+  const [badges, setBadges] = useState<boolean | null>(null);
+  useEffect(() => { let alive = true; void window.pokehub.market.badges().then(result => { if (alive && result.ok) setBadges(result.data); }).catch(() => undefined); return () => { alive = false; }; }, []);
+  const toggleBadges = () => { if (badges === null) return; const next = !badges; setBadges(next); void window.pokehub.market.setBadges(next).then(result => { if (!result.ok) setBadges(!next); }).catch(() => setBadges(!next)); };
   const add = useCallback((profileId: string, scan: MarketScan) => { if (!scan.open) return; const at = Date.now(); setNow(at); setAccs(old => ({...old, [profileId]: accumulate(old[profileId] ?? null, sessionKey(profileId, scan.query), scan, at)})); }, []);
   // Progresso da leitura assistida (processo principal): cada página lida entra no acúmulo; ao sair da aba a leitura é interrompida.
   useEffect(() => {
@@ -88,6 +92,11 @@ export function MarketPanel({id, state}: {id: string | undefined; state: string}
   const finished = progress?.done ? progress : null;
   const message = (title: string, body: string) => <div className="side-msg" role="status"><strong>{title}</strong><p>{body}</p></div>;
   return <div className="side-body mkt" aria-busy={live && !entry}>
+    <div className="mkt-badges">
+      <span className="mkt-badges-demo" aria-hidden="true"><Icon d={icons.tag}/><b>87</b></span>
+      <p><strong>Selos no RMT</strong><small>{badges === false ? 'Análise só aqui na lateral.' : 'Nota em cada card do jogo.'}</small></p>
+      <button className="opt" aria-pressed={badges === true} disabled={badges === null} title={badges ? 'Tirar os selos dos cards do RMT' : 'Mostrar a nota de custo-benefício em cada card do RMT (compacta se a Smart Market estiver ativa)'} onClick={toggleBadges}><Icon d={badges ? icons.check : icons.minus}/>{badges ? 'Ligados' : 'Desligados'}</button>
+    </div>
     {!live ? message('Sessão indisponível', 'Aguarde a sessão desta conta terminar de abrir (ou entre no jogo) para analisar o Mercado.')
       : !entry ? message('Lendo o Mercado…', 'A análise lê só o que está na tela desta conta.')
       : 'error' in entry ? <>{message('Mercado fechado', `${entry.error} — a análise lê só o que está na tela. Abra o Mercado no jogo desta conta.`)}<button onClick={() => setStamp(value => value + 1)}>Tentar de novo</button></>

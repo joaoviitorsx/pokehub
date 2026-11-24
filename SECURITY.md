@@ -41,6 +41,7 @@ Tudo abaixo é a **seu pedido**; nada roda sozinho nem agendado. Regras exatas e
 - **Mercado**: o botão "›" da paginação, ao pedir "Ler todas as páginas desta busca": no máximo 30 páginas, só com busca preenchida, no ritmo de uma pessoa, interrompível.
 - **Loja (NPC)**, só depois de "Confirmar compra" na janela do app: aba Market, aba Comprar, categoria, botão de compra do item e × (ou Esc) para fechar. Só ouro (Coins); Pokébolas, Poções e Revives.
 - **Nunca**: compras com dinheiro real (RMT), gemas, "Vender", Ovos, nem qualquer ação que gaste dinheiro de verdade.
+- **Selos no RMT** (ligados por padrão; Assistente → Mercado → Selos no RMT desliga): com o Mercado da Comunidade aberto e a janela do PokéHub à vista, o app **escreve** na página só um `span.ph-selo` em cada card (nota de custo-benefício 0–100, ícone e rótulo fixos) e um `<style id="ph-selo-css">`. Não clica, não lê campos, não faz rede; o texto do selo nunca vem da página. Desligar remove tudo. Com a Smart Market no card, o selo fica compacto.
 - **Leituras** (sem clique e sem escrever na página): vitrine do Mercado da Comunidade quando a aba está aberta, saldo e itens da Loja, painel de capturas, ranking da extensão `/hunt` e estado de carregamento das contas. Os scripts são constantes; nenhum dado da interface é interpolado neles.
 
 ## O que o PokéHub faz na Twitch

@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld('pokehub', {
   market: {
     scan: (id: string) => ipcRenderer.invoke('market:scan',id),
     readAll: (id: string) => ipcRenderer.invoke('market:readAll',id),
+    badges: () => ipcRenderer.invoke('market:badges'),
+    setBadges: (on: boolean) => ipcRenderer.invoke('market:setBadges',on),
     stop: (id: string) => ipcRenderer.invoke('market:stop',id),
     onProgress: (callback: (progress: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, progress: unknown) => callback(progress);

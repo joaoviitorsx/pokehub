@@ -30,6 +30,7 @@ let profiles: Profile[] = empty ? [] : seed.slice(0, accountCount).map(([label0,
 const states: Record<string, string> = {[uid(1)]: 'ready', [uid(2)]: 'loading', [uid(3)]: 'auth_required', [uid(4)]: 'error'};
 if (params.get('allready') === '1') for (const key of Object.keys(states)) states[key] = 'ready'; // ?allready=1: todas as contas prontas
 let preferences: 'grid' | 'focus-first' = 'grid';
+let marketBadges = true;
 let winState = {maximized: false, focused: true};
 let trayPrefs = {onClose: true, onMinimize: true, hintShown: false};
 let perfPrefs = {lite: params.get('lite') === '1', muteUnfocused: false};
@@ -130,6 +131,8 @@ window.pokehub = {
   drag: () => ok(undefined),
   huntSnapshot: (_id, soLiberadas) => ok(huntSnapshot(soLiberadas)),
   market: {
+    badges: () => ok(marketBadges),
+    setBadges: (on: boolean) => { marketBadges = on; return ok(on); },
     scan: () => ok(scanPage()),
     readAll: id => {
       if (!queryParam) return ok(undefined).then(() => ({ok: false as const, error: 'Busque uma espécie no Mercado antes (ex.: Venusaur) — o Mercado inteiro tem centenas de páginas.'}));

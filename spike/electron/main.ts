@@ -7,6 +7,7 @@ import { effectiveFocus, initialFocus, layout, SIDE_MAX, SIDE_MIN, SIDE_PANEL, s
 import { huntSnapshot, HUNT_UNAVAILABLE, type HuntTarget } from './hunt-snapshot';
 import { marketScan, MARKET_UNAVAILABLE } from './market-scan';
 import { createMarketReader } from './market-read';
+import { createMarketBadges } from './market-badges';
 import { createShop, SHOP_UNAVAILABLE } from './shop';
 import { createCaptureService, parseQuery } from './captures';
 import { alertsOf, alertText } from '../domain/captures';
@@ -609,6 +610,12 @@ if (primary) app.whenReady().then(() => {
   // Market, Loja e Capturas só leem/clicam no DOM: rodam no mundo isolado (999), sem acesso aos globais da página.
   const marketTarget = (profileId: string) => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:(script: string) => contents.executeJavaScriptInIsolatedWorld(999,[{code:script}])} : null; };
   const marketReader = createMarketReader({known:() => store.list().map(profile => profile.id), target:marketTarget, lock:accountLock, emit:progress => { if (progress.scan) remoteApi.feed(progress.profileId,progress.scan); if (!window.isDestroyed()) window.webContents.send('market:progress',progress); }});
+  // Selos de custo-benefício nos cards do RMT (ver market-badges.ts): ligados por padrão, desligáveis na aba Mercado.
+  const marketBadges = createMarketBadges({known:() => store.list().map(profile => profile.id), target:marketTarget, enabled:() => preferences.getMarketBadges(), lite:() => perf.lite, visible:() => !window.isDestroyed() && window.isVisible() && !window.isMinimized()});
+  marketBadges.start();
+  app.on('before-quit', () => marketBadges.stop());
+  ipcMain.handle('market:badges', event => invoke(event, () => preferences.getMarketBadges()));
+  ipcMain.handle('market:setBadges', (event,value: unknown) => invoke(event, () => { const on = preferences.setMarketBadges(value); marketBadges.refresh(); return on; }));
   ipcMain.handle('market:readAll', async (event,id: unknown) => trusted(event) ? marketReader.readAll(id) : {ok:false,error:MARKET_UNAVAILABLE});
   ipcMain.handle('market:stop', (event,id: unknown) => trusted(event) ? {ok:true,data:marketReader.stop(id)} : {ok:false,error:MARKET_UNAVAILABLE});
   // Loja rápida (Market do jogo): leitura/compra só a pedido da janela do PokéHub, depois da confirmação do usuário (ver spike/electron/shop.ts).

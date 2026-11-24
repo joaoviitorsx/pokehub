@@ -9,7 +9,7 @@ Segurança, privacidade, o que o app guarda, envia e clica no jogo: leia o **[SE
 - **Colunas**: cada conta é uma coluna com cabeçalho (cor, nome, estado, focar, expandir, recarregar, reabrir e suspender). Modos Grade e Foco, com atalhos (Ctrl+0 grade, Ctrl+1 a Ctrl+4 foco, Ctrl+H lateral, Ctrl+Shift+Enter expandir).
 - **Assistente (lateral)**, com cinco abas:
   - **Caçar**: ranking de hunts lido da extensão `/hunt` (XP/h, ouro/h, Shiny/h), com retratos.
-  - **Mercado**: leitura e pontuação (custo-benefício) da vitrine do Mercado da Comunidade; leitura assistida de várias páginas, a pedido.
+  - **Mercado**: leitura e pontuação (custo-benefício) da vitrine do Mercado da Comunidade; leitura assistida de várias páginas, a pedido. Também põe um **selo de custo-benefício em cada card do RMT** (nota 0–100, "Melhor" no topo da busca; compacto se a Smart Market estiver ativa; desligável).
   - **Loja**: compra de Pokébolas, Poções e Revives no Market NPC, sempre depois de uma janela de confirmação.
   - **Capturas**: feed e alertas das capturas, com histórico de 7 dias.
   - **Twitch**: vincule **uma conta da Twitch por conta do jogo** e o PokéHub assiste ao canal escolhido em segundo plano (janela oculta, muda, 160p) para acumular os pontos do canal; mostra o saldo, os pontos ganhos na sessão e se a live está no ar. Coleta do baú opcional por conta; o resgate dos boosters é sempre seu, em **Recompensas**. Funciona com o PokéHub aberto ou na bandeja.
