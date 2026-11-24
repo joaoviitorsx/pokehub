@@ -51,6 +51,7 @@ Tudo abaixo é a **seu pedido**; nada roda sozinho nem agendado. Regras exatas e
 - **Alertas do RMT**: as regras ficam no `pokehub.sqlite` (tabela `market_alerts`); conferem só a vitrine que a conta já está mostrando, sem buscar, paginar ou clicar. Avisos recentes só em memória.
 - **Prazos dos bônus**: lê só `#tr-ativos` (bônus ativos e o fim de cada um) a cada 5 min; avisa 1 dia e 1 hora antes (lembrado em `prazos-avisados.json`). Desligável em Gerenciar → Layout.
 - **Retratos**: o contorno de cada retrato é medido uma vez na página do jogo (canvas com o atlas do próprio jogo); nada é escrito.
+- **Extensões do catálogo detectadas ao abrir**: a /hunt e a Smart Market já instaladas no navegador do usuário entram sozinhas na lista (carregadas da pasta do navegador, nunca copiadas) e passam pela mesma auditoria; removidas pelo usuário não voltam (`workspace_settings.ext_dismissed`). O PokéHub não distribui código de extensão de terceiros.
 - **Leituras** (sem clique e sem escrever na página): vitrine do Mercado da Comunidade quando a aba está aberta, saldo e itens da Loja, painel de capturas, ranking da extensão `/hunt` e estado de carregamento das contas. Os scripts são constantes; nenhum dado da interface é interpolado neles.
 
 ## O que o PokéHub faz na Twitch e na Kick

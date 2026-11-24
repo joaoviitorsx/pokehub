@@ -116,6 +116,16 @@ export class PreferencesStore {
   setExtensionEnabled(id: string, enabled: unknown): void {
     if (typeof id !== 'string' || typeof enabled !== 'boolean' || this.db.prepare('UPDATE extensions SET enabled=? WHERE id=?').run(enabled ? 1 : 0,id).changes !== 1) throw new Error('Extensão inválida');
   }
+  /** Ids do catálogo que o usuário removeu: a detecção automática ao abrir não os adiciona de novo. */
+  dismissedExtensions(): string[] {
+    try { const list: unknown = JSON.parse(String(this.db.prepare('SELECT ext_dismissed FROM workspace_settings WHERE id=1').get()?.ext_dismissed ?? '[]')); return Array.isArray(list) ? list.filter((id): id is string => typeof id === 'string' && /^[a-p]{32}$/.test(id)).slice(0,32) : []; } catch { return []; }
+  }
+  setExtensionDismissed(id: string, dismissed: boolean): void {
+    if (!/^[a-p]{32}$/.test(id)) return;
+    const set = new Set(this.dismissedExtensions());
+    if (dismissed) set.add(id); else set.delete(id);
+    this.db.prepare('UPDATE workspace_settings SET ext_dismissed=? WHERE id=1').run(JSON.stringify([...set]));
+  }
   removeExtension(id: unknown): void {
     if (typeof id !== 'string' || this.db.prepare('DELETE FROM extensions WHERE id=?').run(id).changes !== 1) throw new Error('Extensão inválida');
   }

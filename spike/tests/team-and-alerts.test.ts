@@ -134,3 +134,42 @@ describe('preferências novas', () => {
     } finally { prefs.close(); rmSync(dir, {recursive:true, force:true}); }
   });
 });
+
+describe('extensões do catálogo removidas', () => {
+  it('lembra quem o usuário tirou da lista e aceita só ids de extensão', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pokehub-dismiss-'));
+    const prefs = new PreferencesStore(join(dir, 'app.sqlite'));
+    try {
+      expect(prefs.dismissedExtensions()).toEqual([]);
+      prefs.setExtensionDismissed('lhfeijlnlbglakplddjgbaopgcdfkcmm', true);
+      prefs.setExtensionDismissed('../../etc', true);
+      expect(prefs.dismissedExtensions()).toEqual(['lhfeijlnlbglakplddjgbaopgcdfkcmm']);
+      prefs.setExtensionDismissed('lhfeijlnlbglakplddjgbaopgcdfkcmm', false);
+      expect(prefs.dismissedExtensions()).toEqual([]);
+    } finally { prefs.close(); rmSync(dir, {recursive:true, force:true}); }
+  });
+});
+
+describe('migração 1.1.0 → 1.1.1', () => {
+  it('banco v16 (como a 1.1.0 deixa) ganha ext_dismissed e vai para v17 sem perder nada', async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const dir = mkdtempSync(join(tmpdir(), 'pokehub-v16-'));
+    const path = join(dir, 'app.sqlite');
+    try {
+      const first = new PreferencesStore(path);
+      first.saveMarketAlert('a1', {nome:'Venusaur'});
+      first.close();
+      const db = new DatabaseSync(path);
+      db.exec("ALTER TABLE workspace_settings DROP COLUMN ext_dismissed; PRAGMA user_version=16;"); // estado exato da 1.1.0
+      db.close();
+      const prefs = new PreferencesStore(path);
+      prefs.setExtensionDismissed('lhfeijlnlbglakplddjgbaopgcdfkcmm', true);
+      expect(prefs.dismissedExtensions()).toEqual(['lhfeijlnlbglakplddjgbaopgcdfkcmm']);
+      expect(prefs.listMarketAlerts()).toHaveLength(1);
+      prefs.close();
+      const check = new DatabaseSync(path);
+      expect(check.prepare('PRAGMA user_version').get()).toMatchObject({user_version:17});
+      check.close();
+    } finally { rmSync(dir, {recursive:true, force:true}); }
+  });
+});

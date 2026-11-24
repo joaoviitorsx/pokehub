@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const directory = mkdtempSync(join(tmpdir(),'pokehub-main-'));
+process.env.LOCALAPPDATA=directory; // a detecção de extensões do navegador não pode varrer a máquina real no teste
 const chromeBase = process.platform === 'win32' ? 'Google/Chrome/User Data/Default' : '.config/google-chrome/Default'; // pasta de extensões do navegador (a pré-aprovação do catálogo exige o caminho real aqui)
 process.env.LOCALAPPDATA = directory;
 type Handler = (...args: unknown[]) => unknown;

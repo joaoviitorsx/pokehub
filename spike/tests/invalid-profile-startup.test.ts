@@ -8,6 +8,7 @@ import { ProfileStore } from '../electron/profile-store';
 const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
 
 const directory=mkdtempSync(join(tmpdir(),'pokehub-invalid-id-'));
+process.env.LOCALAPPDATA=directory; // a detecção de extensões do navegador não pode varrer a máquina real no teste
 const path=join(directory,'pokehub.sqlite');
 const handlers=new Map<string,(...args:unknown[])=>unknown>();
 const createView=vi.fn(); let shell: FakeWindow;

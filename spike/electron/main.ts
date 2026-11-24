@@ -200,9 +200,25 @@ async function applyExtensions(mode: RefreshMode = 'verify'): Promise<ExtensionI
   await Promise.all([...views.values()].map(view => view.webContents.isDestroyed() ? null : syncExtensions(view.webContents.session)));
   return extensionList();
 }
+/**
+ * Ao abrir: extensões do catálogo (/hunt, Smart Market) já instaladas pelo usuário no Chrome/Edge/Brave entram sozinhas na lista
+ * (carregadas da pasta do navegador, nunca copiadas), exceto as que ele removeu antes. Passam pela mesma auditoria de sempre.
+ */
+function autoDetectCatalog(): void {
+  try {
+    const dismissed = new Set(preferences.dismissedExtensions());
+    for (const found of findInstalled(machine())) {
+      if (dismissed.has(found.id) || !checkExtension(found.path).ok) continue;
+      const rows = preferences.listExtensions();
+      if (rows.some(row => row.id === found.id || row.path === found.path) || rows.length >= MAX_EXTENSIONS) continue;
+      preferences.addExtension({id:found.id,path:found.path,enabled:true});
+    }
+  } catch { console.error('Falha ao detectar extensões do catálogo.'); }
+}
 async function detectExtensions(): Promise<ExtensionInfo[]> {
   for (const found of findInstalled({platform:process.platform, home:app.getPath('home'), localAppData:process.env.LOCALAPPDATA})) {
     if (!checkExtension(found.path).ok) continue;
+    preferences.setExtensionDismissed(found.id,false); // "Detectar" manual desfaz a remoção
     const rows = preferences.listExtensions();
     const same = rows.find(row => row.id === found.id);
     if (same) { if (same.path !== found.path && !rows.some(row => row.path === found.path)) preferences.setExtensionPath(found.id,found.path); }
@@ -543,7 +559,7 @@ if (primary) app.whenReady().then(() => {
   ipcMain.handle('extensions:detect', event => invokeExtensions(event, detectExtensions));
   ipcMain.handle('extensions:add', event => invokeExtensions(event, addExtension));
   ipcMain.handle('extensions:toggle', (event,id: unknown,enabled: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error(); preferences.setExtensionEnabled(id,enabled); return applyExtensions('cached'); }));
-  ipcMain.handle('extensions:remove', (event,id: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string') throw new Error(); preferences.removeExtension(id); return applyExtensions('cached'); }));
+  ipcMain.handle('extensions:remove', (event,id: unknown) => invokeExtensions(event, () => { if (typeof id !== 'string') throw new Error(); preferences.removeExtension(id); if (CATALOG.some(entry => entry.id === id)) preferences.setExtensionDismissed(id,true); return applyExtensions('cached'); }));
   // aprova os hosts externos que a auditoria acha AGORA; `hosts` (o que a tela mostrou) precisa ser o mesmo conjunto
   ipcMain.handle('extensions:approve', (event,id: unknown,hosts: unknown) => invokeExtensions(event, async () => {
     if (typeof id !== 'string' || (hosts !== undefined && (!Array.isArray(hosts) || hosts.some(host => typeof host !== 'string')))) throw new Error();
@@ -839,6 +855,7 @@ if (primary) app.whenReady().then(() => {
       quitting = true; app.quit(); setTimeout(() => app.exit(0),5000).unref();
     })(); },smoke.exitMs);
   }
+  autoDetectCatalog(); // antes da primeira leitura: as sessões já abrem com a /hunt e a Smart Market do navegador
   extensionsReady = refreshExtensions().catch(() => { console.error('Não foi possível ler a configuração das extensões.'); }).then(() => { extensionsLoaded = true; });
   const openAtStartup = (id: string) => {
     try {
