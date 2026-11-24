@@ -9,6 +9,7 @@ import { marketScan, MARKET_UNAVAILABLE } from './market-scan';
 import { createMarketReader } from './market-read';
 import { createMarketBadges } from './market-badges';
 import { createFichaReview } from './ficha-review';
+import { createDeadlines } from './deadlines';
 import { DAY_TYPE_SCRIPT, sanitizeDayType, teamPick } from './team-pick';
 import { dayTypeNotice } from '../domain/team-pick';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -43,10 +44,11 @@ import { ProfileLimitError, type ProfileInput } from '../domain/profiles';
 import { createRemoteHub, type RemoteHub } from '../remote/hub';
 import { createRemoteApi } from '../remote/api';
 import { registerRemoteIpc } from '../remote/ipc';
-import { clearAllSessionData, createWipeQueue, findOrphans, runPendingWipes, TWITCH_PREFIX, type WipeQueue } from './partition-wipe';
+import { clearAllSessionData, createWipeQueue, findOrphans, KICK_PREFIX, runPendingWipes, TWITCH_PREFIX, type WipeQueue } from './partition-wipe';
 import { createTwitchService, TwitchRefused, type TwitchService } from './twitch';
 import { TwitchStore } from './twitch-store';
-import type { TwitchInfo } from '../contracts/twitch';
+import type { StreamPlatform, TwitchInfo } from '../contracts/twitch';
+import { isPlatform, PLATFORMS } from '../domain/streams';
 import { guardNewContents, isAppFrameUrl, lockSession, SAFE_DIALOGS } from './runtime-guards';
 import { createAccountLock } from './account-lock';
 import { readJsonBounded } from './bounded-body';
@@ -255,14 +257,16 @@ const appIndex = join(__dirname,'../../dist/index.html'), appUrl = pathToFileURL
 const trusted = (event: IpcMainInvokeEvent) => Boolean(window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame && event.senderFrame === window.webContents.mainFrame && isAppFrameUrl(event.senderFrame.url,appUrl));
 const accountLock = createAccountLock(); // uma ação por conta: leitura do Market e Loja não se sobrepõem
 let wipeQueue: WipeQueue; // apagamento de partições no próximo início (ver partition-wipe.ts)
-let twitchWipeQueue: WipeQueue; // idem para as sessões da Twitch (pasta pokehubtw-<id>)
-let twitchStore: TwitchStore;
-let twitch: TwitchService | null = null; // Twitch em segundo plano (ver twitch.ts)
-// Twitch: ações assíncronas só da janela do PokéHub; recusas trazem a mensagem para a interface.
-async function invokeTwitch(event: IpcMainInvokeEvent, action: (service: TwitchService) => TwitchInfo | Promise<TwitchInfo>) {
-  if (!trusted(event) || !twitch) return {ok:false, error:'Origem não autorizada.'};
-  try { return {ok:true, data:await action(twitch)}; }
-  catch (error) { return {ok:false, error:error instanceof TwitchRefused ? error.message : 'Não foi possível concluir a ação da Twitch. Tente novamente.'}; }
+// Lives em segundo plano (Twitch e Kick, ver twitch.ts): uma loja, uma fila de apagamento e um serviço por plataforma.
+const streamWipe: Partial<Record<StreamPlatform, WipeQueue>> = {};
+const streamStores: Partial<Record<StreamPlatform, TwitchStore>> = {};
+const streams: Partial<Record<StreamPlatform, TwitchService>> = {};
+// Lives: ações assíncronas só da janela do PokéHub; a plataforma é validada; recusas trazem a mensagem para a interface.
+async function invokeStream(event: IpcMainInvokeEvent, platform: unknown, action: (service: TwitchService) => TwitchInfo | Promise<TwitchInfo>) {
+  const service = isPlatform(platform) ? streams[platform] : undefined;
+  if (!trusted(event) || !service) return {ok:false, error:'Origem não autorizada.'};
+  try { return {ok:true, data:await action(service)}; }
+  catch (error) { return {ok:false, error:error instanceof TwitchRefused ? error.message : 'Não foi possível concluir a ação da live. Tente novamente.'}; }
 }
 function report(id: string, state: string) {
   const changed = statusChanged(states.get(id),state);
@@ -496,14 +500,16 @@ if (primary) app.whenReady().then(() => {
   restrictUserData(app.getPath('userData'));
   wipeQueue = createWipeQueue(join(app.getPath('userData'),'pending-wipes.json'));
   try { runPendingWipes(app.getPath('userData'),wipeQueue); } catch { console.error('Falha ao apagar dados de sessões removidas.'); } // ANTES de qualquer sessão existir
-  twitchWipeQueue = createWipeQueue(join(app.getPath('userData'),'pending-twitch-wipes.json'));
-  try { runPendingWipes(app.getPath('userData'),twitchWipeQueue,undefined,TWITCH_PREFIX); } catch { console.error('Falha ao apagar sessões da Twitch removidas.'); }
+  for (const [platform,file,prefix] of [['twitch','pending-twitch-wipes.json',TWITCH_PREFIX],['kick','pending-kick-wipes.json',KICK_PREFIX]] as const) {
+    streamWipe[platform] = createWipeQueue(join(app.getPath('userData'),file));
+    try { runPendingWipes(app.getPath('userData'),streamWipe[platform]!,undefined,prefix); } catch { console.error('Falha ao apagar sessões de live removidas.'); }
+  }
   guardNewContents(app);
   lockSession(session.defaultSession);
   const databasePath = join(app.getPath('userData'),'pokehub.sqlite');
   store = new ProfileStore(databasePath);
   preferences = new PreferencesStore(databasePath);
-  twitchStore = new TwitchStore(databasePath);
+  for (const platform of ['twitch','kick'] as const) streamStores[platform] = new TwitchStore(databasePath,platform);
   networkStore = createNetworkPolicyStore(join(app.getPath('userData'),'network-policy.json'));
   perf = preferences.getPerformance();
   trayPrefs = preferences.getTray();
@@ -548,15 +554,15 @@ if (primary) app.whenReady().then(() => {
     preferences.setApprovedHosts(id,extension.hosts);
     return applyExtensions();
   }));
-  twitch = createTwitchService({store:twitchStore, profiles:() => store.list(), iconPath:join(__dirname,'../../build/icon.png'), devTools:!app.isPackaged, emit:info => { if (!window.isDestroyed()) window.webContents.send('twitch:changed',info); }, wipe:id => { twitchWipeQueue.add(id); }, quitting:() => quitting});
-  ipcMain.handle('twitch:get', event => invokeTwitch(event, service => service.info()));
-  ipcMain.handle('twitch:channel', (event,value: unknown) => invokeTwitch(event, service => service.setChannel(value)));
-  ipcMain.handle('twitch:link', (event,id: unknown) => invokeTwitch(event, service => service.link(id)));
-  ipcMain.handle('twitch:unlink', (event,id: unknown) => invokeTwitch(event, service => service.unlink(id)));
-  ipcMain.handle('twitch:update', (event,id: unknown,patch: unknown) => invokeTwitch(event, service => service.update(id,patch)));
-  ipcMain.handle('twitch:show', (event,id: unknown) => invokeTwitch(event, service => service.show(id)));
-  ipcMain.handle('twitch:hide', (event,id: unknown) => invokeTwitch(event, service => service.hide(id)));
-  ipcMain.handle('twitch:rewards', (event,id: unknown) => invokeTwitch(event, service => service.rewards(id)));
+  for (const platform of ['twitch','kick'] as const) streams[platform] = createTwitchService({platform:PLATFORMS[platform], store:streamStores[platform]!, profiles:() => store.list(), iconPath:join(__dirname,'../../build/icon.png'), devTools:!app.isPackaged, emit:info => { if (!window.isDestroyed()) window.webContents.send('stream:changed',info); }, wipe:id => { streamWipe[platform]!.add(id); }, quitting:() => quitting});
+  ipcMain.handle('stream:get', (event,platform: unknown) => invokeStream(event, platform, service => service.info()));
+  ipcMain.handle('stream:channel', (event,platform: unknown,value: unknown) => invokeStream(event, platform, service => service.setChannel(value)));
+  ipcMain.handle('stream:link', (event,platform: unknown,id: unknown) => invokeStream(event, platform, service => service.link(id)));
+  ipcMain.handle('stream:unlink', (event,platform: unknown,id: unknown) => invokeStream(event, platform, service => service.unlink(id)));
+  ipcMain.handle('stream:update', (event,platform: unknown,id: unknown,patch: unknown) => invokeStream(event, platform, service => service.update(id,patch)));
+  ipcMain.handle('stream:show', (event,platform: unknown,id: unknown) => invokeStream(event, platform, service => service.show(id)));
+  ipcMain.handle('stream:hide', (event,platform: unknown,id: unknown) => invokeStream(event, platform, service => service.hide(id)));
+  ipcMain.handle('stream:rewards', (event,platform: unknown,id: unknown) => invokeStream(event, platform, service => service.rewards(id)));
   ipcMain.handle('network:get', event => invoke(event, networkInfo));
   ipcMain.handle('network:mode', (event,mode: unknown) => invoke(event, () => { networkStore.setMode(mode); return networkInfo(); }));
   ipcMain.handle('network:allow', (event,host: unknown) => invoke(event, () => { unknownHosts.forget(networkStore.allow(host)); return networkInfo(); }));
@@ -583,7 +589,7 @@ if (primary) app.whenReady().then(() => {
       await closeViewAwaited(id);
       try { store.remove(id); } catch (error) { if (!window.isDestroyed()) openView(id); throw error; }
       suspended.delete(id);
-      twitch?.removeProfile(id); // a conta da Twitch vinculada sai junto (o vínculo some em cascata; a sessão é apagada no próximo início)
+      for (const service of Object.values(streams)) service.removeProfile(id); // as contas de live vinculadas saem junto (o vínculo some em cascata; a sessão é apagada no próximo início)
       if (wipe !== false) wipeQueue.add(id); // apaga o login em disco no próximo início (a pasta fica em uso até lá)
       if (focused === id) focused = null;
       refreshTray.call();
@@ -629,6 +635,16 @@ if (primary) app.whenReady().then(() => {
   const timedRun = (work: Promise<unknown>) => Promise.race([work,new Promise<null>(resolve => setTimeout(() => resolve(null),6000))]).catch(() => null);
   dayTimer = setTimeout(() => void checkDayType(),45_000);
   app.on('before-quit', () => clearTimeout(dayTimer));
+  // Lembretes de prazo (VIP, boosts da guild, bônus Twitch/Kick): ver deadlines.ts.
+  const notifyPc = (title: string, body: string) => { try { if (process.platform === 'win32' && tray && !tray.isDestroyed()) tray.displayBalloon({title,content:body,iconType:'info'}); else if (Notification.isSupported()) new Notification({title,body}).show(); } catch { /* sem notificações */ } };
+  const deadlines = createDeadlines({known:() => store.list().map(profile => ({id:profile.id, label:profile.label})), target:id => marketTarget(id), // marketTarget é declarado mais abaixo; só é chamado no primeiro ciclo (30 s)
+    enabled:() => preferences.getDeadlineNotify(), lite:() => perf.lite, file:join(app.getPath('userData'),'prazos-avisados.json'), notify:notifyPc, emit:all => { if (!window.isDestroyed()) window.webContents.send('deadlines:changed',all); }});
+  deadlines.start();
+  app.on('before-quit', () => deadlines.stop());
+  ipcMain.handle('deadlines:get', event => invoke(event, () => deadlines.all()));
+  ipcMain.handle('deadlines:refresh', event => invoke(event, () => { deadlines.refresh(); }));
+  ipcMain.handle('deadlines:notify', event => invoke(event, () => preferences.getDeadlineNotify()));
+  ipcMain.handle('deadlines:setNotify', (event,value: unknown) => invoke(event, () => preferences.setDeadlineNotify(value)));
   ipcMain.handle('daytype:notify', event => invoke(event, () => preferences.getDayTypeNotify()));
   ipcMain.handle('daytype:setNotify', (event,value: unknown) => invoke(event, () => preferences.setDayTypeNotify(value)));
   ipcMain.handle('hunt:snapshot', async (event,id: unknown,soLiberadas: unknown = true) => {
@@ -674,8 +690,9 @@ Regra: ${alertLabel(alert)}` : ''}`}).show(); } catch { /* sem notificações no
   marketBadges.start();
   app.on('before-quit', () => marketBadges.stop());
   // Análise "Para caçar" na ficha do Pokémon (ver ficha-review.ts): ligada por padrão, desligável em Gerenciar → Layout.
-  const fichaReview = createFichaReview({known:() => store.list().map(profile => profile.id), target:marketTarget, enabled:() => preferences.getFichaReview(), lite:() => perf.lite});
+  const fichaReview = createFichaReview({known:() => store.list().map(profile => profile.id), target:marketTarget, enabled:() => preferences.getFichaReview(), lite:() => perf.lite, visible:() => !window.isDestroyed() && window.isVisible() && !window.isMinimized()});
   fichaReview.start();
+  window.on('show', () => fichaReview.refresh()); window.on('restore', () => fichaReview.refresh());
   app.on('before-quit', () => fichaReview.stop());
   ipcMain.handle('ficha:review', event => invoke(event, () => preferences.getFichaReview()));
   ipcMain.handle('ficha:setReview', (event,value: unknown) => invoke(event, () => { const on = preferences.setFichaReview(value); fichaReview.refresh(); return on; }));
@@ -790,8 +807,8 @@ Regra: ${alertLabel(alert)}` : ''}`}).show(); } catch { /* sem notificações no
     refreshTray.cancel(); changeNotifier.cancel(); tray?.destroy(); tray = null; try { globalShortcut.unregister(CONTROL_SHORTCUT); } catch { /* saindo */ }
     clearTimeout(dragTimer); clearTimeout(resizeTimer); for (const timer of startupTimers) clearTimeout(timer); startupTimers.clear(); updater.dispose();
     for (const view of views.values()) { try { if (!view.webContents.isDestroyed()) view.webContents.close(); } catch { console.error('Falha ao encerrar uma sessão.'); } }
-    twitch?.dispose(); twitch = null; // as janelas ocultas da Twitch fecham junto (senão o app não encerraria)
-    views.clear(); void remote?.close(); remote = null; preferences.close(); twitchStore.close(); store.close();
+    for (const platform of ['twitch','kick'] as const) { streams[platform]?.dispose(); delete streams[platform]; } // as janelas ocultas das lives fecham junto (senão o app não encerraria)
+    views.clear(); void remote?.close(); remote = null; preferences.close(); for (const live of Object.values(streamStores)) live.close(); store.close();
   });
   // Início escalonado: a interface primeiro; depois a conta em foco (ou a primeira) e as demais, uma a cada 2,5 s. A auditoria das extensões roda em segundo plano.
   void window.loadFile(appIndex).catch(() => { dialog.showErrorBox('PokéHub', 'Não foi possível carregar a interface local. Verifique a instalação e tente novamente.'); app.quit(); });
@@ -829,13 +846,13 @@ Regra: ${alertLabel(alert)}` : ''}`}).show(); } catch { /* sem notificações no
       startupTimers.add(timer);
     }
     arrange();
-    twitch?.start(); // depois das sessões do jogo, também escalonado
+    streams.twitch?.start(); setTimeout(() => streams.kick?.start(),5_000); // depois das sessões do jogo, também escalonado (a Kick um pouco depois)
   });
 }).catch((error: unknown) => {
   console.error('Falha ao iniciar o PokéHub.');
   if (!window) {
     try { preferences?.close(); } catch { console.error('Falha ao fechar configurações.'); }
-    try { twitchStore?.close(); } catch { console.error('Falha ao fechar a Twitch.'); }
+    for (const live of Object.values(streamStores)) { try { live.close(); } catch { console.error('Falha ao fechar as lives.'); } }
     try { store?.close(); } catch { console.error('Falha ao fechar perfis.'); }
   }
   const message = error instanceof ProfileLimitError

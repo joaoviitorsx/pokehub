@@ -39,36 +39,45 @@ export function MarketAlerts({profiles}: {profiles: Profile[]}) {
   const alerts = info?.alerts ?? [], hits = info?.hits ?? [];
   const byId = new Map(profiles.map(profile => [profile.id, profile]));
   const active = alerts.filter(alert => alert.ativo).length;
-  return <section className="mkt-alerts" aria-label="Alertas do RMT">
-    <button className="mkt-alerts-head" aria-expanded={open} onClick={() => setOpen(value => !value)}>
-      <Icon d={icons.bell}/><strong>Alertas do RMT</strong>
-      <span className="pill" data-state={active ? 'ready' : ''}>{active ? `${active} ativo${active > 1 ? 's' : ''}` : 'nenhum'}</span>
-      {hits.length > 0 && <span className="mkt-alerts-new">{hits.length}</span>}
-      <span className="grow"/><Icon d={open ? icons.minus : icons.plus}/>
+  return <section className="ma" data-hits={hits.length > 0 || undefined} aria-label="Alertas do RMT">
+    <button className="ma-head" aria-expanded={open} onClick={() => setOpen(value => !value)}>
+      <span className="ma-medal" aria-hidden="true"><Icon d={icons.bell}/>{hits.length > 0 && <i className="ma-badge">{hits.length > 9 ? '9+' : hits.length}</i>}</span>
+      <span className="ma-titles"><strong>Alertas do RMT</strong><small>{active ? `${active} regra${active > 1 ? 's' : ''} vigiando a vitrine` : alerts.length ? 'todas pausadas' : 'nenhuma regra ainda'}</small></span>
+      <span className="ma-chevron" data-open={open || undefined} aria-hidden="true"><Icon d={icons.plus}/></span>
     </button>
-    {open && <div className="mkt-alerts-body">
-      <p className="mkt-alerts-tip">Avisa quando aparecer um anúncio que você quer, com o RMT aberto em qualquer conta (mesmo com o PokéHub na bandeja). O card ganha um selo de sino.</p>
-      {alerts.length > 0 && <ul className="mkt-alerts-list">{alerts.map(alert => <li key={alert.id} data-off={!alert.ativo || undefined}>
-        <span title={alertLabel(alert)}>{alertLabel(alert)}</span>
-        <button className="opt" aria-pressed={alert.ativo} disabled={busy} title={alert.ativo ? 'Pausar este alerta' : 'Reativar este alerta'} onClick={() => toggle(alert)}>{alert.ativo ? 'Ativo' : 'Pausado'}</button>
+    {open && <div className="ma-body">
+      <p className="ma-tip">Avisa quando aparecer um anúncio que você quer, com o RMT aberto em qualquer conta (mesmo com o PokéHub na bandeja). O card ganha um selo de sino.</p>
+      {alerts.length > 0 && <ul className="ma-rules">{alerts.map(alert => <li key={alert.id} data-off={!alert.ativo || undefined} title={alertLabel(alert)}>
+        <div className="ma-rule-main">
+          <strong>{alert.nome ? alert.nome.replace(/(^|\s)\p{L}/gu, c => c.toUpperCase()) : 'Qualquer Pokémon'}</strong>
+          <span className="ma-chips">
+            {alert.soShiny && <i className="ma-chip" data-k="shiny">✨ Shiny</i>}
+            {alert.potenciaMin !== null && <i className="ma-chip" data-k="pot" data-p={alert.potenciaMin}>P{alert.potenciaMin}+</i>}
+            {alert.notaMin !== null && <i className="ma-chip" data-k="nota">Nota ≥ {alert.notaMin.toLocaleString('pt-BR')}</i>}
+            {alert.precoMax !== null ? <i className="ma-chip" data-k="preco" data-m={alert.moeda ?? undefined}>até {full.format(alert.precoMax)} {coin(alert.moeda)}</i> : alert.moeda && <i className="ma-chip" data-k="preco" data-m={alert.moeda}>em {coin(alert.moeda)}</i>}
+          </span>
+        </div>
+        <label className="switch ma-switch" title={alert.ativo ? 'Pausar este alerta' : 'Reativar este alerta'}><span className="sr">{alert.ativo ? 'Ativo' : 'Pausado'}</span><input type="checkbox" role="switch" checked={alert.ativo} disabled={busy} onChange={() => toggle(alert)}/></label>
         <button className="icon" disabled={busy} aria-label={`Remover alerta ${alertLabel(alert)}`} title="Remover" onClick={() => remove(alert)}><Icon d={icons.trash}/></button>
       </li>)}</ul>}
-      {form ? <form className="mkt-alerts-form" onSubmit={event => void save(event)}>
+      {form ? <form className="ma-form" onSubmit={event => void save(event)}>
+        <p className="ma-form-tit"><Icon d={icons.bell}/>Novo alerta</p>
         <label className="wide">Pokémon <input value={form.nome} maxLength={40} placeholder="ex.: Venusaur (vazio = qualquer)" onChange={event => setForm({...form, nome: event.target.value})}/></label>
         <label>Moeda <select value={form.moeda} onChange={event => setForm({...form, moeda: event.target.value as typeof form.moeda, precoMax: event.target.value ? form.precoMax : ''})}><option value="">Qualquer</option><option value="orb">Gemas</option><option value="gold">Coins</option></select></label>
         <label>Preço máx. <input inputMode="numeric" value={form.precoMax} disabled={!form.moeda} placeholder={form.moeda ? 'ex.: 15000' : 'escolha a moeda'} onChange={event => setForm({...form, precoMax: event.target.value.replace(/[^\d.,]/g, '')})}/></label>
         <label>Nota mín. <select value={form.notaMin} onChange={event => setForm({...form, notaMin: event.target.value})}><option value="">Qualquer</option>{[5, 6, 7, 8, 9].map(n => <option key={n} value={n}>{n}</option>)}</select></label>
         <label>Potência mín. <select value={form.potenciaMin} onChange={event => setForm({...form, potenciaMin: event.target.value})}><option value="">Qualquer</option>{[2, 3, 4, 5].map(n => <option key={n} value={n}>P{n}</option>)}</select></label>
-        <label className="mkt-alerts-check"><input type="checkbox" checked={form.soShiny} onChange={event => setForm({...form, soShiny: event.target.checked})}/>Só shiny</label>
-        <div className="mkt-alerts-btns"><button type="button" onClick={() => { setForm(null); setError(''); }}>Cancelar</button><button className="primary" type="submit" disabled={busy}><Icon d={icons.check}/>Salvar alerta</button></div>
+        <label className="ma-check"><input type="checkbox" checked={form.soShiny} onChange={event => setForm({...form, soShiny: event.target.checked})}/>✨ Só shiny</label>
+        <div className="ma-btns"><button type="button" onClick={() => { setForm(null); setError(''); }}>Cancelar</button><button className="primary" type="submit" disabled={busy}><Icon d={icons.check}/>Salvar alerta</button></div>
       </form>
-      : <button className="mkt-alerts-add" disabled={busy || alerts.length >= MAX_ALERTS} title={alerts.length >= MAX_ALERTS ? `Limite de ${MAX_ALERTS} alertas` : undefined} onClick={() => setForm({...blank})}><Icon d={icons.plus}/>Novo alerta</button>}
+      : <button className="ma-add" disabled={busy || alerts.length >= MAX_ALERTS} title={alerts.length >= MAX_ALERTS ? `Limite de ${MAX_ALERTS} alertas` : undefined} onClick={() => setForm({...blank})}><Icon d={icons.plus}/>Novo alerta</button>}
       {error && <p className="mkt-warn" role="alert">{error}</p>}
-      {hits.length > 0 && <div className="mkt-alerts-hits"><h3>Avisos recentes</h3><ol>{hits.slice(0, 8).map(hit => { const p = byId.get(hit.profileId); const l = hit.listing; return <li key={`${hit.alertId}-${l.id ?? l.name}-${hit.em}`} style={{'--c': p?.colorToken ?? 'var(--pi-rx)'} as CSSProperties}>
-        <span className="who">{p?.label ?? 'Conta'}</span>
-        <strong>{l.shiny && '✨ '}{l.name}</strong>
-        <small>{[l.level !== null && `Nv ${full.format(l.level)}`, l.potencia !== null && `P${l.potencia}`, l.nota !== null && `nota ${l.nota.toLocaleString('pt-BR')}`].filter(Boolean).join(' · ')}</small>
-        <b>{full.format(l.price)} {coin(l.currency)}</b><time dateTime={hit.em}>{ago(hit.em)}</time>
+      {hits.length > 0 && <div className="ma-hits"><h3>Avisos recentes</h3><ol>{hits.slice(0, 8).map((hit, i) => { const p = byId.get(hit.profileId); const l = hit.listing; return <li key={`${hit.alertId}-${l.id ?? l.name}-${hit.em}`} data-shiny={l.shiny || undefined} style={{'--c': p?.colorToken ?? 'var(--pi-rx)', '--i': i} as CSSProperties}>
+        <div className="ma-hit-top"><strong>{l.shiny && <span aria-label="Shiny">✨ </span>}{l.name}</strong><b className="ma-price" data-m={l.currency ?? undefined}>{full.format(l.price)}<small> {coin(l.currency)}</small></b></div>
+        <div className="ma-hit-sub">
+          <span className="ma-chips">{l.level !== null && <i className="ma-chip">Nv {full.format(l.level)}</i>}{l.potencia !== null && <i className="ma-chip" data-k="pot" data-p={l.potencia}>P{l.potencia}</i>}{l.nota !== null && <i className="ma-chip" data-k="nota">N {l.nota.toLocaleString('pt-BR')}</i>}</span>
+          <span className="ma-who"><i aria-hidden="true"/>{p?.label ?? 'Conta'} · <time dateTime={hit.em}>{ago(hit.em)}</time></span>
+        </div>
       </li>; })}</ol></div>}
     </div>}
   </section>;

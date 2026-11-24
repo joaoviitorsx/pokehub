@@ -55,6 +55,11 @@ export function openDatabase(path: string): Database {
         db.exec('CREATE TABLE IF NOT EXISTS market_alerts (id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at TEXT NOT NULL)');
         // v16 também: aviso da tipagem do dia (ligado por padrão)
         if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='day_type_notify'").get()) db.exec('ALTER TABLE workspace_settings ADD COLUMN day_type_notify INTEGER NOT NULL DEFAULT 1');
+        // v16 também: Kick em segundo plano (mesmo formato da Twitch)
+        db.exec('CREATE TABLE IF NOT EXISTS kick_links (profile_id TEXT PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, enabled INTEGER NOT NULL DEFAULT 1, auto_claim INTEGER NOT NULL DEFAULT 0, sound INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)');
+        if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='kick_channel'").get()) db.exec("ALTER TABLE workspace_settings ADD COLUMN kick_channel TEXT NOT NULL DEFAULT ''");
+        // v16 também: lembretes de prazo dos bônus (ligados por padrão)
+        if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='deadline_notify'").get()) db.exec('ALTER TABLE workspace_settings ADD COLUMN deadline_notify INTEGER NOT NULL DEFAULT 1');
         db.exec('PRAGMA user_version=16; COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }

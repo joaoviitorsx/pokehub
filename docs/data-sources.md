@@ -122,3 +122,19 @@ Leitura **somente do DOM** do painel esquerdo "CAPTURAS" do jogo (lista da sess�
 - **Regras** (`market_alerts`, até 20; `spike/domain/market-alerts.ts`): parte do nome (sem acento), moeda, preço máximo (exige moeda), nota mínima, potência mínima, só shiny; cada uma pode ser pausada.
 - **Conferência:** no mesmo ciclo dos selos (`spike/electron/market-badges.ts`, 5 s), em toda conta com o RMT aberto, inclusive com a janela na bandeja. Cada anúncio avisa uma vez por regra a cada 6 h (`hitKey`). Aviso: notificação do sistema (até 3 por leitura) + lista "Avisos recentes" (30, em memória) + selo de sino no card (com os selos ligados).
 - **Limite:** só enxerga o que a vitrine aberta mostra (a busca e a página atuais); não busca nem pagina sozinho.
+
+# Kick em segundo plano — aba Lives
+
+- **Fonte (conferida em 2026-11-24):** a página do canal `https://kick.com/<canal>`. Ao vivo: `[data-testid="livestream-title"]`; player: `<video>` (Amazon IVS, autoplay mudo); conta: imagem em `[data-testid="navbar-account"]`; sem conta: botões "Log In/Entrar". O saldo de pontos é lido de qualquer elemento rotulado como pontos do canal (`[data-testid*=point]`, `aria-label`/`title` com "pontos"/"points"); se a Kick não expuser, fica "—". Sem baú automático.
+- **Login:** cookie `session_token` quando existir; senão, a própria página (menu da conta). Sem conta logada a janela escondida fecha.
+- **Qualidade:** o player escolhe sozinho; com a janela escondida a banda é limitada a 1,2 Mbps (`Network.emulateNetworkConditions`) e ele desce para ~480p (medido). À vista, sem limite.
+- **Cloudflare:** a sessão da Kick usa o user agent sem "Electron/…"; testado: a página abre e toca na janela oculta.
+
+# Prazos dos bônus — aba Caçar
+
+- **Fonte (conferida no jogo real em 2026-11-24):** `#tr-ativos > .tr-ativo` (classes `vip`, `guild-boost`, `guild-boss`, `twitch`, `kick`), nome em `.tr-ativo-nome`, fim em `[data-ate]` (epoch ms). Lido a cada 5 min (Modo leve: 10 min) em cada conta pronta (`DEADLINE_SCRIPT`, mundo isolado).
+- **Aviso:** 1 dia e 1 hora antes do fim, uma vez cada (chave com o fim: renovar zera), no sistema (balão da bandeja no Windows). Desligável (`workspace_settings.deadline_notify`).
+
+# Retratos centralizados (aba Caçar)
+
+- O atlas do jogo não manda CORS, então a interface não lê os pixels. O contorno real (pixels com alfa > 16) de cada janela de retrato é medido **na página do jogo** (mesma origem do atlas), uma vez por retrato, e o retrato é centralizado e escalado por ele (escala inteira quando cabe). Sem contorno, vale o recorte antigo. A animação de entrada do retrato passou a usar só opacidade: antes ela sobrescrevia a escala (`transform`) enquanto rodava.

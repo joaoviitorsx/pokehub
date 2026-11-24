@@ -27,6 +27,7 @@ Pasta de dados do app: `%APPDATA%\PokeHub` (Windows) ou `~/.config/PokeHub` (Lin
 
 - **O jogo** (`pokeidle.io`) com a sua sessão, como em qualquer navegador; e o pedido público de retratos `https://pokeidle.io/tracker/api/sprites?lt=...`, feito pelo app **sem cookies**.
 - **`accounts.google.com` / `discord.com`**, só quando você escolhe entrar com essas contas.
+- **Kick** (só nas contas em que você vincular a Kick): igual à Twitch, com sessão própria (`Partitions/pokehubkk-<uuid>`), quadro principal preso a `*.kick.com`, user agent sem a marca "Electron" (o Cloudflare da Kick barra), e a banda da janela escondida limitada pela emulação de rede do Chromium (`webContents.debugger` da própria janela; não abre porta de depuração). O login é lido pelo menu da conta na página (a Kick não tem cookie de nome).
 - **Twitch** (só nas contas em que você vincular a Twitch): a janela da Twitch daquela conta fala com `twitch.tv` e com os CDNs de vídeo, chat, anúncios e captcha que a própria página usa, como num navegador. A sessão da Twitch só aceita `https`/`wss`; o quadro principal só navega em `*.twitch.tv`; sem downloads, sem permissões e sem janelas novas. O PokéHub não lê nem guarda o token da Twitch: só confere se o cookie de login existe e lê o nome de usuário do cookie `login` para mostrar na tela.
 - **GitHub Releases** (verificação de atualização): 10 segundos depois de abrir e a cada 6 horas, se a verificação automática estiver ligada. Dá para desligar em Configurações.
 - **Chrome Web Store**: a página abre no **seu navegador**, quando você pede para instalar uma extensão.
@@ -46,9 +47,11 @@ Tudo abaixo é a **seu pedido**; nada roda sozinho nem agendado. Regras exatas e
 - **Análise "Para caçar" na ficha** (ligada por padrão; Gerenciar → Layout desliga): ao abrir a ficha de um Pokémon, o app lê só textos e números da ficha (IV de cada stat, stats-base, nota, qualidade, potência) e **escreve** um cartão `section.ph-ana` logo depois do topo da ficha, mais um `<style id="ph-ana-css">`. Não clica (os botões "+1" de refino gastam pedras e nunca são tocados), não lê campos e não faz rede. Desligar remove tudo.
 - **"Quem colocar em campo?" e tipagem do dia** (com a `/hunt`): lê o último estado que a extensão já recebeu do jogo e chama o cálculo DELA para até 9 Pokémon (equipe + 3 da coleção), um por vez; só a pedido (cartão aberto na aba Caçar), no máximo uma vez por minuto por conta. Não troca o Pokémon em campo: só diz qual. A sonda da tipagem roda a cada 10 min e só lê.
 - **Alertas do RMT**: as regras ficam no `pokehub.sqlite` (tabela `market_alerts`); conferem só a vitrine que a conta já está mostrando, sem buscar, paginar ou clicar. Avisos recentes só em memória.
+- **Prazos dos bônus**: lê só `#tr-ativos` (bônus ativos e o fim de cada um) a cada 5 min; avisa 1 dia e 1 hora antes (lembrado em `prazos-avisados.json`). Desligável em Gerenciar → Layout.
+- **Retratos**: o contorno de cada retrato é medido uma vez na página do jogo (canvas com o atlas do próprio jogo); nada é escrito.
 - **Leituras** (sem clique e sem escrever na página): vitrine do Mercado da Comunidade quando a aba está aberta, saldo e itens da Loja, painel de capturas, ranking da extensão `/hunt` e estado de carregamento das contas. Os scripts são constantes; nenhum dado da interface é interpolado neles.
 
-## O que o PokéHub faz na Twitch
+## O que o PokéHub faz na Twitch e na Kick
 
 Só nas contas em que você clicou em **Vincular Twitch** e com o canal definido no Assistente → Twitch. O login é feito por você na página da Twitch; o PokéHub nunca vê a senha.
 

@@ -1,4 +1,5 @@
-// Twitch em segundo plano: uma conta da Twitch por conta do PokéIdle, assistindo o canal escolhido para acumular pontos do canal.
+// Lives em segundo plano (Twitch e Kick): uma conta de cada plataforma por conta do PokéIdle, assistindo o canal escolhido.
+export type StreamPlatform = 'twitch' | 'kick';
 /**
  * off: desligado pelo usuário · login: falta entrar na Twitch · starting: abrindo o canal · watching: ao vivo e contando
  * offline: canal fora do ar · attention: o player pede um clique (aviso de conteúdo, erro) · duplicate: a mesma conta da Twitch
@@ -27,4 +28,4 @@ export interface TwitchAccount {
   /** A janela da Twitch desta conta está à vista. */
   visible: boolean;
 }
-export interface TwitchInfo { channel: string; accounts: TwitchAccount[] }
+export interface TwitchInfo { platform: StreamPlatform; channel: string; accounts: TwitchAccount[] }

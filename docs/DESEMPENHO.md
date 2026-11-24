@@ -91,3 +91,34 @@ Entregue, com testes automatizados:
 - **P0-2** se o jogo progride com a view oculta (`backgroundThrottling`); só então decidir a opção por conta "Manter ativa".
 - Os ganhos reais de CPU, GPU e memória de cada item acima (cenários S0–S6 deste documento).
 - Não implementados: P2-2 (`--enable-low-end-device-mode`) e P2-7 (extensões por conta).
+
+## Análise 1.1.0 (2026-11-24): lives, selos, alertas, ficha, equipe e prazos
+
+### Medido (Electron 44, Windows, janela oculta, 20 s por amostra)
+
+| Item | CPU do processo | Memória (working set) |
+|---|---|---|
+| Twitch oculta, 160p, com chat | ~0,5% | ~444 MB |
+| Twitch oculta, 160p, chat escondido (CSS) | ~0,8% (ruído) | ~390 MB |
+| Kick oculta, banda limitada (1,2 Mbps → 480p em ~25 s) | ~0,5–0,6% | ~320 MB |
+| Cálculo da equipe (/hunt, 8 Pokémon) | ~4,1 s na página, em fatias de ~0,5 s | — |
+
+Conclusão: CPU das lives é desprezível (a página escondida não pinta e o vídeo é leve); o custo real é **memória** — até ~3 GB com 4 contas × 2 plataformas ao vivo. As decisões abaixo atacam isso primeiro.
+
+### O que foi feito
+
+- **Live fora do ar dorme:** depois de 15 min offline com a janela escondida, a janela fecha (libera os ~300–450 MB) e o PokéHub reconfere a cada 10 min abrindo a página por pouco tempo. Custo: a live que começa pode levar até ~10 min para voltar a contar. Qualquer ação do usuário (Ver, ligar, trocar canal) acorda na hora.
+- **Chat oculto escondido:** CSS só com a janela escondida (`hideCss` em `spike/domain/streams.ts`), removido ao clicar em Ver. ~50 MB a menos na Twitch.
+- **Qualidade baixa:** Twitch grava 160p nas preferências do player; Kick (player Amazon IVS, sem preferência gravável) tem a banda da janela escondida limitada a 1,2 Mbps pela emulação de rede do Chromium (`webContents.debugger`, sem porta de depuração) — o player desce de 720p60 para ~480p sozinho (~70% menos banda). À vista, banda livre. Abaixo de ~1 Mbps o vídeo engasgava, por isso 1,2.
+- **Sem login, não assiste:** Kick sem conta logada fecha a janela escondida (antes assistiria anônimo à toa).
+- **Ficha só à vista:** a sonda da análise da ficha (4 s) não roda com o PokéHub na bandeja/minimizado; reinstala ao mostrar a janela.
+- **RMT fechado lido 3× menos:** a vitrine é lida a cada 5 s nas contas com o RMT aberto e a cada 15 s nas demais (o alerta continua pegando a abertura em até 15 s).
+- **Equipe sob demanda:** o cálculo pesado da /hunt só roda com o cartão aberto na aba Caçar, no máximo 1×/min por conta, cache de 10 min por assinatura da equipe.
+- **Contorno dos retratos medido uma vez:** cache por retrato (máx. 40 por leitura), nunca de novo.
+- **Lembretes e tipagem:** 5 min / 10 min (Modo leve: 10 min) — leitura mínima.
+- **Modo leve:** dobra os intervalos de selos/alertas (10 s), ficha (8 s) e prazos (10 min).
+
+### O que fica em aberto
+
+- As 4 sessões do jogo continuam sendo o maior consumo (cada uma é um Chromium com o jogo rodando); Modo leve, suspender contas e o Modo economia do próprio jogo seguem sendo as alavancas.
+- Vigiar várias lives ao mesmo tempo multiplica a memória; recomendação: vincular as lives só nas contas que vão usar os boosters.

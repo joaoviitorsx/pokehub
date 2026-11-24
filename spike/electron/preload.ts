@@ -64,6 +64,17 @@ contextBridge.exposeInMainWorld('pokehub', {
   drag: (active: boolean) => ipcRenderer.invoke('session:drag',active),
   huntSnapshot: (id: string,soLiberadas?: boolean) => ipcRenderer.invoke('hunt:snapshot',id,soLiberadas),
   huntTeam: (id: string,force?: boolean) => ipcRenderer.invoke('hunt:team',id,force === true),
+  deadlines: {
+    get: () => ipcRenderer.invoke('deadlines:get'),
+    refresh: () => ipcRenderer.invoke('deadlines:refresh'),
+    notify: () => ipcRenderer.invoke('deadlines:notify'),
+    setNotify: (on: boolean) => ipcRenderer.invoke('deadlines:setNotify',on),
+    onChanged: (callback: (all: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, all: unknown) => callback(all);
+      ipcRenderer.on('deadlines:changed',listener);
+      return () => ipcRenderer.removeListener('deadlines:changed',listener);
+    },
+  },
   dayType: {
     notify: () => ipcRenderer.invoke('daytype:notify'),
     setNotify: (on: boolean) => ipcRenderer.invoke('daytype:setNotify',on),
@@ -133,19 +144,19 @@ contextBridge.exposeInMainWorld('pokehub', {
     approve: (id: string,hosts: string[]) => ipcRenderer.invoke('extensions:approve',id,hosts),
     openStore: (id: string) => ipcRenderer.invoke('extensions:store',id),
   },
-  twitch: {
-    get: () => ipcRenderer.invoke('twitch:get'),
-    setChannel: (value: string) => ipcRenderer.invoke('twitch:channel',value),
-    link: (id: string) => ipcRenderer.invoke('twitch:link',id),
-    unlink: (id: string) => ipcRenderer.invoke('twitch:unlink',id),
-    update: (id: string,patch: unknown) => ipcRenderer.invoke('twitch:update',id,patch),
-    show: (id: string) => ipcRenderer.invoke('twitch:show',id),
-    hide: (id: string) => ipcRenderer.invoke('twitch:hide',id),
-    rewards: (id: string) => ipcRenderer.invoke('twitch:rewards',id),
+  streams: {
+    get: (platform: string) => ipcRenderer.invoke('stream:get',platform),
+    setChannel: (platform: string,value: string) => ipcRenderer.invoke('stream:channel',platform,value),
+    link: (platform: string,id: string) => ipcRenderer.invoke('stream:link',platform,id),
+    unlink: (platform: string,id: string) => ipcRenderer.invoke('stream:unlink',platform,id),
+    update: (platform: string,id: string,patch: unknown) => ipcRenderer.invoke('stream:update',platform,id,patch),
+    show: (platform: string,id: string) => ipcRenderer.invoke('stream:show',platform,id),
+    hide: (platform: string,id: string) => ipcRenderer.invoke('stream:hide',platform,id),
+    rewards: (platform: string,id: string) => ipcRenderer.invoke('stream:rewards',platform,id),
     onChanged: (callback: (info: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, info: unknown) => callback(info);
-      ipcRenderer.on('twitch:changed',listener);
-      return () => ipcRenderer.removeListener('twitch:changed',listener);
+      ipcRenderer.on('stream:changed',listener);
+      return () => ipcRenderer.removeListener('stream:changed',listener);
     },
   },
   ficha: {

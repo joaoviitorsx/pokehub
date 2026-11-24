@@ -10,7 +10,7 @@ import { isProfileId } from '../domain/profiles';
 export const PENDING_FILE = 'pending-wipes.json', PARTITIONS_DIR = 'Partitions', MAX_PENDING = 64;
 const PREFIX = 'pokehub-';
 /** Pastas da sessão da Twitch de cada perfil (`persist:pokehubtw-<uuid>`): fila própria, mesmas travas. */
-export const TWITCH_PREFIX = 'pokehubtw-';
+export const TWITCH_PREFIX = 'pokehubtw-', KICK_PREFIX = 'pokehubkk-';
 
 export interface WipeFs {
   readFile(path: string): string;
@@ -32,7 +32,7 @@ export const realFs: WipeFs = {
 /** Pasta da partição do perfil, garantidamente dentro de `<userData>/Partitions`. Lança para id que não é UUID ou caminho fora. */
 export function partitionPath(userData: string, id: unknown, prefix: string = PREFIX): string {
   if (!isProfileId(id)) throw new Error('Identificador de perfil inválido');
-  if (prefix !== PREFIX && prefix !== TWITCH_PREFIX) throw new Error('Prefixo de partição desconhecido');
+  if (prefix !== PREFIX && prefix !== TWITCH_PREFIX && prefix !== KICK_PREFIX) throw new Error('Prefixo de partição desconhecido');
   const root = resolve(userData, PARTITIONS_DIR), target = resolve(root, `${prefix}${id}`), rel = relative(root, target);
   if (!rel || rel.startsWith('..') || rel.includes(sep) || resolve(root, rel) !== target) throw new Error('Caminho fora das partições');
   return target;

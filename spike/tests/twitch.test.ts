@@ -9,7 +9,7 @@ import { partitionPath, TWITCH_PREFIX, PARTITIONS_DIR } from '../electron/partit
 import { twitchPartitionFor } from '../electron/partition';
 
 const A = '00000000-0000-4000-8000-000000000001';
-const probe = (over: Partial<TwitchProbe> = {}): TwitchProbe => ({live:true, playing:true, paused:false, balance:'1.234', claimable:false, gate:false, loggedOut:false, ...over});
+const probe = (over: Partial<TwitchProbe> = {}): TwitchProbe => ({live:true, playing:true, paused:false, balance:'1.234', claimable:false, gate:false, loggedOut:false, user:null, ...over});
 
 describe('canal da Twitch', () => {
   it('aceita nome, @nome e o link do canal; minúsculas', () => {
@@ -55,7 +55,7 @@ describe('saldo de pontos', () => {
 
 describe('leitura da página e estado', () => {
   it('só aceita flags booleanas e saldo curto', () => {
-    expect(sanitizeProbe({live:'sim', playing:1, balance:'x'.repeat(40)})).toEqual({live:false, playing:false, paused:false, balance:null, claimable:false, gate:false, loggedOut:false});
+    expect(sanitizeProbe({live:'sim', playing:1, balance:'x'.repeat(40)})).toEqual({live:false, playing:false, paused:false, balance:null, claimable:false, gate:false, loggedOut:false, user:null});
     expect(sanitizeProbe(null)).toBeNull();
     expect(sanitizeProbe({live:true, loggedOut:true, balance:'0', claimable:true})).toMatchObject({balance:null, claimable:false, loggedOut:true});
     expect(sanitizeProbe('texto')).toBeNull();
@@ -120,4 +120,53 @@ describe('TwitchStore', () => {
     twitch.link(profile.id); twitch.unlink(profile.id);
     expect(twitch.get(profile.id)).toBeNull();
   }));
+});
+
+describe('Kick', async () => {
+  const { normalizeKickChannel, isAllowedKickNavigation, KICK_PROBE_SCRIPT } = await import('../domain/kick');
+  const { PLATFORMS, isPlatform } = await import('../domain/streams');
+  const { streamPartitionFor } = await import('../electron/partition');
+  const { KICK_PREFIX } = await import('../electron/partition-wipe');
+  it('canal: nome, link e slug com hífen', () => {
+    expect(normalizeKickChannel('https://kick.com/Canal-Oficial')).toBe('canal-oficial');
+    expect(normalizeKickChannel('@canal_x')).toBe('canal_x');
+    for (const bad of ['a', 'https://evil.com/x', 'nome com espaço', null]) expect(normalizeKickChannel(bad)).toBeNull();
+  });
+  it('navegação só em https dentro de kick.com', () => {
+    expect(isAllowedKickNavigation('https://kick.com/canal')).toBe(true);
+    for (const bad of ['http://kick.com/', 'https://kick.com.evil.io/', 'https://notkick.com/']) expect(isAllowedKickNavigation(bad)).toBe(false);
+  });
+  it('script de leitura válido, sem clique, rede ou escrita', () => {
+    expect(() => new Function(`return ${KICK_PROBE_SCRIPT}`)).not.toThrow();
+    for (const banned of ['.click(', 'fetch(', 'innerHTML', 'localStorage']) expect(KICK_PROBE_SCRIPT).not.toContain(banned);
+  });
+  it('plataformas: sessões separadas e limite de banda só na Kick', () => {
+    expect(isPlatform('kick')).toBe(true);
+    expect(isPlatform('youtube')).toBe(false);
+    expect(streamPartitionFor('pokehubkk-', A)).toBe(`persist:pokehubkk-${A}`);
+    expect(partitionPath('/u', A, KICK_PREFIX)).toBe(resolve('/u', PARTITIONS_DIR, `pokehubkk-${A}`));
+    expect(PLATFORMS.kick.throttleKbps).toBeGreaterThan(0);
+    expect(PLATFORMS.twitch.throttleKbps).toBeNull();
+    expect(PLATFORMS.kick.claimScript).toBeNull();
+  });
+  it('leitura: nome da conta só quando logada', () => {
+    expect(sanitizeProbe({user:'Fulano_1'})?.user).toBe('fulano_1');
+    expect(sanitizeProbe({user:'Fulano', loggedOut:true})?.user).toBeNull();
+    expect(sanitizeProbe({user:'<img>'})?.user).toBeNull();
+  });
+  it('vínculos e canal da Kick independentes dos da Twitch', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pokehub-kick-'));
+    const path = join(dir, 'app.sqlite');
+    const profiles = new ProfileStore(path), twitch = new TwitchStore(path, 'twitch'), kick = new TwitchStore(path, 'kick');
+    try {
+      const p = profiles.create({label:'Conta', emailLabel:'a@example.com', characterName:'', colorToken:'#d4a65f'});
+      kick.link(p.id); kick.setChannel('https://kick.com/Oficial-PI');
+      expect(kick.channel()).toBe('oficial-pi');
+      expect(twitch.channel()).toBe('');
+      expect(twitch.list()).toEqual([]);
+      expect(kick.list()).toHaveLength(1);
+      profiles.remove(p.id);
+      expect(kick.list()).toEqual([]);
+    } finally { kick.close(); twitch.close(); profiles.close(); rmSync(dir, {recursive:true, force:true}); }
+  });
 });

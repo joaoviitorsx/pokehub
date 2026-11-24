@@ -9,7 +9,7 @@ import type { PerformancePrefs } from '../contracts/preferences';
 import type { Capture } from '../domain/captures';
 import { createMockShop } from './mock-shop';
 import { createMockRemote } from './mock-remote';
-import { createMockTwitch } from './mock-twitch';
+import { createMockStreams } from './mock-twitch';
 import { sanitizeAlert, type MarketAlert, type MarketAlertHit, type MarketAlertInput } from '../domain/market-alerts';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
@@ -59,7 +59,9 @@ let extensions: ExtensionInfo[] = [
 let update: UpdateInfo = {version: '0.1.0', packaged: true, autoCheck: true, status: {state: 'available', version: '0.1.1', notes: 'Novo painel de mercado e correções de sessão.'}};
 
 // Retratos reais (atlas + janela) copiados de https://pokeidle.io/tracker/api/sprites em 2026-11-23; só URLs, nenhuma imagem no repositório.
-const atlas = (lt: number, x: number, w: number): HuntSprite => ({url: `https://pokeidle.io/assets/asset-packs/outfits/male/${lt}/outfits-male-${lt}-00-${hash[lt]}.webp`, x, y: 2, w, h: w});
+// Contornos reais medidos na página do jogo (2026-11-24); ?semcontorno=1 mostra o recorte antigo para comparar.
+const BOXES: Record<string, [number, number, number, number]> = {'10:530': [1, 9, 63, 46], '11:398': [27, 28, 36, 35], '14:398': [33, 30, 27, 32], '15:398': [24, 25, 39, 38], '16:662': [27, 20, 23, 41], '2:206': [7, 5, 22, 25], '3:398': [36, 21, 26, 40], '4:398': [29, 30, 32, 30], '5:662': [30, 31, 23, 33], '6:206': [3, 2, 28, 29], '7:662': [21, 28, 32, 33], '9:530': [20, 15, 24, 41]};
+const atlas = (lt: number, x: number, w: number): HuntSprite => { const b = params.get('semcontorno') === '1' ? undefined : BOXES[`${lt}:${x}`]; return {url: `https://pokeidle.io/assets/asset-packs/outfits/male/${lt}/outfits-male-${lt}-00-${hash[lt]}.webp`, x, y: 2, w, h: w, ...(b ? {box: {x: b[0], y: b[1], w: b[2], h: b[3]}} : {})}; };
 const hash: Record<number, string> = {2: 'be33c2bc8dab', 3: 'db2fbcffcc6c', 4: '6d1493b52558', 5: '41d09caaf101', 6: 'f9c285dcb70b', 7: 'd0294ef34646', 9: 'ea564acc6d19', 10: '17539951f766', 11: '82219c097599', 14: 'a3f7235eb82e', 15: '423a9bf03911', 16: '26fd95172e31'};
 const portraits: HuntSprite[] = [atlas(3, 398, 64), atlas(6, 206, 32), atlas(9, 530, 64), atlas(5, 662, 64), atlas(2, 206, 32), atlas(10, 530, 64), atlas(4, 398, 64), atlas(7, 662, 64), atlas(11, 398, 64), atlas(14, 398, 64), atlas(15, 398, 64), atlas(16, 662, 64)];
 const huntNames = ['Rota 3', 'Floresta de Viridian (clareira do Pikachu raro)', 'Monte Lua', 'Caverna Rubi', 'Lago Azul', 'Torre Pokémon', 'Ilha Seafoam', 'Rota 22', 'Mansão Pokémon', 'Cidade Fuchsia', 'Cume do Monte', 'Liga Pokémon'];
@@ -118,7 +120,7 @@ let captureLog: Capture[] = params.get('captures') === '0' ? [] : Array.from({le
 let captureTimer = 0;
 const shop = createMockShop(() => profiles.map(p => p.id), p => emit('shop-progress', p));
 window.pokehub = {
-  twitch: createMockTwitch(() => profiles.map(p => p.id), params.get('twitch') === '0'),
+  streams: createMockStreams(() => profiles.map(p => p.id), params.get('twitch') === '0'),
   list: () => ok(profiles.map(p => ({...p}))),
   getPreferences: () => ok(preferences),
   getPerformance: () => ok({...perfPrefs}),
@@ -147,6 +149,7 @@ window.pokehub = {
   huntSnapshot: (_id, soLiberadas) => ok(huntSnapshot(soLiberadas)),
   huntTeam: () => new Promise(resolve => setTimeout(() => resolve({ok: true, data: mockTeam()}), 900)),
   dayType: {notify: () => ok(true), setNotify: (on: boolean) => ok(on)},
+  deadlines: {get: () => ok({[uid(1)]: [{tipo: 'vip', nome: '+50% XP', ate: Date.now() + 17 * 86_400_000}, {tipo: 'guild-boost', nome: 'Boost Guild +10% XP', ate: Date.now() + 3 * 86_400_000 + 4 * 3_600_000}, {tipo: 'guild-boss', nome: 'Boss Guild +3,9%', ate: Date.now() + 22 * 3_600_000}, {tipo: 'twitch', nome: 'Bônus Twitch +15%', ate: Date.now() + 42 * 60_000}]}), refresh: () => ok(undefined), notify: () => ok(true), setNotify: (on: boolean) => ok(on), onChanged: () => () => undefined},
   ficha: {review: () => ok(fichaReview), setReview: (on: boolean) => { fichaReview = on; return ok(on); }},
   market: {
     badges: () => ok(marketBadges),

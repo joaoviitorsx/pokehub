@@ -126,7 +126,51 @@ export async function spritesFor(wanted: readonly number[], target: HuntTarget):
     if (spriteCache.size > 2000) spriteCache.clear();
     for (const look of looks) { const sprite = sanitizeSprite(found[look]); if (sprite) spriteCache.set(look, sprite); }
   } catch { /* segue sem imagem */ }
+  await measureBoxes(target);
   return spriteCache;
+}
+/**
+ * Contorno real de cada retrato (pixels não transparentes da janela), medido UMA vez por retrato na página do jogo: o atlas é da
+ * mesma origem dela, então o canvas não fica "sujo" (a interface do PokéHub não pode ler os pixels: o servidor não manda CORS).
+ * O script recebe só retratos já validados por `sanitizeSprite` (https://pokeidle.io + números), embutidos por JSON; não faz rede
+ * além de carregar essas imagens do próprio jogo, não clica e não escreve na página.
+ */
+const boxTried = new Set<string>();
+export const boxKey = (s: HuntSprite) => `${s.url}|${s.x}|${s.y}|${s.w}|${s.h}`;
+export function boxScript(list: readonly {k: string; url: string; x: number; y: number; w: number; h: number}[]): string {
+  return `(async () => {
+  const L = ${JSON.stringify(list)};
+  const imgs = new Map(), out = {};
+  for (const s of L) {
+    let img = imgs.get(s.url);
+    if (!img) { img = new Image(); img.src = s.url; try { await img.decode(); } catch { } imgs.set(s.url, img); }
+    if (!img.naturalWidth) continue;
+    const c = document.createElement('canvas'); c.width = s.w; c.height = s.h;
+    const g = c.getContext('2d', {willReadFrequently: true}); if (!g) continue;
+    g.drawImage(img, s.x, s.y, s.w, s.h, 0, 0, s.w, s.h);
+    let d; try { d = g.getImageData(0, 0, s.w, s.h).data; } catch { continue; }
+    let x0 = s.w, y0 = s.h, x1 = -1, y1 = -1;
+    for (let y = 0; y < s.h; y++) for (let x = 0; x < s.w; x++) if (d[(y * s.w + x) * 4 + 3] > 16) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 >= 0) out[s.k] = [x0, y0, x1 - x0 + 1, y1 - y0 + 1];
+  }
+  return out;
+})()`;
+}
+async function measureBoxes(target: HuntTarget): Promise<void> {
+  const pending = [...spriteCache.values()].filter(s => !s.box && !boxTried.has(boxKey(s))).slice(0, 40);
+  if (!pending.length) return;
+  for (const s of pending) boxTried.add(boxKey(s));
+  try {
+    const raw = await timed(target.run(boxScript(pending.map(s => ({k: boxKey(s), url: s.url, x: s.x, y: s.y, w: s.w, h: s.h})))), SPRITE_MS);
+    if (!isRecord(raw)) return;
+    for (const s of pending) {
+      const b = raw[boxKey(s)];
+      if (!Array.isArray(b) || b.length !== 4) continue;
+      const [x, y, w, h] = b.map(v => whole(v, 0, 256));
+      if (x == null || y == null || !w || !h || x + w > s.w || y + h > s.h) continue;
+      s.box = {x, y, w, h};
+    }
+  } catch { /* sem contorno: a interface usa o recorte antigo */ }
 }
 async function loadSprites(raw: unknown, target: HuntTarget): Promise<void> {
   if (isRecord(raw) && Array.isArray(raw.hunts)) await spritesFor([raw.pokemon, ...raw.hunts.slice(0, MAX_ROWS)].flatMap(item => lookOf(item) ?? []), target);

@@ -39,6 +39,12 @@ export class PreferencesStore {
   removeMarketAlert(id: unknown): void {
     if (typeof id !== 'string' || this.db.prepare('DELETE FROM market_alerts WHERE id=?').run(id).changes !== 1) throw new Error('Alerta inválido');
   }
+  getDeadlineNotify(): boolean { return this.db.prepare('SELECT deadline_notify FROM workspace_settings WHERE id=1').get()?.deadline_notify !== 0; }
+  setDeadlineNotify(value: unknown): boolean {
+    if (typeof value !== 'boolean') throw new Error('Preferência inválida');
+    if (this.db.prepare('UPDATE workspace_settings SET deadline_notify=? WHERE id=1').run(value ? 1 : 0).changes !== 1) throw new Error('Preferência ausente');
+    return value;
+  }
   getDayTypeNotify(): boolean { return this.db.prepare('SELECT day_type_notify FROM workspace_settings WHERE id=1').get()?.day_type_notify !== 0; }
   setDayTypeNotify(value: unknown): boolean {
     if (typeof value !== 'boolean') throw new Error('Preferência inválida');

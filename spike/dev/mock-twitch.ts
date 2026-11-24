@@ -1,19 +1,19 @@
 // Prévia no navegador: finge a Twitch em segundo plano (window.pokehub.twitch). Só para desenvolvimento. ?twitch=0 começa sem nada vinculado.
-import type { TwitchAccount, TwitchInfo } from '../contracts/twitch';
+import type { StreamPlatform, TwitchAccount, TwitchInfo } from '../contracts/twitch';
 import { normalizeChannel } from '../domain/twitch';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
-export function createMockTwitch(profileIds: () => string[], fresh: boolean) {
+function createMockPlatform(platform: StreamPlatform, profileIds: () => string[], fresh: boolean) {
   const ids = profileIds();
-  let channel = fresh ? '' : 'canal_oficial';
+  let channel = fresh || platform === 'kick' ? '' : 'canal_oficial';
   const base = (profileId: string): TwitchAccount => ({profileId, enabled: true, autoClaim: false, sound: false, login: null, state: 'login', balance: null, earned: 0, claimed: 0, since: null, visible: false});
-  let accounts: TwitchAccount[] = fresh ? [] : [
+  let accounts: TwitchAccount[] = fresh || platform === 'kick' ? [] : [
     {...base(ids[0]!), login: 'ash_ketchum', state: 'watching', balance: 12_340, earned: 450, claimed: 3, autoClaim: true, since: new Date(Date.now() - 83 * 60_000).toISOString()},
     ...(ids[1] ? [{...base(ids[1]), login: 'brock_rocks', state: 'offline' as const, balance: 2_875}] : []),
     ...(ids[2] ? [{...base(ids[2])}] : []),
   ];
   const listeners = new Set<(info: TwitchInfo) => void>();
-  const info = (): TwitchInfo => ({channel, accounts: accounts.filter(a => profileIds().includes(a.profileId)).map(a => ({...a, state: !channel && a.enabled ? 'no_channel' : a.state}))});
+  const info = (): TwitchInfo => ({platform, channel, accounts: accounts.filter(a => profileIds().includes(a.profileId)).map(a => ({...a, state: !channel && a.enabled ? 'no_channel' : a.state}))});
   const reply = (): Promise<Result<TwitchInfo>> => new Promise(resolve => setTimeout(() => { const data = info(); listeners.forEach(l => l(data)); resolve({ok: true, data}); }, 60));
   const patch = (id: string, change: Partial<TwitchAccount>) => { accounts = accounts.map(a => a.profileId === id ? {...a, ...change} : a); };
   // saldo subindo enquanto "assiste": 10 pontos a cada 5 s na prévia
@@ -28,5 +28,17 @@ export function createMockTwitch(profileIds: () => string[], fresh: boolean) {
     hide: (id: string) => { patch(id, {visible: false}); return reply(); },
     rewards: (id: string) => { patch(id, {visible: true}); return reply(); },
     onChanged: (callback: (info: TwitchInfo) => void) => { listeners.add(callback); return () => { listeners.delete(callback); }; },
+  };
+}
+
+/** As duas plataformas atrás da mesma API do preload (`window.pokehub.streams`). */
+export function createMockStreams(profileIds: () => string[], fresh: boolean) {
+  const all = {twitch: createMockPlatform('twitch', profileIds, fresh), kick: createMockPlatform('kick', profileIds, fresh)};
+  const pick = (platform: StreamPlatform) => all[platform];
+  return {
+    get: (p: StreamPlatform) => pick(p).get(), setChannel: (p: StreamPlatform, v: string) => pick(p).setChannel(v), link: (p: StreamPlatform, id: string) => pick(p).link(id),
+    unlink: (p: StreamPlatform, id: string) => pick(p).unlink(id), update: (p: StreamPlatform, id: string, patch: Partial<Pick<TwitchAccount, 'enabled' | 'autoClaim' | 'sound'>>) => pick(p).update(id, patch),
+    show: (p: StreamPlatform, id: string) => pick(p).show(id), hide: (p: StreamPlatform, id: string) => pick(p).hide(id), rewards: (p: StreamPlatform, id: string) => pick(p).rewards(id),
+    onChanged: (callback: (info: TwitchInfo) => void) => { const a = all.twitch.onChanged(callback), b = all.kick.onChanged(callback); return () => { a(); b(); }; },
   };
 }

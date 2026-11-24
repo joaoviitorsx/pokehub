@@ -30,7 +30,8 @@ export function createMarketBadges(deps: BadgeDeps) {
   const accs = new Map<string, MarketAccumulator>();
   const applied = new Set<string>(); // contas com selos (ou CSS) na página: precisam de limpeza ao desligar
   const seen = new Map<string, number>(); // hitKey → quando avisou
-  let timer: ReturnType<typeof setTimeout> | undefined, running = false, stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined, running = false, stopped = false, tickNo = 0;
+  const closedSince = new Map<string, number>(); // conta → ciclo em que o RMT foi visto fechado (lê de novo a cada 3 ciclos)
   const fresh = (key: string, now: number) => { const at = seen.get(key); return at === undefined || now - at > SEEN_TTL_MS; };
   function prune(now: number) {
     if (seen.size <= MAX_SEEN) return;
@@ -44,8 +45,11 @@ export function createMarketBadges(deps: BadgeDeps) {
       accs.delete(id);
       return;
     }
+    const closedAt = closedSince.get(id);
+    if (closedAt !== undefined && (tickNo - closedAt) % 3 !== 0) return; // RMT fechado: confere com menos frequência
     const scan = sanitizeMarketScan(await timed(target.run(MARKET_SCAN_SCRIPT),SCRIPT_TIMEOUT_MS).catch(() => null));
-    if (!scan || !scan.open) return;
+    if (!scan || !scan.open) { if (closedAt === undefined) closedSince.set(id,tickNo); return; }
+    closedSince.delete(id);
     const now = Date.now(), acc = accumulate(accs.get(id) ?? null,sessionKey(id,scan.query),scan,now);
     accs.set(id,acc);
     const alerted = (listing: MarketListing) => alerts.some(alert => matches(alert,listing));
@@ -66,7 +70,7 @@ export function createMarketBadges(deps: BadgeDeps) {
   }
   async function tick() {
     if (running || stopped) return;
-    running = true;
+    running = true; tickNo++;
     try {
       const alerts = (deps.alerts?.() ?? []).filter(alert => alert.ativo);
       const badges = deps.enabled();
@@ -83,7 +87,7 @@ export function createMarketBadges(deps: BadgeDeps) {
   return {
     start() { stopped = false; clearTimeout(timer); timer = setTimeout(() => void tick(),BADGE_INTERVAL_MS); },
     /** Liga/desliga ou mudou um alerta: aplica já, sem esperar o próximo ciclo. */
-    refresh() { clearTimeout(timer); void tick(); },
+    refresh() { closedSince.clear(); clearTimeout(timer); void tick(); },
     stop() { stopped = true; clearTimeout(timer); },
   };
 }

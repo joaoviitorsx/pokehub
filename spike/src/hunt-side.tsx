@@ -6,8 +6,9 @@ import { huntFetchable, huntQueue, huntRefreshMs, signature } from './hunt-queue
 import { MarketPanel } from './market-side';
 import { ShopPanel } from './shop-side';
 import { CapturesPanel } from './captures-side';
-import { TwitchPanel } from './twitch-side';
+import { LivesPanel } from './twitch-side';
 import { TeamPickCard } from './team-pick';
+import { DeadlinesStrip } from './deadlines-strip';
 
 type Mode = 'xp' | 'ouro' | 'shiny';
 type Entry = {data: HuntSnapshot} | {error: string};
@@ -55,6 +56,15 @@ export function Sprite({sprite,name,size}:{sprite:HuntSprite|null; name:string; 
  const [failed,setFailed] = useState<string|null>(null);
  const box = {'--s':`${size}px`} as CSSProperties;
  if (!sprite || failed === sprite.url) return <span className="spr" data-empty="" style={box} aria-hidden="true"><Ball tone="mono"/></span>;
+ // Com o contorno medido (sprite.box): centraliza e escala pelo Pokémon de verdade (escala inteira quando cabe: pixel art nítida).
+ // Sem ele: recorte antigo (janelas de 64 px desenham no canto inferior direito).
+ const b = sprite.box;
+ if (b) {
+   const fit = (size - 6) / Math.max(b.w,b.h);
+   const scale = fit >= 1 ? Math.floor(fit) : fit;
+   return <span className="spr" style={box}><img src={sprite.url} alt={name} width={sprite.w} height={sprite.h} loading="lazy" decoding="async" referrerPolicy="no-referrer" draggable={false} data-smooth={fit < 1 || undefined} onError={() => setFailed(sprite.url)}
+    style={{left:(size - b.w * scale) / 2 - b.x * scale,top:(size - b.h * scale) / 2 - b.y * scale,objectPosition:`-${sprite.x}px -${sprite.y}px`,transform:`scale(${scale})`,clipPath:`inset(${b.y}px ${sprite.w - b.x - b.w}px ${sprite.h - b.y - b.h}px ${b.x}px)`}}/></span>;
+ }
  const crop = Math.max(sprite.w,sprite.h) > 32 ? CROP : 0;
  const view = Math.max(sprite.w,sprite.h) - crop;
  const fit = size / view;
@@ -189,22 +199,23 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
  };
 
  const sprite = prefs.compact ? 28 : 36;
- return <aside className="side" aria-label="Assistente: caçar, mercado, loja, capturas e Twitch" data-compact={prefs.compact || undefined} data-drag={drag !== null || undefined} style={{'--side':`${drag ?? prefs.width}px`} as CSSProperties}>
+ return <aside className="side" aria-label="Assistente: caçar, mercado, loja, capturas e lives" data-compact={prefs.compact || undefined} data-drag={drag !== null || undefined} style={{'--side':`${drag ?? prefs.width}px`} as CSSProperties}>
   {drag !== null && <div className="side-ghost" aria-hidden="true"><span>Ajustando a lateral · {drag} px</span></div>}
   <div className="side-grip" role="separator" aria-orientation="vertical" aria-label="Largura da lateral" aria-valuemin={SIDE_MIN} aria-valuemax={SIDE_MAX} aria-valuenow={drag ?? prefs.width} tabIndex={0} title="Arraste para ajustar a largura. Duplo clique volta ao padrão."
    onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); /* não inicia seleção de texto */ event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId); startDrag(); }}
    onLostPointerCapture={endDrag}
    onDoubleClick={() => resize(SIDE_DEFAULT)}
    onKeyDown={event => { const next = {ArrowLeft:prefs.width + 16,ArrowRight:prefs.width - 16,Home:SIDE_MAX,End:SIDE_MIN}[event.key]; if (next !== undefined) { event.preventDefault(); resize(next); } }}/>
-  <header className="side-head"><h2>{tab === 'mercado' ? 'Mercado' : tab === 'loja' ? 'Loja' : tab === 'capturas' ? 'Capturas' : tab === 'twitch' ? 'Twitch' : 'Onde caçar?'}</h2><button className="icon" aria-label="Atualizar dados" title="Atualizar dados" disabled={!live || tab !== 'cacar'} onClick={() => setStamp(value => value + 1)}><Icon d={icons.reload}/></button><button className="icon" aria-label="Fechar lateral" title="Fechar (Ctrl+H)" onClick={onClose}><Icon d={icons.close}/></button></header>
+  <header className="side-head"><h2>{tab === 'mercado' ? 'Mercado' : tab === 'loja' ? 'Loja' : tab === 'capturas' ? 'Capturas' : tab === 'twitch' ? 'Lives' : 'Onde caçar?'}</h2><button className="icon" aria-label="Atualizar dados" title="Atualizar dados" disabled={!live || tab !== 'cacar'} onClick={() => setStamp(value => value + 1)}><Icon d={icons.reload}/></button><button className="icon" aria-label="Fechar lateral" title="Fechar (Ctrl+H)" onClick={onClose}><Icon d={icons.close}/></button></header>
   <div className="side-accounts" role="group" aria-label="Conta">{profiles.map(profile => {const s=states[profile.id] ?? '';return <button key={profile.id} className="tab" style={{'--c':profile.colorToken} as CSSProperties} aria-pressed={profile.id === id} title={profile.label} onClick={() => setPick(profile.id)}><El color={profile.colorToken}/><span className="name">{profile.label}</span><span className="st" data-state={s}><b/></span></button>;})}</div>
-  <div className="seg side-tabs" role="group" aria-label="Seção" style={{'--n':5,'--i':['cacar','mercado','loja','capturas','twitch'].indexOf(tab)} as CSSProperties}><button aria-pressed={tab === 'cacar'} onClick={() => setTab('cacar')}>Caçar</button><button aria-pressed={tab === 'mercado'} onClick={() => setTab('mercado')}>Mercado</button><button aria-pressed={tab === 'loja'} onClick={() => setTab('loja')}>Loja</button><button aria-pressed={tab === 'capturas'} onClick={() => setTab('capturas')}>Capturas</button><button aria-pressed={tab === 'twitch'} onClick={() => setTab('twitch')}>Twitch</button></div>
+  <div className="seg side-tabs" role="group" aria-label="Seção" style={{'--n':5,'--i':['cacar','mercado','loja','capturas','twitch'].indexOf(tab)} as CSSProperties}><button aria-pressed={tab === 'cacar'} onClick={() => setTab('cacar')}>Caçar</button><button aria-pressed={tab === 'mercado'} onClick={() => setTab('mercado')}>Mercado</button><button aria-pressed={tab === 'loja'} onClick={() => setTab('loja')}>Loja</button><button aria-pressed={tab === 'capturas'} onClick={() => setTab('capturas')}>Capturas</button><button aria-pressed={tab === 'twitch'} onClick={() => setTab('twitch')}>Lives</button></div>
   {tab === 'mercado' && <MarketPanel id={id} state={state} profiles={profiles}/>}
   <CapturesPanel profiles={profiles} active={tab === 'capturas'}/>
   <ShopPanel profiles={profiles} states={states} id={id} active={tab === 'loja'}/>
-  <TwitchPanel profiles={profiles} active={tab === 'twitch'}/>
+  <LivesPanel profiles={profiles} active={tab === 'twitch'}/>
   {lite && tab === 'cacar' && <p className="lite-tip" role="note">Nas contas que você não está olhando, ative o Modo economia do próprio jogo (botão na tela de sessão) — economiza CPU/GPU.</p>}
   <div className="side-body" hidden={tab !== 'cacar'} aria-busy={state === 'ready' && !entry}>
+   <DeadlinesStrip id={id} active={tab === 'cacar'}/>
    <TeamPickCard id={id} live={live} active={tab === 'cacar'}/>
    {!entry && state !== 'ready' ? message(...(waiting[state] ?? waiting.loading!))
    : !entry ? skeleton('Lendo o jogo…')

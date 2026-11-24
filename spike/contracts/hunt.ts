@@ -1,6 +1,7 @@
 // Retrato somente leitura do ranking calculado pela extensão /hunt (terceiros) dentro de uma sessão.
 /** Retrato da espécie: atlas servido por https://pokeidle.io e a janela (px) dele que contém o Pokémon. */
-export interface HuntSprite { url: string; x: number; y: number; w: number; h: number }
+/** Retrato: atlas + janela; `box` é o contorno real do Pokémon dentro da janela (medido na página do jogo), para centralizar. */
+export interface HuntSprite { url: string; x: number; y: number; w: number; h: number; box?: {x: number; y: number; w: number; h: number} }
 export interface HuntRow {
   nome: string;
   regiao: string;

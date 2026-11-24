@@ -51,14 +51,15 @@ export function parseBalance(value: unknown): number | null {
 }
 
 /** O que o script lê da página do canal (mundo isolado). Tudo é revalidado aqui antes de usar. */
-export interface TwitchProbe { live: boolean; playing: boolean; paused: boolean; balance: string | null; claimable: boolean; gate: boolean; loggedOut: boolean }
+export interface TwitchProbe { live: boolean; playing: boolean; paused: boolean; balance: string | null; claimable: boolean; gate: boolean; loggedOut: boolean; /** nome da conta lido da página (Kick), se houver */ user: string | null }
 export function sanitizeProbe(value: unknown): TwitchProbe | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Record<string, unknown>;
   const flag = (key: string) => raw[key] === true;
   const loggedOut = flag('loggedOut');
   const balance = !loggedOut && typeof raw.balance === 'string' && raw.balance.length <= 32 ? raw.balance : null; // deslogado a página mostra números que não são saldo
-  return {live:flag('live'), playing:flag('playing'), paused:flag('paused'), balance, claimable:!loggedOut && flag('claimable'), gate:flag('gate'), loggedOut};
+  const user = !loggedOut && typeof raw.user === 'string' && /^[A-Za-z0-9_-]{3,25}$/.test(raw.user) ? raw.user.toLowerCase() : null;
+  return {live:flag('live'), playing:flag('playing'), paused:flag('paused'), balance, claimable:!loggedOut && flag('claimable'), gate:flag('gate'), loggedOut, user};
 }
 /** Estado mostrado a partir da leitura; `login` é o nome lido do cookie da sessão. */
 export function stateOf(input: {enabled: boolean; channel: string; login: string | null; duplicate: boolean; failed: boolean; probe: TwitchProbe | null}): TwitchState {
@@ -104,5 +105,7 @@ export function probeDelay(state: TwitchState): number {
 }
 /** Fora do ar há mais que isto: recarrega a página do canal (pega a live que começou). */
 export const OFFLINE_RELOAD_MS = 10 * 60_000;
+/** Fora do ar há mais que isto (janela escondida): fecha a janela e libera a memória (~300–450 MB); reconfere a cada `OFFLINE_RECHECK_MS`. */
+export const OFFLINE_SLEEP_MS = 15 * 60_000, OFFLINE_RECHECK_MS = 10 * 60_000;
 /** Início escalonado das janelas da Twitch, depois das sessões do jogo. */
 export const TWITCH_START_DELAY_MS = 8_000, TWITCH_STAGGER_MS = 3_000;

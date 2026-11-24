@@ -9,7 +9,7 @@ import { atGame, timed } from './hunt-snapshot';
 
 export const FICHA_INTERVAL_MS = 4_000, FICHA_LITE_INTERVAL_MS = 8_000;
 const SCRIPT_TIMEOUT_MS = 4_000;
-export interface FichaDeps { known: () => string[]; target: (id: string) => MarketTarget | null; enabled: () => boolean; lite: () => boolean }
+export interface FichaDeps { known: () => string[]; target: (id: string) => MarketTarget | null; enabled: () => boolean; lite: () => boolean; /** janela do PokéHub à vista (escondida ninguém abre ficha) */ visible?: () => boolean }
 export function createFichaReview(deps: FichaDeps) {
   const installed = new Set<string>(); // contas em que algo foi instalado: limpar ao desligar
   let timer: ReturnType<typeof setTimeout> | undefined, running = false, stopped = false;
@@ -29,6 +29,7 @@ export function createFichaReview(deps: FichaDeps) {
     running = true;
     try {
       const enabled = deps.enabled();
+      if (enabled && deps.visible && !deps.visible()) return; // na bandeja/minimizado: nada a instalar agora
       for (const id of deps.known()) { if (stopped) return; try { await tickAccount(id,enabled); } catch { /* conta fechando */ } }
     } finally {
       running = false;
