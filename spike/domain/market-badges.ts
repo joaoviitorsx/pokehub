@@ -3,14 +3,14 @@ import { rankDeals, type MarketListing, type MarketScan } from './market';
 
 export type BadgeTier = 'alto' | 'medio' | 'baixo';
 /** Um selo por card da página atual: `id` do anúncio (ou nulo) + `name` e `index` para conferir o card quando não há id. */
-export interface Badge { id: string | null; name: string; index: number; score: number; tier: BadgeTier; best: boolean; rank: number; total: number }
+export interface Badge { id: string | null; name: string; index: number; score: number; tier: BadgeTier; best: boolean; rank: number; total: number; /** casou com um alerta do usuário */ alerta?: boolean }
 export const tierOf = (score: number): BadgeTier => score >= 66 ? 'alto' : score >= 33 ? 'medio' : 'baixo';
 
 /**
  * Pontua os cards desta página comparando com tudo o que já foi visto na mesma busca (`pool`, que inclui a página).
  * Mesmo ranking da lateral no foco "Equilibrado", sem filtros. `best`: o 1º da busca inteira naquela moeda.
  */
-export function badgesFor(scan: MarketScan, pool: readonly MarketListing[]): Badge[] {
+export function badgesFor(scan: MarketScan, pool: readonly MarketListing[], alerted: (listing: MarketListing) => boolean = () => false): Badge[] {
   if (!scan.open || scan.listings.length === 0) return [];
   const deals = rankDeals(pool.length ? pool : scan.listings, {focus:'equilibrado'});
   const sameListing = (a: MarketListing, b: MarketListing) => a.id !== null && b.id !== null ? a.id === b.id : a.name === b.name && a.price === b.price && a.level === b.level && a.currency === b.currency;
@@ -22,7 +22,7 @@ export function badgesFor(scan: MarketScan, pool: readonly MarketListing[]): Bad
     const found = ranked.find(item => sameListing(item.deal.listing, listing));
     if (!found) return [];
     const score = Math.round(found.deal.score);
-    return [{id: listing.id, name: listing.name, index, score, tier: tierOf(score), best: found.rank === 1 && found.total >= 3, rank: found.rank, total: found.total}];
+    return [{id: listing.id, name: listing.name, index, score, tier: tierOf(score), best: found.rank === 1 && found.total >= 3, rank: found.rank, total: found.total, alerta: alerted(listing)}];
   });
 }
 
@@ -33,7 +33,7 @@ export function sanitizeBadges(badges: readonly Badge[]): Badge[] {
       && Number.isInteger(badge.index) && badge.index >= 0 && badge.index < 60 && Number.isInteger(badge.score) && badge.score >= 0 && badge.score <= 100
       && (badge.tier === 'alto' || badge.tier === 'medio' || badge.tier === 'baixo') && typeof badge.best === 'boolean'
       && Number.isInteger(badge.rank) && badge.rank >= 1 && Number.isInteger(badge.total) && badge.total >= badge.rank && badge.total <= 100_000;
-    return ok ? [{id:badge.id, name:badge.name, index:badge.index, score:badge.score, tier:badge.tier, best:badge.best, rank:badge.rank, total:badge.total}] : [];
+    return ok ? [{id:badge.id, name:badge.name, index:badge.index, score:badge.score, tier:badge.tier, best:badge.best, rank:badge.rank, total:badge.total, alerta:badge.alerta === true}] : [];
   });
 }
 
@@ -46,12 +46,14 @@ pointer-events:none;white-space:nowrap;text-shadow:0 1px 0 #480e1e;animation:ph-
 .ph-selo small{font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;opacity:.9}
 .ph-selo[data-t=alto]{color:#8ff0a8}.ph-selo[data-t=medio]{color:#ffe07a}.ph-selo[data-t=baixo]{color:#ff9a8c}
 .ph-selo[data-best]{color:#4a3608;background:linear-gradient(#ffe07a,#fccb0f 60%,#e8a800);text-shadow:0 1px 0 #fff8;box-shadow:inset 0 0 0 1.5px #480e1e,0 2px 0 #0005,0 0 0 2px #fccb0f55}
+.ph-selo[data-alerta]{color:#fff;background:linear-gradient(#e77ad2,#ba5ad1 55%,#8d49b8);text-shadow:0 1px 0 #480e1e;box-shadow:inset 0 0 0 1.5px #480e1e,0 2px 0 #0005,0 0 0 2px #e77ad255}
 .ph-selo.ph-compact{height:16px;padding:0 5px 0 3px;font-size:10px;line-height:16px;background:#231520cc}
 .ph-selo.ph-compact small{display:none}
 .ph-selo-pos{position:relative}
 @keyframes ph-selo-in{from{opacity:0;transform:translateY(-2px)}}
 @media (prefers-reduced-motion:reduce){.ph-selo{animation:none}}`;
 const ICON_TAG = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 2.5h5l6 6-5 5-6-6zM5.3 5.3h.01"/></svg>';
+const ICON_BELL = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 11.5V7a4 4 0 0 1 8 0v4.5l1.5 1.5h-11zM6.5 14h3"/></svg>';
 const ICON_CROWN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12.5h10M3 10 2.5 4.5l3.2 2.8L8 3l2.3 4.3 3.2-2.8L13 10z"/></svg>';
 
 /**
@@ -61,7 +63,7 @@ const ICON_CROWN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 12.5
  * o selo fica compacto (só o número) para não poluir.
  */
 export function badgeScript(badges: readonly Badge[], enabled: boolean): string {
-  const data = JSON.stringify({enabled, badges:sanitizeBadges(badges), css:CSS, tag:ICON_TAG, crown:ICON_CROWN});
+  const data = JSON.stringify({enabled, badges:sanitizeBadges(badges), css:CSS, tag:ICON_TAG, crown:ICON_CROWN, bell:ICON_BELL});
   return `(() => {
   const D = ${data};
   const st = window.__phSelos || (window.__phSelos = {data:null, obs:null, list:null, raf:0});
@@ -82,14 +84,15 @@ export function badgeScript(badges: readonly Badge[], enabled: boolean): string 
       let el = card.querySelector(':scope > .ph-selo');
       if (!b) { if (el) el.remove(); return; }
       const compact = Boolean(card.querySelector('.pp-vit'));
-      const sig = [b.score, b.tier, b.best, compact].join('|');
+      const sig = [b.score, b.tier, b.best, compact, b.alerta].join('|');
       if (el && el.dataset.sig === sig) { n++; return; }
       if (!el) { el = document.createElement('span'); el.className = 'ph-selo'; card.appendChild(el); }
       if (getComputedStyle(card).position === 'static') card.classList.add('ph-selo-pos');
       el.dataset.sig = sig; el.dataset.t = b.tier; el.classList.toggle('ph-compact', compact);
       if (b.best) el.dataset.best = ''; else delete el.dataset.best;
-      const label = b.best ? 'Melhor' : b.tier === 'alto' ? 'Bom negócio' : b.tier === 'medio' ? 'Na média' : 'Fraco';
-      el.innerHTML = (b.best ? d.crown : d.tag) + '<b>' + b.score + '</b><small>' + label + '</small>';
+      if (b.alerta) el.dataset.alerta = ''; else delete el.dataset.alerta;
+      const label = b.alerta ? 'Alerta' : b.best ? 'Melhor' : b.tier === 'alto' ? 'Bom negócio' : b.tier === 'medio' ? 'Na média' : 'Fraco';
+      el.innerHTML = (b.alerta ? d.bell : b.best ? d.crown : d.tag) + '<b>' + b.score + '</b><small>' + label + '</small>';
       el.setAttribute('aria-label', 'PokéHub: custo-benefício ' + b.score + ' de 100, ' + label + ', ' + b.rank + 'º de ' + b.total + ' nesta busca');
       n++;
     });

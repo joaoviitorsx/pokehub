@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { openDatabase } from './database';
 import type { PerformancePrefs, StartupMode, TrayPrefs } from '../contracts/preferences';
+import { MAX_ALERTS, sanitizeAlert, type MarketAlert } from '../domain/market-alerts';
 
 export interface ExtensionRow { id: string; path: string; enabled: boolean; approvedHosts: string[] }
 const parseHosts = (value: unknown): string[] => {
@@ -18,6 +19,30 @@ export class PreferencesStore {
   setStartupMode(value: unknown): StartupMode {
     if (value !== 'grid' && value !== 'focus-first') throw new Error('Preferência inválida');
     if (this.db.prepare('UPDATE workspace_settings SET startup_mode=? WHERE id=1').run(value).changes !== 1) throw new Error('Preferência ausente');
+    return value;
+  }
+  /** Alertas do RMT, na ordem de criação; linhas que não passam na validação são ignoradas. */
+  listMarketAlerts(): MarketAlert[] {
+    return this.db.prepare('SELECT id, json FROM market_alerts ORDER BY created_at, rowid').all().flatMap(row => { try { return [sanitizeAlert(JSON.parse(String(row.json)), String(row.id))]; } catch { return []; } });
+  }
+  /** Cria (id novo) ou substitui (id existente) um alerta. Lança para entrada inválida ou acima do limite. */
+  saveMarketAlert(id: string, input: unknown): MarketAlert {
+    if (typeof id !== 'string' || !/^[\w-]{1,40}$/.test(id)) throw new Error('Alerta inválido');
+    const alert = sanitizeAlert(input, id);
+    const exists = this.db.prepare('SELECT 1 FROM market_alerts WHERE id=?').get(id);
+    if (!exists && (this.db.prepare('SELECT COUNT(*) AS n FROM market_alerts').get()?.n as number) >= MAX_ALERTS) throw new Error('Limite de alertas');
+    const {id: _id, ...data} = alert; void _id;
+    if (exists) this.db.prepare('UPDATE market_alerts SET json=? WHERE id=?').run(JSON.stringify(data), id);
+    else this.db.prepare('INSERT INTO market_alerts (id, json, created_at) VALUES (?, ?, ?)').run(id, JSON.stringify(data), new Date().toISOString());
+    return alert;
+  }
+  removeMarketAlert(id: unknown): void {
+    if (typeof id !== 'string' || this.db.prepare('DELETE FROM market_alerts WHERE id=?').run(id).changes !== 1) throw new Error('Alerta inválido');
+  }
+  getDayTypeNotify(): boolean { return this.db.prepare('SELECT day_type_notify FROM workspace_settings WHERE id=1').get()?.day_type_notify !== 0; }
+  setDayTypeNotify(value: unknown): boolean {
+    if (typeof value !== 'boolean') throw new Error('Preferência inválida');
+    if (this.db.prepare('UPDATE workspace_settings SET day_type_notify=? WHERE id=1').run(value ? 1 : 0).changes !== 1) throw new Error('Preferência ausente');
     return value;
   }
   getFichaReview(): boolean { return this.db.prepare('SELECT ficha_review FROM workspace_settings WHERE id=1').get()?.ficha_review !== 0; }

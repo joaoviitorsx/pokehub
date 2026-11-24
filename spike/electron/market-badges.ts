@@ -1,15 +1,21 @@
 /*
- * Selos de custo-benefício dentro do RMT: a cada 5 s (10 s no Modo leve), com a janela do PokéHub à vista, lê a vitrine de cada
- * conta pronta (mesmo script constante da lateral Mercado) e, se o Mercado da Comunidade está aberto, pontua os cards contra tudo
- * o que já foi visto na mesma busca e põe um selo pequeno em cada card. Com a opção desligada, remove os selos. Não clica em nada.
+ * Vitrine do RMT a cada 5 s (10 s no Modo leve), em cada conta pronta com o Mercado da Comunidade aberto (mesmo script constante
+ * da lateral Mercado). Duas coisas saem da mesma leitura:
+ *  - selos de custo-benefício nos cards (só com a opção ligada e a janela do PokéHub à vista);
+ *  - alertas do usuário: anúncio que casa com uma regra avisa uma vez (notificação + lista na lateral) e ganha o selo de sino.
+ *    Os alertas rodam também com a janela na bandeja, mas só enxergam o que o RMT aberto mostra. Não clica em nada.
  */
 import { accumulate, accumulated, sessionKey, type MarketAccumulator } from '../domain/market-session';
 import { badgeScript, badgesFor } from '../domain/market-badges';
+import { hitKey, matches, type MarketAlert, type MarketAlertHit } from '../domain/market-alerts';
+import type { MarketListing } from '../domain/market';
 import { MARKET_SCAN_SCRIPT, sanitizeMarketScan, type MarketTarget } from './market-scan';
 import { atGame, timed } from './hunt-snapshot';
 
 export const BADGE_INTERVAL_MS = 5_000, BADGE_LITE_INTERVAL_MS = 10_000;
 const SCRIPT_TIMEOUT_MS = 4_000;
+const SEEN_TTL_MS = 6 * 60 * 60_000; // o mesmo anúncio não avisa de novo por 6 h
+const MAX_SEEN = 5_000;
 export interface BadgeDeps {
   known: () => string[];
   target: (id: string) => MarketTarget | null;
@@ -17,15 +23,23 @@ export interface BadgeDeps {
   lite: () => boolean;
   /** Janela do PokéHub à vista (ninguém vê selos com ela na bandeja ou minimizada). */
   visible: () => boolean;
+  alerts?: () => MarketAlert[];
+  onHit?: (hits: MarketAlertHit[]) => void;
 }
 export function createMarketBadges(deps: BadgeDeps) {
   const accs = new Map<string, MarketAccumulator>();
   const applied = new Set<string>(); // contas com selos (ou CSS) na página: precisam de limpeza ao desligar
+  const seen = new Map<string, number>(); // hitKey → quando avisou
   let timer: ReturnType<typeof setTimeout> | undefined, running = false, stopped = false;
-  async function tickAccount(id: string, enabled: boolean) {
+  const fresh = (key: string, now: number) => { const at = seen.get(key); return at === undefined || now - at > SEEN_TTL_MS; };
+  function prune(now: number) {
+    if (seen.size <= MAX_SEEN) return;
+    for (const [key, at] of seen) if (now - at > SEEN_TTL_MS || seen.size > MAX_SEEN) seen.delete(key);
+  }
+  async function tickAccount(id: string, badges: boolean, alerts: MarketAlert[]) {
     const target = deps.target(id);
     if (!target || !atGame(target.url)) return;
-    if (!enabled) {
+    if (!badges && !alerts.length) {
       if (applied.has(id)) { await timed(target.run(badgeScript([],false)),SCRIPT_TIMEOUT_MS).catch(() => undefined); applied.delete(id); }
       accs.delete(id);
       return;
@@ -34,18 +48,33 @@ export function createMarketBadges(deps: BadgeDeps) {
     if (!scan || !scan.open) return;
     const now = Date.now(), acc = accumulate(accs.get(id) ?? null,sessionKey(id,scan.query),scan,now);
     accs.set(id,acc);
-    await timed(target.run(badgeScript(badgesFor(scan,accumulated(acc,now)),true)),SCRIPT_TIMEOUT_MS).catch(() => undefined);
-    applied.add(id);
+    const alerted = (listing: MarketListing) => alerts.some(alert => matches(alert,listing));
+    if (alerts.length) {
+      const hits: MarketAlertHit[] = [];
+      for (const listing of scan.listings) for (const alert of alerts) {
+        if (!matches(alert,listing)) continue;
+        const key = hitKey(alert,listing);
+        if (!fresh(key,now)) continue;
+        seen.set(key,now);
+        hits.push({alertId:alert.id, profileId:id, listing, em:new Date(now).toISOString()});
+      }
+      prune(now);
+      if (hits.length) deps.onHit?.(hits);
+    }
+    if (badges) { await timed(target.run(badgeScript(badgesFor(scan,accumulated(acc,now),alerted),true)),SCRIPT_TIMEOUT_MS).catch(() => undefined); applied.add(id); }
+    else if (applied.has(id)) { await timed(target.run(badgeScript([],false)),SCRIPT_TIMEOUT_MS).catch(() => undefined); applied.delete(id); }
   }
   async function tick() {
     if (running || stopped) return;
     running = true;
     try {
-      const enabled = deps.enabled();
+      const alerts = (deps.alerts?.() ?? []).filter(alert => alert.ativo);
+      const badges = deps.enabled();
+      if (badges && !alerts.length && !deps.visible()) return; // escondida e sem alertas: nada a fazer (os selos ficam como estão)
       const ids = deps.known();
       for (const id of [...accs.keys()]) if (!ids.includes(id)) accs.delete(id);
-      if (enabled && !deps.visible()) return;
-      for (const id of ids) { if (stopped) return; try { await tickAccount(id,enabled); } catch { /* conta fechando: tenta no próximo ciclo */ } }
+      if (!badges && !alerts.length && !applied.size) return;
+      for (const id of ids) { if (stopped) return; try { await tickAccount(id,badges,alerts); } catch { /* conta fechando: tenta no próximo ciclo */ } }
     } finally {
       running = false;
       if (!stopped) timer = setTimeout(() => void tick(),deps.lite() ? BADGE_LITE_INTERVAL_MS : BADGE_INTERVAL_MS);
@@ -53,7 +82,7 @@ export function createMarketBadges(deps: BadgeDeps) {
   }
   return {
     start() { stopped = false; clearTimeout(timer); timer = setTimeout(() => void tick(),BADGE_INTERVAL_MS); },
-    /** Liga/desliga: aplica (ou limpa) já, sem esperar o próximo ciclo. */
+    /** Liga/desliga ou mudou um alerta: aplica já, sem esperar o próximo ciclo. */
     refresh() { clearTimeout(timer); void tick(); },
     stop() { stopped = true; clearTimeout(timer); },
   };

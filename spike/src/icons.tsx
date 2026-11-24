@@ -29,6 +29,8 @@ export const icons = {
  download:'M8 2v8M4.8 7.2L8 10.4l3.2-3.2M3 13h10',
  tv:'M2 4.5h12v8H2zM5.5 1.5 8 4.5l2.5-3M5 14.5h6', // transmissão (aba Twitch)
  tag:'M2.5 2.5h5l6 6-5 5-6-6zM5.3 5.3h.01', // etiqueta de preço (selos do Mercado)
+ bell:'M4 11.5V7a4 4 0 0 1 8 0v4.5l1.5 1.5h-11zM6.5 14h3', // alertas do RMT
+ swap:'M3 5.5h9.5M10 3l2.5 2.5L10 8M13 10.5H3.5M6 8l-2.5 2.5L6 13', // trocar o Pokémon em campo
  link:'M6.8 9.2l2.4-2.4M7.5 4.8l1.2-1.2a2.6 2.6 0 0 1 3.7 3.7l-1.2 1.2M8.5 11.2l-1.2 1.2a2.6 2.6 0 0 1-3.7-3.7l1.2-1.2',
  unlink:'M7.5 4.8l1.2-1.2a2.6 2.6 0 0 1 3.7 3.7l-1.2 1.2M8.5 11.2l-1.2 1.2a2.6 2.6 0 0 1-3.7-3.7l1.2-1.2M2.5 2.5l11 11',
  gift:'M2.5 6h11v2.5h-11zM3.5 8.5h9v5h-9zM8 6v7.5M8 6C6.5 3 4 3.5 4.8 5.2 5.3 6 8 6 8 6zM8 6c1.5-3 4-2.5 3.2-.8C10.7 6 8 6 8 6z',

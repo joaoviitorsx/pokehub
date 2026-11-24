@@ -14,6 +14,7 @@ Pasta de dados do app: `%APPDATA%\PokeHub` (Windows) ou `~/.config/PokeHub` (Lin
   - `profiles`: `label` e `emailLabel` (só como identificação, nunca usado para entrar), `characterName`, `colorToken` e datas.
   - `workspace_settings`: modo de início, verificação de atualização, Modo leve, silenciar e preferências da bandeja.
   - `extensions`: pasta da extensão, se está habilitada e os hosts aprovados.
+  - `market_alerts`: suas regras de alerta do RMT (nome do Pokémon, moeda, preço máximo, nota, potência, shiny).
   - `twitch_links`: para cada conta com Twitch vinculada, só três opções (assistir, coletar baú, som); apagada junto com o perfil. `workspace_settings.twitch_channel` guarda o nome do canal escolhido.
   - `grindolino_*`: tabelas legadas, sem uso (o Professor Grindolino foi removido na v0.1).
   - **Não há senhas.** O PokéHub não pede nem guarda senha de conta nenhuma.
@@ -43,6 +44,8 @@ Tudo abaixo é a **seu pedido**; nada roda sozinho nem agendado. Regras exatas e
 - **Nunca**: compras com dinheiro real (RMT), gemas, "Vender", Ovos, nem qualquer ação que gaste dinheiro de verdade.
 - **Selos no RMT** (ligados por padrão; Assistente → Mercado → Selos no RMT desliga): com o Mercado da Comunidade aberto e a janela do PokéHub à vista, o app **escreve** na página só um `span.ph-selo` em cada card (nota de custo-benefício 0–100, ícone e rótulo fixos) e um `<style id="ph-selo-css">`. Não clica, não lê campos, não faz rede; o texto do selo nunca vem da página. Desligar remove tudo. Com a Smart Market no card, o selo fica compacto.
 - **Análise "Para caçar" na ficha** (ligada por padrão; Gerenciar → Layout desliga): ao abrir a ficha de um Pokémon, o app lê só textos e números da ficha (IV de cada stat, stats-base, nota, qualidade, potência) e **escreve** um cartão `section.ph-ana` logo depois do topo da ficha, mais um `<style id="ph-ana-css">`. Não clica (os botões "+1" de refino gastam pedras e nunca são tocados), não lê campos e não faz rede. Desligar remove tudo.
+- **"Quem colocar em campo?" e tipagem do dia** (com a `/hunt`): lê o último estado que a extensão já recebeu do jogo e chama o cálculo DELA para até 9 Pokémon (equipe + 3 da coleção), um por vez; só a pedido (cartão aberto na aba Caçar), no máximo uma vez por minuto por conta. Não troca o Pokémon em campo: só diz qual. A sonda da tipagem roda a cada 10 min e só lê.
+- **Alertas do RMT**: as regras ficam no `pokehub.sqlite` (tabela `market_alerts`); conferem só a vitrine que a conta já está mostrando, sem buscar, paginar ou clicar. Avisos recentes só em memória.
 - **Leituras** (sem clique e sem escrever na página): vitrine do Mercado da Comunidade quando a aba está aberta, saldo e itens da Loja, painel de capturas, ranking da extensão `/hunt` e estado de carregamento das contas. Os scripts são constantes; nenhum dado da interface é interpolado neles.
 
 ## O que o PokéHub faz na Twitch

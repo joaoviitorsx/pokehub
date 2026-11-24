@@ -3,6 +3,8 @@ import { rankDeals, type MarketCurrency, type MarketFocus, type MarketListing, t
 import { accumulate, accumulated, sessionKey, sessionStats, type MarketAccumulator, type MarketProgress } from '../domain/market-session';
 import { huntFetchable } from './hunt-queue';
 import { Icon, icons } from './icons';
+import { MarketAlerts } from './market-alerts';
+import type { Profile } from '../domain/profiles';
 
 export const MARKET_REFRESH_MS = 5000, MARKET_MAX_PAGES = 30;
 const READ_TIMEOUT_MS = 12_000;
@@ -22,7 +24,7 @@ const tier = (score: number) => score >= 66 ? 'alto' : score >= 33 ? 'medio' : '
 const progressOf = (progress: MarketProgress | null) => progress && progress.page != null && progress.pages ? Math.min(1, Math.max(0, progress.page / progress.pages)) : 0;
 const without = <T,>(record: Record<string, T>, key: string): Record<string, T> => Object.fromEntries(Object.entries(record).filter(([k]) => k !== key));
 
-export function MarketPanel({id, state}: {id: string | undefined; state: string}) {
+export function MarketPanel({id, state, profiles}: {id: string | undefined; state: string; profiles: Profile[]}) {
   const [entries, setEntries] = useState<Record<string, Entry>>({});
   const [stamp, setStamp] = useState(0);
   const [focus, setFocus] = useState<MarketFocus>('equilibrado');
@@ -97,6 +99,7 @@ export function MarketPanel({id, state}: {id: string | undefined; state: string}
       <p><strong>Selos no RMT</strong><small>{badges === false ? 'Análise só aqui na lateral.' : 'Nota em cada card do jogo.'}</small></p>
       <button className="opt" aria-pressed={badges === true} disabled={badges === null} title={badges ? 'Tirar os selos dos cards do RMT' : 'Mostrar a nota de custo-benefício em cada card do RMT (compacta se a Smart Market estiver ativa)'} onClick={toggleBadges}><Icon d={badges ? icons.check : icons.minus}/>{badges ? 'Ligados' : 'Desligados'}</button>
     </div>
+    <MarketAlerts profiles={profiles}/>
     {!live ? message('Sessão indisponível', 'Aguarde a sessão desta conta terminar de abrir (ou entre no jogo) para analisar o Mercado.')
       : !entry ? message('Lendo o Mercado…', 'A análise lê só o que está na tela desta conta.')
       : 'error' in entry ? <>{message('Mercado fechado', `${entry.error} — a análise lê só o que está na tela. Abra o Mercado no jogo desta conta.`)}<button onClick={() => setStamp(value => value + 1)}>Tentar de novo</button></>

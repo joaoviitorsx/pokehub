@@ -7,6 +7,7 @@ import { MarketPanel } from './market-side';
 import { ShopPanel } from './shop-side';
 import { CapturesPanel } from './captures-side';
 import { TwitchPanel } from './twitch-side';
+import { TeamPickCard } from './team-pick';
 
 type Mode = 'xp' | 'ouro' | 'shiny';
 type Entry = {data: HuntSnapshot} | {error: string};
@@ -198,12 +199,13 @@ export function HuntSide({profiles,states,prefs,onPrefs,onClose,onSettings,focus
   <header className="side-head"><h2>{tab === 'mercado' ? 'Mercado' : tab === 'loja' ? 'Loja' : tab === 'capturas' ? 'Capturas' : tab === 'twitch' ? 'Twitch' : 'Onde caçar?'}</h2><button className="icon" aria-label="Atualizar dados" title="Atualizar dados" disabled={!live || tab !== 'cacar'} onClick={() => setStamp(value => value + 1)}><Icon d={icons.reload}/></button><button className="icon" aria-label="Fechar lateral" title="Fechar (Ctrl+H)" onClick={onClose}><Icon d={icons.close}/></button></header>
   <div className="side-accounts" role="group" aria-label="Conta">{profiles.map(profile => {const s=states[profile.id] ?? '';return <button key={profile.id} className="tab" style={{'--c':profile.colorToken} as CSSProperties} aria-pressed={profile.id === id} title={profile.label} onClick={() => setPick(profile.id)}><El color={profile.colorToken}/><span className="name">{profile.label}</span><span className="st" data-state={s}><b/></span></button>;})}</div>
   <div className="seg side-tabs" role="group" aria-label="Seção" style={{'--n':5,'--i':['cacar','mercado','loja','capturas','twitch'].indexOf(tab)} as CSSProperties}><button aria-pressed={tab === 'cacar'} onClick={() => setTab('cacar')}>Caçar</button><button aria-pressed={tab === 'mercado'} onClick={() => setTab('mercado')}>Mercado</button><button aria-pressed={tab === 'loja'} onClick={() => setTab('loja')}>Loja</button><button aria-pressed={tab === 'capturas'} onClick={() => setTab('capturas')}>Capturas</button><button aria-pressed={tab === 'twitch'} onClick={() => setTab('twitch')}>Twitch</button></div>
-  {tab === 'mercado' && <MarketPanel id={id} state={state}/>}
+  {tab === 'mercado' && <MarketPanel id={id} state={state} profiles={profiles}/>}
   <CapturesPanel profiles={profiles} active={tab === 'capturas'}/>
   <ShopPanel profiles={profiles} states={states} id={id} active={tab === 'loja'}/>
   <TwitchPanel profiles={profiles} active={tab === 'twitch'}/>
   {lite && tab === 'cacar' && <p className="lite-tip" role="note">Nas contas que você não está olhando, ative o Modo economia do próprio jogo (botão na tela de sessão) — economiza CPU/GPU.</p>}
   <div className="side-body" hidden={tab !== 'cacar'} aria-busy={state === 'ready' && !entry}>
+   <TeamPickCard id={id} live={live} active={tab === 'cacar'}/>
    {!entry && state !== 'ready' ? message(...(waiting[state] ?? waiting.loading!))
    : !entry ? skeleton('Lendo o jogo…')
    : 'error' in entry ? message('Dados indisponíveis',`${entry.error}. O jogo pode ainda estar conectando.`,retry)

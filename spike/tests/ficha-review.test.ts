@@ -88,3 +88,19 @@ describe('preferência da análise', () => {
     } finally { prefs.close(); rmSync(dir, {recursive:true, force:true}); }
   });
 });
+
+describe('conselho de refino', () => {
+  it('ataque que ele usa primeiro, depois HP; SPD nunca entra', () => {
+    expect(avaliarFicha(ficha({base:FISICO})).refino.ordem.slice(0, 2)).toEqual(['atk', 'hp']);
+    expect(avaliarFicha(ficha({base:ESPECIAL})).refino.ordem.slice(0, 2)).toEqual(['spAtk', 'hp']);
+    const misto = avaliarFicha(ficha({base:BLASTOISE})).refino;
+    expect(misto.ordem.slice(0, 3)).toEqual(['spAtk', 'atk', 'hp']); // SP.ATK base 85 > ATK 83
+    expect(misto.texto).toContain('golpes mistos');
+    for (const base of [FISICO, ESPECIAL, BLASTOISE]) expect(avaliarFicha(ficha({base})).refino.ordem).not.toContain('spd');
+  });
+  it('avisa refino gasto no ataque que ele não usa', () => {
+    const a = avaliarFicha(ficha({base:FISICO, refino:{...todos(0), spAtk:4}}));
+    expect(a.refino.aviso).toContain('SP.ATK já tem +4');
+    expect(avaliarFicha(ficha({base:FISICO, refino:{...todos(0), atk:4}})).refino.aviso).toBeNull();
+  });
+});

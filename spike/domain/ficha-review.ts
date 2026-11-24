@@ -4,13 +4,15 @@
 export type StatKey = 'hp' | 'atk' | 'def' | 'spAtk' | 'spDef' | 'spd';
 export type Stats = Record<StatKey, number | null>;
 /** O que a ficha mostra: nota 0–10, qualidade 0,8–1,8, potência P1–P5, IV de cada stat (1–32) e stats-base da espécie. */
-export interface FichaDados { nota: number | null; quality: number | null; potencia: number | null; ivs: Stats; base: Stats }
+export interface FichaDados { nota: number | null; quality: number | null; potencia: number | null; ivs: Stats; base: Stats; /** pontos de refino já aplicados em cada stat-base (0 = nenhum) */ refino?: Stats }
 export type Perfil = 'fisico' | 'especial' | 'misto';
 export type Faixa = 'otimo' | 'bom' | 'medio' | 'fraco';
 export interface Motivo { texto: string; tom: 'bom' | 'ruim' | 'neutro' }
 export interface Avaliacao {
   score: number; faixa: Faixa; titulo: string; perfil: Perfil; chave: StatKey[];
   subtitulo: string; motivos: Motivo[]; ivs: {k: StatKey; rotulo: string; iv: number | null; chave: boolean; tom: 'bom' | 'ruim' | 'neutro'}[];
+  /** Ordem sugerida de refino (stats-base com pedras) para caçar; SPD não refina no jogo. `aviso`: refino já gasto onde quase não ajuda. */
+  refino: {ordem: StatKey[]; texto: string; aviso: string | null};
 }
 
 /**
@@ -71,8 +73,14 @@ export function avaliarFicha(d: FichaDados): Avaliacao {
   if (!motivos.length) motivos.push({tom:'neutro', texto:'IVs sem ponto forte nem fraco no que importa para caçar.'});
   // primeiro o que mais pesa (ruim antes de bom no mesmo nível), no máximo 3
   const ordenados = motivos.slice(0, 6).sort((a, b) => (a.tom === 'ruim' ? 0 : a.tom === 'bom' ? 1 : 2) - (b.tom === 'ruim' ? 0 : b.tom === 'bom' ? 1 : 2)).slice(0, 3);
+  // Refino: o ataque que ele usa primeiro (no misto, o de maior base), depois HP e as defesas. SPD não refina.
+  const ataques: StatKey[] = perfil === 'fisico' ? ['atk'] : perfil === 'especial' ? ['spAtk'] : ((bA ?? 0) >= (bS ?? 0) ? ['atk', 'spAtk'] : ['spAtk', 'atk']);
+  const ordemRefino: StatKey[] = [...ataques, 'hp', ...(perfil === 'especial' ? ['spDef', 'def'] as StatKey[] : ['def', 'spDef'] as StatKey[])];
+  const textoRefino = perfil === 'misto' ? `Refino: ${ROT[ataques[0]!]} e ${ROT[ataques[1]!]} (golpes mistos), depois HP.` : `Refino: ${ROT[ataques[0]!]} primeiro, depois HP.`;
+  const gasto = outro && d.refino ? d.refino[outro] : null;
+  const avisoRefino = outro && gasto !== null && gasto !== undefined && gasto > 0 ? `${ROT[outro]} já tem +${gasto} de refino, que quase não ajuda nas hunts (golpes ${perfil === 'fisico' ? 'físicos' : 'especiais'}).` : null;
   return {
-    score, faixa, titulo, perfil, chave, subtitulo, motivos: ordenados,
+    score, faixa, titulo, perfil, chave, subtitulo, motivos: ordenados, refino: {ordem: ordemRefino, texto: textoRefino, aviso: avisoRefino},
     ivs: ORDEM.map(k => { const v = d.ivs[k]; return {k, rotulo: ROT[k], iv: v, chave: chave.includes(k) || k === 'spd', tom: v === null ? 'neutro' : v >= 27 ? 'bom' : v <= 10 ? 'ruim' : 'neutro'}; }),
   };
 }
@@ -98,7 +106,9 @@ const CSS = `
 .ph-ana-iv i b{display:block;height:100%;border-radius:3px;background:#f0c24a}
 .ph-ana-iv[data-tom=bom] i b{background:#6fd08a}.ph-ana-iv[data-tom=ruim] i b{background:#e0604f}
 .ph-ana-iv span{opacity:.85}
-.ph-ana.ph-compacto .ph-ana-mot li:nth-child(n+2),.ph-ana.ph-compacto .ph-ana-ivs,.ph-ana.ph-compacto .ph-ana-top small{display:none}
+.ph-ana-ref{margin:8px 0 0;padding:6px 8px;border-radius:5px;background:#0003;box-shadow:inset 0 0 0 1px #480e1e;font-size:11px;line-height:1.4}
+.ph-ana-ref b{font-weight:800}.ph-ana-ref-aviso{color:#ffb4a8}
+.ph-ana.ph-compacto .ph-ana-mot li:nth-child(n+2),.ph-ana.ph-compacto .ph-ana-ivs,.ph-ana.ph-compacto .ph-ana-ref,.ph-ana.ph-compacto .ph-ana-top small{display:none}
 .ph-ana.ph-compacto .ph-ana-top{margin-bottom:4px}
 .ph-ana.ph-compacto .ph-ana-num{font-size:17px;min-width:42px}`;
 
@@ -107,7 +117,7 @@ const CSS = `
  * topo da ficha (ou depois do quadro da Smart Market, compacto). Um MutationObserver refaz ao trocar de Pokémon. Não clica (os
  * botões "+1" de refino gastam pedras e nunca são tocados), não lê campos, não faz rede. `enabled=false` remove tudo.
  */
-export const FICHA_VERSION = 1;
+export const FICHA_VERSION = 2; // subir ao mudar o script: a página troca o observador antigo pelo novo
 /** Já instalado nesta página (mesma versão, observando a ficha atual)? Barato: roda a cada ciclo. */
 export const FICHA_PROBE = `(() => { const s = window.__phFicha; const f = document.querySelector('#ficha'); return Boolean(s && s.versao === ${FICHA_VERSION} && s.obs && f && s.alvo === f); })()`;
 export function fichaScript(enabled: boolean): string {
@@ -118,7 +128,7 @@ export function fichaScript(enabled: boolean): string {
   const st = window.__phFicha || (window.__phFicha = {obs:null, alvo:null, sig:'', t:0, versao:0});
   const limpar = () => { document.querySelectorAll('.ph-ana').forEach((e) => e.remove()); const css = document.getElementById('ph-ana-css'); if (css) css.remove(); st.sig = ''; };
   if (!C.enabled) { if (st.obs) st.obs.disconnect(); st.obs = null; st.alvo = null; st.versao = 0; limpar(); return 'off'; }
-  st.versao = C.versao;
+  const trocou = st.versao !== C.versao; st.versao = C.versao; if (trocou) st.sig = '';
   if (!document.getElementById('ph-ana-css')) { const s = document.createElement('style'); s.id = 'ph-ana-css'; s.textContent = C.css; (document.head || document.documentElement).appendChild(s); }
   const num = (t) => { if (t == null) return null; const m = String(t).replace(/\\s+/g, '').match(/-?\\d[\\d.,]*/); if (!m) return null; let s = m[0]; if (s.includes(',')) s = s.replace(/\\./g, '').replace(',', '.'); else if (/^\\d{1,3}(\\.\\d{3})+$/.test(s)) s = s.replace(/\\./g, ''); const v = Number(s); return Number.isFinite(v) ? v : null; };
   const CHAVES = {'HP':'hp','ATK':'atk','DEF':'def','SP.ATK':'spAtk','SP.DEF':'spDef','SPD':'spd'};
@@ -126,11 +136,12 @@ export function fichaScript(enabled: boolean): string {
   const ler = (ficha) => {
     const ivs = vazio(), base = vazio();
     ficha.querySelectorAll('.fi-stats:not(.fi-stats-refino) > .fi-stat').forEach((r) => { const k = CHAVES[(r.querySelector('.fi-stat-nome')?.textContent || '').trim().toUpperCase()]; const e = r.querySelector('.fi-iv'); if (k && e) { const v = num(e.textContent); ivs[k] = v !== null && v >= 1 && v <= 32 ? v : null; } });
-    ficha.querySelectorAll('.fi-stats-refino > .fi-stat').forEach((r) => { const k = CHAVES[(r.querySelector('.fi-stat-nome')?.textContent || '').trim().toUpperCase()]; const v = num(r.querySelector('.fi-stat-num')?.textContent); if (k && v !== null && v > 0 && v < 1000) base[k] = v; });
+    const refino = vazio();
+    ficha.querySelectorAll('.fi-stats-refino > .fi-stat').forEach((r) => { const k = CHAVES[(r.querySelector('.fi-stat-nome')?.textContent || '').trim().toUpperCase()]; const v = num(r.querySelector('.fi-stat-num')?.textContent); if (k && v !== null && v > 0 && v < 1000) base[k] = v; const m = r.querySelector('.fi-refino-mais'); if (k && m) { const p = num(m.textContent); refino[k] = p !== null && p >= 0 && p < 10000 ? p : 0; } });
     const notaEl = ficha.querySelector('[data-nota]'); const nota = notaEl ? num(notaEl.getAttribute('data-nota').replace('.', ',')) : null;
     const placa = (sel) => { const b = ficha.querySelector(sel + ' b'); return b ? b.textContent : null; };
     const pot = num(placa('.pk-selo-pot')); const q = num(placa('.pk-selo-q'));
-    return {nota: nota !== null && nota >= 0 && nota <= 10 ? nota : null, quality: q !== null && q >= 0.5 && q <= 3 ? q : null, potencia: pot !== null && pot >= 1 && pot <= 5 ? pot : null, ivs, base};
+    return {nota: nota !== null && nota >= 0 && nota <= 10 ? nota : null, quality: q !== null && q >= 0.5 && q <= 3 ? q : null, potencia: pot !== null && pot >= 1 && pot <= 5 ? pot : null, ivs, base, refino};
   };
   const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
   const desenhar = () => {
@@ -156,12 +167,13 @@ export function fichaScript(enabled: boolean): string {
     const grade = el('div', 'ph-ana-ivs');
     a.ivs.forEach((x) => { const c = el('div', 'ph-ana-iv'); c.dataset.tom = x.tom; if (x.chave) c.dataset.chave = ''; c.title = x.rotulo + (x.chave ? ' (pesa para caçar)' : '') + ': IV ' + (x.iv == null ? '?' : x.iv) + '/32'; c.appendChild(el('span', '', x.rotulo)); const bar = el('i'); const fill = el('b'); fill.style.width = (x.iv == null ? 0 : Math.round(x.iv / 32 * 100)) + '%'; bar.appendChild(fill); c.appendChild(bar); c.appendChild(el('span', '', x.iv == null ? '—' : String(x.iv))); grade.appendChild(c); });
     card.appendChild(grade);
+    const ref = el('p', 'ph-ana-ref'); ref.appendChild(el('b', '', a.refino.texto)); if (a.refino.aviso) ref.appendChild(el('span', 'ph-ana-ref-aviso', ' ' + a.refino.aviso)); card.appendChild(ref);
     if (atual) atual.remove();
     ancora.after(card);
   };
   const agendar = () => { clearTimeout(st.t); st.t = setTimeout(desenhar, 80); };
   const ficha = document.querySelector('#ficha');
-  if (ficha && st.alvo !== ficha) {
+  if (ficha && (st.alvo !== ficha || trocou)) {
     if (st.obs) st.obs.disconnect();
     st.alvo = ficha;
     const nosso = (n) => { const e = n && (n.nodeType === 1 ? n : n.parentElement); return Boolean(e && (e.classList.contains('ph-ana') || (e.closest && e.closest('.ph-ana')))); };

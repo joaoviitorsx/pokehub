@@ -39,12 +39,12 @@ describe('selos do RMT: pontuação', () => {
 describe('selos do RMT: script da página', () => {
   const ok: Badge = {id:'a1', name:'Venusaur', index:0, score:87, tier:'alto', best:true, rank:1, total:9};
   it('só passam valores validados', () => {
-    expect(sanitizeBadges([ok, {...ok, id:'"><script>'}, {...ok, score:101}, {...ok, tier:'x' as never}, {...ok, name:''}, {...ok, rank:10}])).toEqual([ok]);
+    expect(sanitizeBadges([ok, {...ok, id:'"><script>'}, {...ok, score:101}, {...ok, tier:'x' as never}, {...ok, name:''}, {...ok, rank:10}])).toEqual([{...ok, alerta:false}]);
   });
   it('o script gerado é JavaScript válido (ligado e desligado) e não interpola texto cru', () => {
     for (const script of [badgeScript([ok], true), badgeScript([], false), badgeScript([{...ok, name:'Mr. "Mime" </script>'}], true)]) expect(() => new Function(`return ${script}`)).not.toThrow();
     // o nome do anúncio só é comparado; o HTML do selo usa apenas ícone fixo, número e rótulo fixo
-    expect(badgeScript([ok], true)).toContain("el.innerHTML = (b.best ? d.crown : d.tag) + '<b>' + b.score + '</b><small>' + label + '</small>';");
+    expect(badgeScript([ok], true)).toContain("el.innerHTML = (b.alerta ? d.bell : b.best ? d.crown : d.tag) + '<b>' + b.score + '</b><small>' + label + '</small>';");
     expect(badgeScript([ok], true)).not.toMatch(/innerHTML[^;]*b\.name/);
   });
   it('não clica, não faz rede, não lê campos', () => {

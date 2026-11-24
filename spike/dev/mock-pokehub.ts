@@ -10,6 +10,7 @@ import type { Capture } from '../domain/captures';
 import { createMockShop } from './mock-shop';
 import { createMockRemote } from './mock-remote';
 import { createMockTwitch } from './mock-twitch';
+import { sanitizeAlert, type MarketAlert, type MarketAlertHit, type MarketAlertInput } from '../domain/market-alerts';
 
 type Result<T> = {ok: true; data: T} | {ok: false; error: string};
 const ok = <T>(data: T): Promise<Result<T>> => new Promise(resolve => setTimeout(() => resolve({ok: true, data}), 40));
@@ -32,6 +33,19 @@ if (params.get('allready') === '1') for (const key of Object.keys(states)) state
 let preferences: 'grid' | 'focus-first' = 'grid';
 let marketBadges = true;
 let fichaReview = true;
+const mockTeam = () => {
+  const m = (chave: string, nome: string, nivel: number, tipos: string[], v: [number, number, number], extra: Partial<{ativo: boolean; equipe: boolean; potencia: number}> = {}) => ({chave, nome, nivel, tipos, ativo: false, equipe: true, potencia: 2, sprite: null, tipoDoDia: tipos.includes('FIGHTING'),
+    melhor: {treinador: {nome: v[0] > 30e6 ? 'Ancient Pupitar' : 'Sunkern', regiao: 'kanto', valor: v[0]}, ouro: {nome: v[0] > 30e6 ? 'Ancient Pupitar' : 'Hoppip', regiao: 'kanto', valor: v[1]}, pokemon: {nome: 'Sunkern', regiao: 'johto', valor: v[2]}}, ...extra});
+  return {estado: 'ok' as const, tipoDoDia: 'FIGHTING', tipoFim: Date.now() + 9 * 3600_000 + 20 * 60_000, total: 210, lidoEm: Date.now(), membros: [
+    m('1', 'Blastoise', 219, ['WATER'], [40.1e6, 581e3, 2.1e6], {ativo: true, potencia: 2}),
+    m('2', 'Machamp', 180, ['FIGHTING'], [52.3e6, 702e3, 3.4e6], {potencia: 3}),
+    m('3', 'Charmander', 20, ['FIRE'], [234e3, 2.8e3, 312e3], {potencia: 1}),
+    m('4', 'Charmander', 20, ['FIRE'], [218e3, 2.6e3, 305e3], {potencia: 1}),
+    m('5', 'Lucario', 150, ['FIGHTING', 'STEEL'], [61.8e6, 640e3, 4.1e6], {equipe: false, potencia: 4}),
+  ]};
+};
+let mockAlerts: MarketAlert[] = params.get('alerts') === '0' ? [] : [sanitizeAlert({nome: 'Venusaur', moeda: 'gold', precoMax: 15000, potenciaMin: 4}, 'a1'), {...sanitizeAlert({soShiny: true, notaMin: 7}, 'a2'), ativo: false}];
+const mockHits: MarketAlertHit[] = params.get('alerts') === '0' ? [] : [{alertId: 'a1', profileId: uid(2), em: new Date(Date.now() - 4 * 60_000).toISOString(), listing: {id: 'x1', name: 'Venusaur', level: 61, potencia: 4, nota: 7.8, shiny: false, price: 13000, currency: 'gold', smart: null}}];
 let winState = {maximized: false, focused: true};
 let trayPrefs = {onClose: true, onMinimize: true, hintShown: false};
 let perfPrefs = {lite: params.get('lite') === '1', muteUnfocused: false};
@@ -131,9 +145,15 @@ window.pokehub = {
   layout: (id, hide, side, panel = 340, account = null) => { Object.assign(layoutState, {id, hide, side, panel, account}); layoutListeners.forEach(l => l()); return ok(undefined); },
   drag: () => ok(undefined),
   huntSnapshot: (_id, soLiberadas) => ok(huntSnapshot(soLiberadas)),
+  huntTeam: () => new Promise(resolve => setTimeout(() => resolve({ok: true, data: mockTeam()}), 900)),
+  dayType: {notify: () => ok(true), setNotify: (on: boolean) => ok(on)},
   ficha: {review: () => ok(fichaReview), setReview: (on: boolean) => { fichaReview = on; return ok(on); }},
   market: {
     badges: () => ok(marketBadges),
+    alerts: () => ok({alerts: mockAlerts, hits: mockHits}),
+    saveAlert: (id: string | null, input: MarketAlertInput) => { try { const alert = sanitizeAlert(input, id ?? `a${Date.now()}`); mockAlerts = id ? mockAlerts.map(a => a.id === id ? alert : a) : [...mockAlerts, alert]; return ok({alerts: mockAlerts, hits: mockHits}); } catch (error) { return ok(undefined).then(() => ({ok: false as const, error: (error as Error).message === 'Preço exige a moeda' ? 'Para usar preço máximo, escolha a moeda (Gemas ou Coins).' : 'Alerta inválido. Confira os campos.'})); } },
+    removeAlert: (id: string) => { mockAlerts = mockAlerts.filter(a => a.id !== id); return ok({alerts: mockAlerts, hits: mockHits}); },
+    onAlertHit: () => () => undefined,
     setBadges: (on: boolean) => { marketBadges = on; return ok(on); },
     scan: () => ok(scanPage()),
     readAll: id => {

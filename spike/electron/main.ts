@@ -9,6 +9,10 @@ import { marketScan, MARKET_UNAVAILABLE } from './market-scan';
 import { createMarketReader } from './market-read';
 import { createMarketBadges } from './market-badges';
 import { createFichaReview } from './ficha-review';
+import { DAY_TYPE_SCRIPT, sanitizeDayType, teamPick } from './team-pick';
+import { dayTypeNotice } from '../domain/team-pick';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { alertLabel, type MarketAlertHit } from '../domain/market-alerts';
 import { createShop, SHOP_UNAVAILABLE } from './shop';
 import { createCaptureService, parseQuery } from './captures';
 import { alertsOf, alertText } from '../domain/captures';
@@ -597,6 +601,36 @@ if (primary) app.whenReady().then(() => {
     };
   const remoteApi = createRemoteApi({profiles:() => store.list(), states, suspended, hunt:(id,soLiberadas) => huntFor(id,soLiberadas), scan:id => scanFor(id), processes:() => processesSample()});
   const huntFor = (id: unknown, soLiberadas: unknown = true) => huntSnapshot(id, store.list().map(profile => profile.id), huntTarget, undefined, soLiberadas);
+  // "Quem colocar em campo?": equipe + 3 mais fortes da coleção com o cálculo da /hunt (ver team-pick.ts).
+  ipcMain.handle('hunt:team', async (event,id: unknown,force: unknown = false) => trusted(event) ? teamPick(id, store.list().map(profile => profile.id), huntTarget, force) : {ok:false,error:HUNT_UNAVAILABLE});
+  // Tipagem do dia: a cada 10 min confere cada conta com a /hunt; avisa uma vez por dia e por conta, só se houver Pokémon do tipo.
+  const dayFile = join(app.getPath('userData'),'tipagem-avisada.json');
+  let dayNotified: {chave: string; contas: string[]} = {chave:'', contas:[]};
+  try { const raw = JSON.parse(readFileSync(dayFile,'utf8')) as {chave?: unknown; contas?: unknown}; if (typeof raw.chave === 'string' && Array.isArray(raw.contas)) dayNotified = {chave:raw.chave.slice(0,20), contas:raw.contas.filter((item): item is string => typeof item === 'string').slice(0,8)}; } catch { /* primeira vez */ }
+  let dayTimer: ReturnType<typeof setTimeout> | undefined;
+  const checkDayType = async () => {
+    try {
+      if (!preferences.getDayTypeNotify() || !Notification.isSupported()) return;
+      for (const profile of store.list()) {
+        const target = huntTarget(profile.id);
+        if (!target || !target.hasExtension) continue;
+        const day = sanitizeDayType(await timedRun(target.run(DAY_TYPE_SCRIPT)));
+        if (!day) continue;
+        if (dayNotified.chave !== day.chave) dayNotified = {chave:day.chave, contas:[]};
+        if (dayNotified.contas.includes(profile.id)) continue;
+        dayNotified.contas.push(profile.id);
+        try { writeFileSync(dayFile,JSON.stringify(dayNotified)); } catch { /* só não lembra entre reinícios */ }
+        const notice = dayTypeNotice(day.tipo,profile.label,day.equipe,day.colecao);
+        if (notice) { try { new Notification(notice).show(); } catch { /* sem notificações */ } }
+      }
+    } catch { console.error('Falha ao conferir a tipagem do dia.'); }
+    finally { dayTimer = setTimeout(() => void checkDayType(),10 * 60_000); }
+  };
+  const timedRun = (work: Promise<unknown>) => Promise.race([work,new Promise<null>(resolve => setTimeout(() => resolve(null),6000))]).catch(() => null);
+  dayTimer = setTimeout(() => void checkDayType(),45_000);
+  app.on('before-quit', () => clearTimeout(dayTimer));
+  ipcMain.handle('daytype:notify', event => invoke(event, () => preferences.getDayTypeNotify()));
+  ipcMain.handle('daytype:setNotify', (event,value: unknown) => invoke(event, () => preferences.setDayTypeNotify(value)));
   ipcMain.handle('hunt:snapshot', async (event,id: unknown,soLiberadas: unknown = true) => {
     if (!trusted(event)) return {ok:false,error:HUNT_UNAVAILABLE};
     return huntFor(id,soLiberadas);
@@ -612,7 +646,31 @@ if (primary) app.whenReady().then(() => {
   const marketTarget = (profileId: string) => { const contents = readable(profileId); return contents ? {url:contents.getURL(), run:(script: string) => contents.executeJavaScriptInIsolatedWorld(999,[{code:script}])} : null; };
   const marketReader = createMarketReader({known:() => store.list().map(profile => profile.id), target:marketTarget, lock:accountLock, emit:progress => { if (progress.scan) remoteApi.feed(progress.profileId,progress.scan); if (!window.isDestroyed()) window.webContents.send('market:progress',progress); }});
   // Selos de custo-benefício nos cards do RMT (ver market-badges.ts): ligados por padrão, desligáveis na aba Mercado.
-  const marketBadges = createMarketBadges({known:() => store.list().map(profile => profile.id), target:marketTarget, enabled:() => preferences.getMarketBadges(), lite:() => perf.lite, visible:() => !window.isDestroyed() && window.isVisible() && !window.isMinimized()});
+  // Alertas do RMT: avisos recentes só em memória (últimos 30); a notificação do sistema sai uma vez por anúncio e alerta.
+  const alertHits: MarketAlertHit[] = [];
+  const coinName = (currency: string | null) => currency === 'orb' ? 'Gemas' : currency === 'gold' ? 'Coins' : '';
+  const onAlertHits = (hits: MarketAlertHit[]) => {
+    alertHits.unshift(...hits); alertHits.splice(30);
+    if (!window.isDestroyed()) window.webContents.send('market:alertHit',hits);
+    if (!Notification.isSupported()) return;
+    const alerts = preferences.listMarketAlerts();
+    for (const hit of hits.slice(0,3)) {
+      const alert = alerts.find(item => item.id === hit.alertId), l = hit.listing;
+      const conta = store.list().find(profile => profile.id === hit.profileId)?.label ?? 'Conta';
+      const detalhe = [l.shiny ? 'Shiny' : '', l.level !== null ? `Nv ${l.level}` : '', l.potencia !== null ? `P${l.potencia}` : '', l.nota !== null ? `nota ${l.nota.toLocaleString('pt-BR')}` : ''].filter(Boolean).join(' · ');
+      try { new Notification({title:`Alerta do RMT · ${conta}`, body:`${l.name}${detalhe ? ` (${detalhe})` : ''} por ${l.price.toLocaleString('pt-BR')} ${coinName(l.currency)}${alert ? `
+Regra: ${alertLabel(alert)}` : ''}`}).show(); } catch { /* sem notificações no sistema */ }
+    }
+  };
+  const marketBadges = createMarketBadges({known:() => store.list().map(profile => profile.id), target:marketTarget, enabled:() => preferences.getMarketBadges(), lite:() => perf.lite, visible:() => !window.isDestroyed() && window.isVisible() && !window.isMinimized(), alerts:() => preferences.listMarketAlerts(), onHit:onAlertHits});
+  const alertsInfo = () => ({alerts:preferences.listMarketAlerts(), hits:alertHits.slice()});
+  ipcMain.handle('market:alerts', event => invoke(event, alertsInfo));
+  ipcMain.handle('market:saveAlert', (event,id: unknown,input: unknown) => {
+    if (!trusted(event)) return {ok:false,error:'Origem não autorizada.'};
+    try { preferences.saveMarketAlert(typeof id === 'string' && id ? id : randomUUID(),input); marketBadges.refresh(); return {ok:true,data:alertsInfo()}; }
+    catch (error) { const msg = (error as Error).message; return {ok:false,error:msg === 'Limite de alertas' ? 'O limite é de 20 alertas. Remova algum antes.' : msg === 'Preço exige a moeda' ? 'Para usar preço máximo, escolha a moeda (Gemas ou Coins).' : msg === 'Alerta vazio' ? 'Defina pelo menos um critério: nome, preço, nota, potência ou shiny.' : 'Alerta inválido. Confira os campos.'}; }
+  });
+  ipcMain.handle('market:removeAlert', (event,id: unknown) => invoke(event, () => { preferences.removeMarketAlert(id); marketBadges.refresh(); return alertsInfo(); }));
   marketBadges.start();
   app.on('before-quit', () => marketBadges.stop());
   // Análise "Para caçar" na ficha do Pokémon (ver ficha-review.ts): ligada por padrão, desligável em Gerenciar → Layout.

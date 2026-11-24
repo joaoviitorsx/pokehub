@@ -63,11 +63,24 @@ contextBridge.exposeInMainWorld('pokehub', {
   layout: (id: string | null,hide: boolean,side: boolean,panel?: number,account?: string | null) => ipcRenderer.invoke('session:layout',id,hide,side,panel,account ?? null),
   drag: (active: boolean) => ipcRenderer.invoke('session:drag',active),
   huntSnapshot: (id: string,soLiberadas?: boolean) => ipcRenderer.invoke('hunt:snapshot',id,soLiberadas),
+  huntTeam: (id: string,force?: boolean) => ipcRenderer.invoke('hunt:team',id,force === true),
+  dayType: {
+    notify: () => ipcRenderer.invoke('daytype:notify'),
+    setNotify: (on: boolean) => ipcRenderer.invoke('daytype:setNotify',on),
+  },
   market: {
     scan: (id: string) => ipcRenderer.invoke('market:scan',id),
     readAll: (id: string) => ipcRenderer.invoke('market:readAll',id),
     badges: () => ipcRenderer.invoke('market:badges'),
     setBadges: (on: boolean) => ipcRenderer.invoke('market:setBadges',on),
+    alerts: () => ipcRenderer.invoke('market:alerts'),
+    saveAlert: (id: string | null,input: unknown) => ipcRenderer.invoke('market:saveAlert',id,input),
+    removeAlert: (id: string) => ipcRenderer.invoke('market:removeAlert',id),
+    onAlertHit: (callback: (hits: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, hits: unknown) => callback(hits);
+      ipcRenderer.on('market:alertHit',listener);
+      return () => ipcRenderer.removeListener('market:alertHit',listener);
+    },
     stop: (id: string) => ipcRenderer.invoke('market:stop',id),
     onProgress: (callback: (progress: unknown) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, progress: unknown) => callback(progress);

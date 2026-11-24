@@ -51,6 +51,10 @@ export function openDatabase(path: string): Database {
         if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='market_badges'").get()) db.exec('ALTER TABLE workspace_settings ADD COLUMN market_badges INTEGER NOT NULL DEFAULT 1');
         // v16 também: análise "Para caçar" na ficha do Pokémon (ligada por padrão)
         if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='ficha_review'").get()) db.exec('ALTER TABLE workspace_settings ADD COLUMN ficha_review INTEGER NOT NULL DEFAULT 1');
+        // v16 também: alertas de anúncio no RMT (regras do usuário, JSON validado ao ler)
+        db.exec('CREATE TABLE IF NOT EXISTS market_alerts (id TEXT PRIMARY KEY, json TEXT NOT NULL, created_at TEXT NOT NULL)');
+        // v16 também: aviso da tipagem do dia (ligado por padrão)
+        if (!db.prepare("SELECT 1 FROM pragma_table_info('workspace_settings') WHERE name='day_type_notify'").get()) db.exec('ALTER TABLE workspace_settings ADD COLUMN day_type_notify INTEGER NOT NULL DEFAULT 1');
         db.exec('PRAGMA user_version=16; COMMIT');
       } catch (error) { db.exec('ROLLBACK'); throw error; }
     }

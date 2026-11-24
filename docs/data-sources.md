@@ -104,3 +104,21 @@ Leitura **somente do DOM** do painel esquerdo "CAPTURAS" do jogo (lista da sess�
 - **Avaliação (`avaliarFicha` em `spike/domain/ficha-review.ts`, pura e testada):** perfil pelos stats-base (ATK ≥ 15% acima de SP.ATK = físico, o contrário = especial, senão misto: média ponderada). Pesos para hunt: ataque 36%, IV de SPD 16% × (base SPD/100, entre 0,5 e 1,3), HP 11%, defesas 9%, qualidade 18% (0,8→0, 1,8→1), potência 10% (P1 0 · P2 0,15 · P3 0,3 · P4 0,6 · P5 1). Faixas: ≥75 ótimo, ≥58 bom, ≥40 mediano. "Nota alta, mas fraco no ataque" quando a nota ≥ 6 e o ataque efetivo < 35%. O texto do jogo confirma o papel do SPD ("até 7% a menos no cooldown dos golpes") e que SP.ATK só entra em golpes especiais.
 - **Limite:** os golpes reais (categoria física/especial de cada um) ficam na ficha da espécie e não estão nos módulos `shared/` expostos; o perfil é inferido dos stats-base. Espécies com golpes de uma categoria só e stats-base parecidos podem cair em "misto".
 - **Escrita:** um `section.fi-cartao.ph-ana` (classes do próprio jogo para o visual) logo depois de `.fi-heroi` (ou do quadro `.pp-badge` da Smart Market, compacto) e um `<style id="ph-ana-css">`. Textos montados por `textContent` (nada da página vira HTML). Um `MutationObserver` no `#ficha` refaz ao trocar de Pokémon; uma sonda (`FICHA_PROBE`) a cada 4 s (8 s no Modo leve) reinstala só se a página recarregou. Nunca clica: os botões `.fi-refino-bt` ("+1") gastam pedras.
+
+### Conselho de refino (no cartão "Para caçar")
+
+- Ordem sugerida: o ataque que ele usa (no misto, o de maior base primeiro e depois o outro), HP e as defesas (SP.DEF antes de DEF no especial). SPD não refina no jogo (o texto da ficha explica que quem acelera é o IV de SPD).
+- Lê os pontos já refinados em `.fi-stats-refino .fi-refino-mais` ("+N" ou "·" = 0) e avisa refino gasto no ataque que ele não usa. Nunca toca nos botões `.fi-refino-bt`.
+
+# "Quem colocar em campo?" e tipagem do dia — aba Caçar
+
+- **Fonte (conferida no jogo real em 2026-11-24 com a `/hunt` 1.0.23):** o barramento da extensão `/hunt` (`__pokeidleHunt.on('estado')`): `pokemons[]` com `slot` (0–4 = equipe; nulo = coleção), `tipos`, `poder`, `stats`; `activeId` (em campo); `diaSazonal {chave, tipo, fim, ultimos3}` (tipagem do dia, troca à meia-noite de Brasília). O cálculo é o da própria extensão, `engine.analisar(pokemon, contexto, {soLiberadas:true, tipoDoDia})`, com o mesmo contexto que o painel dela monta; nada da extensão é copiado.
+- **O que roda (`spike/electron/team-pick.ts`):** sonda barata (assinatura da equipe) e, só se mudou ou passou 10 min, o cálculo para a equipe (até 6) + os 3 de maior `poder` fora dela, um por vez com pausa de 30 ms. Medido: 8 Pokémon em ~4,1 s de página. No máximo um cálculo por conta a cada 60 s; o botão "Analisar de novo" força (ainda respeita os 60 s).
+- **Resultado:** para cada um, a melhor hunt liberada por XP do treinador/h (`xpTreinadorH`), ouro/h (`ouroH`) e XP do Pokémon/h (`xpPokemonH`). A recomendação (`recommend` em `spike/domain/team-pick.ts`) é o melhor **da equipe** (dá para pôr em campo já; empate de até 3% mantém o em campo); quem da coleção superar em mais de 3% aparece como dica para levar à equipe. O PokéHub não troca o Pokémon em campo.
+- **Aviso diário (`DAY_TYPE_SCRIPT`):** a cada 10 min, contas com a `/hunt`; uma notificação por dia e por conta, só se houver Pokémon do tipo na equipe ou na coleção (lembrado em `tipagem-avisada.json`). Desligável em Gerenciar → Layout (`workspace_settings.day_type_notify`).
+
+# Alertas do RMT — aba Mercado
+
+- **Regras** (`market_alerts`, até 20; `spike/domain/market-alerts.ts`): parte do nome (sem acento), moeda, preço máximo (exige moeda), nota mínima, potência mínima, só shiny; cada uma pode ser pausada.
+- **Conferência:** no mesmo ciclo dos selos (`spike/electron/market-badges.ts`, 5 s), em toda conta com o RMT aberto, inclusive com a janela na bandeja. Cada anúncio avisa uma vez por regra a cada 6 h (`hitKey`). Aviso: notificação do sistema (até 3 por leitura) + lista "Avisos recentes" (30, em memória) + selo de sino no card (com os selos ligados).
+- **Limite:** só enxerga o que a vitrine aberta mostra (a busca e a página atuais); não busca nem pagina sozinho.
